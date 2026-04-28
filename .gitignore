@@ -1,0 +1,27 @@
+build/
+build-*/
+.cache/
+compile_commands.json
+.vscode/
+.idea/
+
+# vendored binaries (large, fetched by scripts/install_third_party.sh)
+third_party/libtorch/
+third_party/libtorch_root/
+third_party/tensorrt/
+third_party/tensorrt_root/
+third_party/tensorrt_debs/
+third_party/opencv/
+third_party/opencv_root/
+third_party/opencv_debs/
+
+# CLI11 single-header is small (~470K) but vendored — keep it
+!third_party/CLI11/CLI11.hpp
+
+# rapidyaml single-header amalgamation (~1.7 MB) — fetched by installer
+third_party/rapidyaml/
+
+coco8/
+data/
+*.pt
+runs/

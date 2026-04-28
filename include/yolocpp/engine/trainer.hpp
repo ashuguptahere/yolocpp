@@ -1,0 +1,85 @@
+#pragma once
+//
+// Trainer for YOLOv8 detection.
+//
+// Implements:
+//   - SGD with momentum + weight decay (with no-decay group for biases / BN)
+//   - Linear warmup → cosine LR schedule
+//   - EMA of model weights
+//   - Per-iteration logging (box / cls / dfl / total)
+//
+// Saves a checkpoint to <save_dir>/last.pt — note: written via libtorch's
+// Module::save (TorchScript-compatible archive), not Ultralytics' .pt
+// shape. To resume training in this codebase, use load_checkpoint_pt below.
+//
+
+#include <torch/torch.h>
+
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "yolocpp/datasets/yolo_dataset.hpp"
+#include "yolocpp/losses/yolov8_loss.hpp"
+#include "yolocpp/models/yolov5.hpp"
+#include "yolocpp/models/yolov8.hpp"
+
+namespace yolocpp::engine {
+
+struct TrainConfig {
+  int    epochs        = 100;
+  int    batch_size    = 16;
+  int    imgsz         = 640;
+  double lr0           = 0.01;
+  double lrf           = 0.01;     // final lr = lr0 * lrf (cosine)
+  double momentum      = 0.937;
+  double weight_decay  = 0.0005;
+  int    warmup_epochs = 3;
+  double warmup_bias_lr= 0.1;
+  double warmup_momentum = 0.8;
+  double ema_decay     = 0.9999;
+  int    ema_warmup    = 2000;
+  std::string device   = "";       // auto; comma-separated lists (e.g. "cuda:0,1")
+                                   // currently produce a clear "not supported" error
+  std::string save_dir = "runs/train";
+  int        log_every  = 10;
+  // Optional: validate every N epochs (0 = never)
+  int        val_every  = 0;
+  std::shared_ptr<datasets::YoloDataset> val_dataset;  // optional
+  // Early stopping: stop training if best val mAP@0.5:0.95 doesn't improve
+  // for `patience` consecutive validation passes. 0 disables.
+  int        patience   = 0;
+  // Free-form (key, value) pairs dumped to <save_dir>/args.yaml at run start
+  // for reproducibility — typically the CLI args verbatim.
+  std::vector<std::pair<std::string, std::string>> args_for_yaml;
+};
+
+// Trainer is templated over the model-holder type (YoloV8Detect or
+// YoloV5Detect). Both share the same interface (forward_train, forward_eval,
+// stride, nc, scale, load_from_state_dict). Explicit instantiations live in
+// trainer.cpp.
+template <typename ModelHolder>
+class TrainerT {
+ public:
+  TrainerT(ModelHolder model, datasets::YoloDataset train, TrainConfig cfg);
+
+  // Run the full training schedule.
+  void run();
+
+  ModelHolder& model()      { return model_; }
+  ModelHolder& ema_model()  { return ema_; }
+
+ private:
+  void ema_update(double decay);
+
+  ModelHolder              model_;
+  ModelHolder              ema_;
+  datasets::YoloDataset    train_;
+  TrainConfig              cfg_;
+  torch::Device            device_;
+};
+
+using Trainer   = TrainerT<models::YoloV8Detect>;
+using TrainerV5 = TrainerT<models::YoloV5Detect>;
+
+}  // namespace yolocpp::engine
