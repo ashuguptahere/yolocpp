@@ -1,4 +1,4 @@
-#include "yolocpp/models/yolov5.hpp"
+#include "yolocpp/models/yolo5.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -29,7 +29,7 @@ torch::Tensor C3Impl::forward(torch::Tensor x) {
   return cv3(torch::cat({y1, y2}, /*dim=*/1));
 }
 
-// ─── YoloV5DetectImpl ───────────────────────────────────────────────────
+// ─── Yolo5DetectImpl ───────────────────────────────────────────────────
 namespace {
 struct LayerSpec {
   std::vector<int> from;
@@ -70,7 +70,7 @@ const std::vector<LayerSpec>& v5_yaml() {
 }
 }  // anonymous namespace
 
-YoloV5DetectImpl::YoloV5DetectImpl(YoloV8Scale s, int nc_)
+Yolo5DetectImpl::Yolo5DetectImpl(Yolo8Scale s, int nc_)
     : scale(s), nc(nc_) {
   model = register_module("model", torch::nn::ModuleList());
   const auto& yaml = v5_yaml();
@@ -169,7 +169,7 @@ YoloV5DetectImpl::YoloV5DetectImpl(YoloV8Scale s, int nc_)
   }
 }
 
-std::vector<torch::Tensor> YoloV5DetectImpl::forward_train(torch::Tensor x) {
+std::vector<torch::Tensor> Yolo5DetectImpl::forward_train(torch::Tensor x) {
   const auto& yaml = v5_yaml();
   std::vector<torch::Tensor> outs(yaml.size());
   for (size_t i = 0; i < yaml.size(); ++i) {
@@ -199,14 +199,14 @@ std::vector<torch::Tensor> YoloV5DetectImpl::forward_train(torch::Tensor x) {
   TORCH_CHECK(false, "unreachable");
 }
 
-torch::Tensor YoloV5DetectImpl::forward_eval(torch::Tensor x) {
+torch::Tensor Yolo5DetectImpl::forward_eval(torch::Tensor x) {
   auto feats = forward_train(x);
   const auto& yaml = v5_yaml();
   auto* d = model[yaml.size() - 1]->as<DetectImpl>();
   return d->decode(feats);
 }
 
-int YoloV5DetectImpl::load_from_state_dict(
+int Yolo5DetectImpl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
   auto params = this->named_parameters();
   auto buffs  = this->named_buffers();
@@ -221,14 +221,14 @@ int YoloV5DetectImpl::load_from_state_dict(
     auto& dst = it->second;
     if (dst.sizes() != t.sizes()) {
       std::ostringstream ss;
-      ss << "yolov5 load: shape mismatch for " << k
+      ss << "yolo5 load: shape mismatch for " << k
          << " ours=" << dst.sizes() << " ckpt=" << t.sizes();
       throw std::runtime_error(ss.str());
     }
     dst.copy_(t.to(dst.dtype()).to(dst.device()));
     ++copied;
   }
-  if (copied == 0) throw std::runtime_error("yolov5 load: copied 0 tensors");
+  if (copied == 0) throw std::runtime_error("yolo5 load: copied 0 tensors");
   return copied;
 }
 

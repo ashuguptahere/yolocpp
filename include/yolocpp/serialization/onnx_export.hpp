@@ -1,6 +1,6 @@
 #pragma once
 //
-// Self-contained ONNX exporter for YOLOv8 detection models.
+// Self-contained ONNX exporter for YOLO8 detection models.
 //
 // Writes the ONNX protobuf wire format directly — no protobuf library, no
 // Python, no TorchScript tracing. Tested against TRT 10's nvonnxparser and
@@ -15,7 +15,7 @@
 
 #include <string>
 
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 namespace yolocpp::serialization {
 
@@ -32,11 +32,11 @@ struct OnnxExportConfig {
   int  opset_version = 17;
 };
 
-// Export the given YOLOv8 model to <path> as a single .onnx file.
+// Export the given YOLO8 model to <path> as a single .onnx file.
 //   - The model must be in eval() mode (BN running stats stable).
 //   - Strides are read from model.stride (set during construction).
 // Throws std::runtime_error on any error.
-void export_yolov8_onnx(models::YoloV8Detect& model,
+void export_yolo8_onnx(models::Yolo8Detect& model,
                         const std::string&    path,
                         const OnnxExportConfig& cfg = {});
 

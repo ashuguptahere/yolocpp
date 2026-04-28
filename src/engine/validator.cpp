@@ -475,17 +475,17 @@ void render_train_batch(const torch::Tensor& imgs, const torch::Tensor& targets,
 }
 
 // Explicit instantiations of the validator templates for both model holders.
-template metrics::mAPResult validate<models::YoloV8Detect>(
-    models::YoloV8Detect&, const datasets::YoloDataset&, torch::Device,
+template metrics::mAPResult validate<models::Yolo8Detect>(
+    models::Yolo8Detect&, const datasets::YoloDataset&, torch::Device,
     inference::NMSConfig);
-template metrics::mAPResult validate<models::YoloV5Detect>(
-    models::YoloV5Detect&, const datasets::YoloDataset&, torch::Device,
+template metrics::mAPResult validate<models::Yolo5Detect>(
+    models::Yolo5Detect&, const datasets::YoloDataset&, torch::Device,
     inference::NMSConfig);
-template ValidationOutput validate_with_records<models::YoloV8Detect>(
-    models::YoloV8Detect&, const datasets::YoloDataset&, torch::Device,
+template ValidationOutput validate_with_records<models::Yolo8Detect>(
+    models::Yolo8Detect&, const datasets::YoloDataset&, torch::Device,
     inference::NMSConfig);
-template ValidationOutput validate_with_records<models::YoloV5Detect>(
-    models::YoloV5Detect&, const datasets::YoloDataset&, torch::Device,
+template ValidationOutput validate_with_records<models::Yolo5Detect>(
+    models::Yolo5Detect&, const datasets::YoloDataset&, torch::Device,
     inference::NMSConfig);
 
 }  // namespace yolocpp::engine

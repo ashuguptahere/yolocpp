@@ -1,6 +1,6 @@
 #pragma once
 //
-// YOLOv8 detection loss.
+// YOLO8 detection loss.
 //
 //   total = box_gain * CIoU + dfl_gain * DFL + cls_gain * BCE
 //

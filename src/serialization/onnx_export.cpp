@@ -1,4 +1,4 @@
-// Self-contained ONNX exporter for YOLOv8.
+// Self-contained ONNX exporter for YOLO8.
 //
 // We emit the ONNX protobuf wire format directly. The encoding is
 // straightforward enough that bringing in libprotobuf would cost more than
@@ -361,7 +361,7 @@ class GraphBuilder {
 };
 
 // ──────────────────────────────────────────────────────────────────────────
-// YOLOv8 → ONNX: the layer emitters.
+// YOLO8 → ONNX: the layer emitters.
 
 // Fold BN into preceding Conv weights & bias (since our Conv has bias=False
 // it becomes pure conv-with-bias post-fusion).
@@ -400,7 +400,7 @@ std::string emit_conv_block(GraphBuilder& g, const std::string& in,
   };
   auto y = g.node("Conv", {in, wname, bname}, attrs, prefix + ".out");
   if (!act_silu) return y;
-  // SiLU = x * sigmoid(x). Could also use HardSigmoid but YOLOv8 uses SiLU.
+  // SiLU = x * sigmoid(x). Could also use HardSigmoid but YOLO8 uses SiLU.
   auto sig = g.node("Sigmoid", {y}, {}, prefix + ".sig");
   auto out = g.node("Mul",     {y, sig}, {}, prefix + ".silu");
   return out;
@@ -707,7 +707,7 @@ std::string emit_detect(GraphBuilder& g,
 
 }  // anonymous namespace
 
-void export_yolov8_onnx(models::YoloV8Detect& model,
+void export_yolo8_onnx(models::Yolo8Detect& model,
                         const std::string&    path,
                         const OnnxExportConfig& cfg) {
   // Force eval (BN running stats stable).
@@ -718,7 +718,7 @@ void export_yolov8_onnx(models::YoloV8Detect& model,
               {-1, 3, cfg.imgsz, cfg.imgsz});
 
   // We replicate the v8 YAML's connectivity by re-reading the model's
-  // ModuleList and the same yaml structure used in YoloV8DetectImpl.
+  // ModuleList and the same yaml structure used in Yolo8DetectImpl.
   // Layers 0..21 are forward layers; layer 22 is Detect.
   struct Step {
     std::vector<int> from;
@@ -786,7 +786,7 @@ void export_yolov8_onnx(models::YoloV8Detect& model,
   model_pb.write_string_field(4, "");      // domain
   model_pb.write_int64_field(5, 1);        // model_version
   model_pb.write_string_field(6, "");      // doc_string
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolov8"));
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo8"));
   model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
 
   std::ofstream f(path, std::ios::binary);

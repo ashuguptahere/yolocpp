@@ -1,6 +1,6 @@
 #pragma once
 //
-// Non-maximum suppression for YOLOv8-style detections.
+// Non-maximum suppression for YOLO8-style detections.
 //
 // Input pred is the model's eval output: [N, 4 + nc, A]
 //   - dim 1 channels 0..3 are box xyxy in input pixels

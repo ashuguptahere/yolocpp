@@ -103,12 +103,12 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
   // Build/cache ONNX once if any TRT path is requested.
   bool need_onnx = cfg.run_trt_fp32 || cfg.run_trt_fp16;
   if (need_onnx && !fs::exists(onnx_path)) {
-    models::YoloV8Detect model(models::kYoloV8n, /*nc=*/80);
+    models::Yolo8Detect model(models::kYolo8n, /*nc=*/80);
     auto sd = serialization::load_state_dict(cfg.weights);
     model->load_from_state_dict(sd.entries);
     model->eval();
     serialization::OnnxExportConfig ocfg; ocfg.imgsz = cfg.imgsz;
-    serialization::export_yolov8_onnx(model, onnx_path, ocfg);
+    serialization::export_yolo8_onnx(model, onnx_path, ocfg);
   }
 
   // ── TRT FP32 ────────────────────────────────────────────────────────────

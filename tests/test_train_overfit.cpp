@@ -2,7 +2,7 @@
 //
 // Synthetic data: 4 images, each with one box at the center of a colored
 // rectangle. We start from random init (not pretrained), train a fresh
-// YOLOv8n for a small number of iterations, and verify the loss decreases
+// YOLO8n for a small number of iterations, and verify the loss decreases
 // by at least 5×. This exercises:
 //   - dataset loading (synthetic on-disk YOLO labels)
 //   - augmentation
@@ -23,8 +23,8 @@
 #include "yolocpp/datasets/yolo_dataset.hpp"
 #include "yolocpp/engine/trainer.hpp"
 #include "yolocpp/engine/validator.hpp"
-#include "yolocpp/losses/yolov8_loss.hpp"
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/losses/yolo8_loss.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 namespace fs = std::filesystem;
 
@@ -91,7 +91,7 @@ int main() {
       root.string(), "val", /*imgsz=*/320, names, aug);
 
   // Build a tiny model. We use full v8n architecture but with nc=2.
-  models::YoloV8Detect model(models::kYoloV8n, /*nc=*/(int)names.size());
+  models::Yolo8Detect model(models::kYolo8n, /*nc=*/(int)names.size());
   // Re-init Detect head biases sensibly (many zeros after constructor).
   // (nothing else needed; default init is fine for overfit demo)
 

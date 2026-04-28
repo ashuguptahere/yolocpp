@@ -1,4 +1,4 @@
-// Verify all five YOLOv8 detect scales (n/s/m/l/x) load Ultralytics weights
+// Verify all five YOLO8 detect scales (n/s/m/l/x) load Ultralytics weights
 // and produce sensible predictions on bus.jpg. Same canonical sample
 // Ultralytics uses to demo every scale.
 
@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "yolocpp/inference/predictor.hpp"
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -20,17 +20,17 @@ int main() {
 
   struct Cfg {
     const char* path;
-    models::YoloV8Scale scale;
+    models::Yolo8Scale scale;
     const char* name;
     long long expected_params;     // approximate (±1%)
   };
 
   Cfg cfgs[] = {
-      {"data/yolov8n.pt", models::kYoloV8n, "n",  3157184},
-      {"data/yolov8s.pt", models::kYoloV8s, "s", 11166560},
-      {"data/yolov8m.pt", models::kYoloV8m, "m", 25902640},
-      {"data/yolov8l.pt", models::kYoloV8l, "l", 43691520},
-      {"data/yolov8x.pt", models::kYoloV8x, "x", 68229648},
+      {"data/yolo8n.pt", models::kYolo8n, "n",  3157184},
+      {"data/yolo8s.pt", models::kYolo8s, "s", 11166560},
+      {"data/yolo8m.pt", models::kYolo8m, "m", 25902640},
+      {"data/yolo8l.pt", models::kYolo8l, "l", 43691520},
+      {"data/yolo8x.pt", models::kYolo8x, "x", 68229648},
   };
 
   for (const auto& c : cfgs) {

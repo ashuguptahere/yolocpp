@@ -5,7 +5,7 @@
 
 #include <iostream>
 
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo8.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
 #include "yolocpp/serialization/pt_save.hpp"
 
@@ -17,7 +17,7 @@
 int main() {
   using namespace yolocpp;
 
-  models::YoloV8Detect a(models::kYoloV8n, /*nc=*/80);
+  models::Yolo8Detect a(models::kYolo8n, /*nc=*/80);
   a->eval();
 
   // Snapshot a few key tensors before save.
@@ -32,7 +32,7 @@ int main() {
   std::cout << "[pt_save] wrote build/pt_save_roundtrip.pt\n";
 
   // Load back into a fresh model.
-  models::YoloV8Detect b(models::kYoloV8n, /*nc=*/80);
+  models::Yolo8Detect b(models::kYolo8n, /*nc=*/80);
   auto sd = serialization::load_state_dict("build/pt_save_roundtrip.pt");
   std::cout << "[pt_save] loaded " << sd.size() << " entries\n";
   EXPECT(sd.size() == snap.size(), "entry count round-trip");

@@ -1,5 +1,5 @@
-// Verify the .pt weight loader can read Ultralytics yolov8n.pt and that
-// every parameter shape lines up with our YOLOv8n's named_parameters().
+// Verify the .pt weight loader can read Ultralytics yolo8n.pt and that
+// every parameter shape lines up with our YOLO8n's named_parameters().
 
 #include <torch/torch.h>
 
@@ -8,7 +8,7 @@
 #include <set>
 #include <string>
 
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo8.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
 
 #define EXPECT(cond, msg)                                          \
@@ -20,7 +20,7 @@
   } while (0)
 
 int main() {
-  const std::string pt_path = "data/yolov8n.pt";
+  const std::string pt_path = "data/yolo8n.pt";
   std::cout << "[load] reading " << pt_path << "\n";
   auto sd = yolocpp::serialization::load_state_dict(pt_path);
   std::cout << "[load] state_dict has " << sd.size() << " entries\n";
@@ -39,7 +39,7 @@ int main() {
   }
 
   // Build our model and compare named_parameters / named_buffers.
-  yolocpp::models::YoloV8Detect model(yolocpp::models::kYoloV8n, /*nc=*/80);
+  yolocpp::models::Yolo8Detect model(yolocpp::models::kYolo8n, /*nc=*/80);
   model->eval();
 
   std::set<std::string> ckpt_keys;

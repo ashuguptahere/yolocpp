@@ -20,7 +20,7 @@ int main() {
 
   // ─── classify ─────────────────────────────────────────────────────────
   {
-    ClassifyPredictor p("data/yolov8n-cls.pt", /*imgsz=*/224);
+    ClassifyPredictor p("data/yolo8n-cls.pt", /*imgsz=*/224);
     auto r = p.predict(img, /*top_k=*/5);
     std::cout << "[cls] top-5:";
     for (auto& [cid, prob] : r.topk)
@@ -37,7 +37,7 @@ int main() {
 
   // ─── segment ──────────────────────────────────────────────────────────
   {
-    SegmentPredictor p("data/yolov8n-seg.pt", /*imgsz=*/640);
+    SegmentPredictor p("data/yolo8n-seg.pt", /*imgsz=*/640);
     auto insts = p.predict_to_file("data/bus.jpg", "build/seg_bus.jpg");
     std::cout << "[seg] " << insts.size() << " instances\n";
     EXPECT(insts.size() >= 4, "expected ≥ 4 segmented instances on bus.jpg");
@@ -49,7 +49,7 @@ int main() {
 
   // ─── pose ─────────────────────────────────────────────────────────────
   {
-    PosePredictor p("data/yolov8n-pose.pt", /*imgsz=*/640);
+    PosePredictor p("data/yolo8n-pose.pt", /*imgsz=*/640);
     auto insts = p.predict_to_file("data/bus.jpg", "build/pose_bus.jpg");
     std::cout << "[pose] " << insts.size() << " people\n";
     EXPECT(insts.size() >= 1, "expected ≥ 1 person on bus.jpg");
@@ -61,7 +61,7 @@ int main() {
   // bus.jpg isn't aerial DOTA imagery — we just verify the pipeline runs
   // without crashing and produces some valid (cx,cy,w,h,angle) output.
   {
-    OBBPredictor p("data/yolov8n-obb.pt", /*imgsz=*/640);
+    OBBPredictor p("data/yolo8n-obb.pt", /*imgsz=*/640);
     auto insts = p.predict_to_file("data/bus.jpg", "build/obb_bus.jpg",
                                    /*conf=*/{ .conf_thresh = 0.05f });
     std::cout << "[obb] " << insts.size() << " rotated boxes\n";

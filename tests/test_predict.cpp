@@ -1,4 +1,4 @@
-// End-to-end inference test: load yolov8n.pt, run on bus.jpg, verify
+// End-to-end inference test: load yolo8n.pt, run on bus.jpg, verify
 // detections look reasonable (≥ 1 person, ≥ 1 bus) — same canonical sample
 // Ultralytics uses to demo their releases.
 
@@ -16,7 +16,7 @@
 int main() {
   using namespace yolocpp::inference;
 
-  Predictor pred("data/yolov8n.pt", /*imgsz=*/640);
+  Predictor pred("data/yolo8n.pt", /*imgsz=*/640);
   auto dets = pred.predict_to_file("data/bus.jpg",
                                    "build/predict_output.jpg", {});
   std::cout << "[predict] detections: " << dets.size() << "\n";

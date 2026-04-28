@@ -1,8 +1,8 @@
 #pragma once
 //
-// YOLOv8 detection model in libtorch.
+// YOLO8 detection model in libtorch.
 //
-// Architecture matches Ultralytics yolov8.yaml exactly so that the
+// Architecture matches Ultralytics yolo8.yaml exactly so that the
 // Ultralytics .pt state_dict maps onto our parameters in iteration order.
 //
 // Variants are scaled by depth and width multipliers:
@@ -22,17 +22,17 @@
 
 namespace yolocpp::models {
 
-struct YoloV8Scale {
+struct Yolo8Scale {
   double depth_multiple;
   double width_multiple;
   int    max_channels;
 };
 
-constexpr YoloV8Scale kYoloV8n{0.33, 0.25, 1024};
-constexpr YoloV8Scale kYoloV8s{0.33, 0.50, 1024};
-constexpr YoloV8Scale kYoloV8m{0.67, 0.75, 768};
-constexpr YoloV8Scale kYoloV8l{1.00, 1.00, 512};
-constexpr YoloV8Scale kYoloV8x{1.00, 1.25, 512};
+constexpr Yolo8Scale kYolo8n{0.33, 0.25, 1024};
+constexpr Yolo8Scale kYolo8s{0.33, 0.50, 1024};
+constexpr Yolo8Scale kYolo8m{0.67, 0.75, 768};
+constexpr Yolo8Scale kYolo8l{1.00, 1.00, 512};
+constexpr Yolo8Scale kYolo8x{1.00, 1.25, 512};
 
 // ─── Conv = Conv2d + BN + SiLU ─────────────────────────────────────────────
 struct ConvImpl : torch::nn::Module {
@@ -117,7 +117,7 @@ TORCH_MODULE(Detect);
 
 // ─── Whole model ───────────────────────────────────────────────────────────
 //
-// Order of registered child modules MATCHES Ultralytics yolov8.yaml indices.
+// Order of registered child modules MATCHES Ultralytics yolo8.yaml indices.
 // This is the contract that lets the .pt state_dict map cleanly:
 //   children:
 //     model.0  Conv
@@ -126,8 +126,8 @@ TORCH_MODULE(Detect);
 //     ...
 //     model.22 Detect
 //
-struct YoloV8DetectImpl : torch::nn::Module {
-  YoloV8Scale scale;
+struct Yolo8DetectImpl : torch::nn::Module {
+  Yolo8Scale scale;
   int         nc;
 
   // Registered as "model" with index suffixes (0..22) inside it.
@@ -136,7 +136,7 @@ struct YoloV8DetectImpl : torch::nn::Module {
   // Strides (computed by a one-shot probe) — used by Detect.
   std::vector<double> stride;
 
-  YoloV8DetectImpl(YoloV8Scale s, int nc);
+  Yolo8DetectImpl(Yolo8Scale s, int nc);
 
   // Train mode: returns per-level raw feature maps (for loss).
   // Eval  mode: returns decoded [N, 4+nc, A] tensor.
@@ -154,11 +154,11 @@ struct YoloV8DetectImpl : torch::nn::Module {
   int load_from_state_dict(
       const std::vector<std::pair<std::string, at::Tensor>>& entries);
 };
-TORCH_MODULE(YoloV8Detect);
+TORCH_MODULE(Yolo8Detect);
 
 // Helper: scaled output channels (rounds, clamps to max_channels, * width).
-int scale_channels(int c, const YoloV8Scale& s);
+int scale_channels(int c, const Yolo8Scale& s);
 // Helper: scaled depth (rounds, clamps to ≥ 1).
-int scale_depth(int n, const YoloV8Scale& s);
+int scale_depth(int n, const Yolo8Scale& s);
 
 }  // namespace yolocpp::models

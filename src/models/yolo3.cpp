@@ -1,4 +1,4 @@
-#include "yolocpp/models/yolov3.hpp"
+#include "yolocpp/models/yolo3.hpp"
 
 namespace yolocpp::models {
 
@@ -24,8 +24,8 @@ torch::Tensor DarknetBlockImpl::forward(torch::Tensor x) {
   return x;
 }
 
-// ─── YoloV3 ─────────────────────────────────────────────────────────────
-YoloV3Impl::YoloV3Impl(int nc_) : nc(nc_) {
+// ─── Yolo3 ─────────────────────────────────────────────────────────────
+Yolo3Impl::Yolo3Impl(int nc_) : nc(nc_) {
   // Backbone
   stem = register_module("stem", Conv(3, 32, 3, 1));
   b1   = register_module("b1", DarknetBlock(32,  64,  1));
@@ -71,7 +71,7 @@ YoloV3Impl::YoloV3Impl(int nc_) : nc(nc_) {
       torch::nn::Conv2d(torch::nn::Conv2dOptions(256, out_ch, 1)));
 }
 
-std::vector<torch::Tensor> YoloV3Impl::forward(torch::Tensor x) {
+std::vector<torch::Tensor> Yolo3Impl::forward(torch::Tensor x) {
   // Backbone
   auto y = stem(x);
   y = b1(y);

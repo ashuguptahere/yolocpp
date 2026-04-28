@@ -46,7 +46,7 @@ static int test_classify() {
   yolocpp::tasks::ClassifyDataset eval_ds(root.string(), "train", 64, false);
   EXPECT(tr.num_classes() == 2, "classify: 2 classes");
 
-  yolocpp::models::YoloV8Classify m(yolocpp::models::kYoloV8n, /*nc=*/2);
+  yolocpp::models::Yolo8Classify m(yolocpp::models::kYolo8n, /*nc=*/2);
   yolocpp::tasks::ClassifyTrainConfig cfg;
   cfg.epochs        = 5;
   cfg.batch_size    = 4;
@@ -116,7 +116,7 @@ static int test_segment() {
   yolocpp::tasks::SegDataset tr(root, "train", 320, names, /*augment=*/false);
   yolocpp::tasks::SegDataset val(root, "val",   320, names, /*augment=*/false);
 
-  yolocpp::models::YoloV8Segment m(yolocpp::models::kYoloV8n, /*nc=*/1);
+  yolocpp::models::Yolo8Segment m(yolocpp::models::kYolo8n, /*nc=*/1);
   yolocpp::tasks::SegTrainConfig cfg;
   cfg.epochs = 15;
   cfg.batch_size = 4;
@@ -187,7 +187,7 @@ static int test_pose() {
   make_pose(root, 320, 320, 4);
   yolocpp::tasks::PoseDataset tr(root, "train", 320, 17, 3, /*augment=*/false);
   yolocpp::tasks::PoseDataset val(root, "val",   320, 17, 3, /*augment=*/false);
-  yolocpp::models::YoloV8Pose m(yolocpp::models::kYoloV8n, /*nc=*/1, 17, 3);
+  yolocpp::models::Yolo8Pose m(yolocpp::models::kYolo8n, /*nc=*/1, 17, 3);
   yolocpp::tasks::PoseTrainConfig cfg;
   cfg.epochs = 10; cfg.batch_size = 4; cfg.imgsz = 320; cfg.lr0 = 0.01;
   cfg.save_dir = "build/pose_run";
@@ -235,7 +235,7 @@ static int test_obb() {
   std::vector<std::string> names = {"r"};
   yolocpp::tasks::OBBDataset tr(root, "train", 320, names, /*augment=*/false);
   yolocpp::tasks::OBBDataset val(root, "val",   320, names, /*augment=*/false);
-  yolocpp::models::YoloV8OBB m(yolocpp::models::kYoloV8n, /*nc=*/1, /*ne=*/1);
+  yolocpp::models::Yolo8OBB m(yolocpp::models::kYolo8n, /*nc=*/1, /*ne=*/1);
   yolocpp::tasks::OBBTrainConfig cfg;
   cfg.epochs = 10; cfg.batch_size = 4; cfg.imgsz = 320; cfg.lr0 = 0.01;
   cfg.save_dir = "build/obb_run";

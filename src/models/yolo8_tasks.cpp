@@ -1,4 +1,4 @@
-#include "yolocpp/models/yolov8_tasks.hpp"
+#include "yolocpp/models/yolo8_tasks.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -44,7 +44,7 @@ static torch::nn::ModuleList build_cv4(const std::vector<int>& ch,
 // ─── SegmentImpl ──────────────────────────────────────────────────────────
 SegmentImpl::SegmentImpl(int nc_, int nm_, int npr_unscaled,
                          std::vector<int> ch_,
-                         const YoloV8Scale& sc)
+                         const Yolo8Scale& sc)
     : nm(nm_), npr(scale_channels(npr_unscaled, sc)),
       nl((int)ch_.size()), nc(nc_), reg_max(16), ch(std::move(ch_)) {
   // Inner Detect handles cv2/cv3/dfl.
@@ -209,7 +209,7 @@ const std::vector<LSpec>& v8_yaml_for_tasks() {
 // Build layers 0..21 into an existing ModuleList. Returns per-layer output
 // channels.
 std::vector<int> build_backbone_neck(torch::nn::ModuleList& model,
-                                     YoloV8Scale scale, int img_in_ch = 3) {
+                                     Yolo8Scale scale, int img_in_ch = 3) {
   const auto& yaml = v8_yaml_for_tasks();
   std::vector<int> ch;
   int c_in = img_in_ch;
@@ -323,8 +323,8 @@ int load_state_dict_generic(M& self,
 
 }  // anonymous namespace
 
-// ─── YoloV8SegmentImpl ────────────────────────────────────────────────────
-YoloV8SegmentImpl::YoloV8SegmentImpl(YoloV8Scale s, int nc_, int nm,
+// ─── Yolo8SegmentImpl ────────────────────────────────────────────────────
+Yolo8SegmentImpl::Yolo8SegmentImpl(Yolo8Scale s, int nc_, int nm,
                                       int npr_unscaled)
     : scale(s), nc(nc_) {
   model = register_module("model", torch::nn::ModuleList());
@@ -338,7 +338,7 @@ YoloV8SegmentImpl::YoloV8SegmentImpl(YoloV8Scale s, int nc_, int nm,
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-YoloV8SegmentImpl::forward_eval(torch::Tensor x) {
+Yolo8SegmentImpl::forward_eval(torch::Tensor x) {
   auto outs = forward_backbone_neck(model, x);
   std::vector<torch::Tensor> det_in = {outs[15], outs[18], outs[21]};
   auto* seg = model[22]->as<SegmentImpl>();
@@ -346,7 +346,7 @@ YoloV8SegmentImpl::forward_eval(torch::Tensor x) {
   return seg->forward(det_in);
 }
 
-int YoloV8SegmentImpl::load_from_state_dict(
+int Yolo8SegmentImpl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
   // Ultralytics state_dict has model.22.cv2/cv3/dfl/cv4/proto. Our nesting
   // is model.22.detect.cv2 etc. — we need to remap the prefix.
@@ -369,8 +369,8 @@ int YoloV8SegmentImpl::load_from_state_dict(
   return load_state_dict_generic(*this, remapped);
 }
 
-// ─── YoloV8PoseImpl ───────────────────────────────────────────────────────
-YoloV8PoseImpl::YoloV8PoseImpl(YoloV8Scale s, int nc_, int num_kpts_, int kpt_dim_)
+// ─── Yolo8PoseImpl ───────────────────────────────────────────────────────
+Yolo8PoseImpl::Yolo8PoseImpl(Yolo8Scale s, int nc_, int num_kpts_, int kpt_dim_)
     : scale(s), nc(nc_), num_kpts(num_kpts_), kpt_dim(kpt_dim_) {
   model = register_module("model", torch::nn::ModuleList());
   auto ch = build_backbone_neck(model, scale);
@@ -382,7 +382,7 @@ YoloV8PoseImpl::YoloV8PoseImpl(YoloV8Scale s, int nc_, int num_kpts_, int kpt_di
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-YoloV8PoseImpl::forward_eval(torch::Tensor x) {
+Yolo8PoseImpl::forward_eval(torch::Tensor x) {
   auto outs = forward_backbone_neck(model, x);
   std::vector<torch::Tensor> det_in = {outs[15], outs[18], outs[21]};
   auto* p = model[22]->as<PoseImpl>();
@@ -390,7 +390,7 @@ YoloV8PoseImpl::forward_eval(torch::Tensor x) {
   return p->forward(det_in);
 }
 
-int YoloV8PoseImpl::load_from_state_dict(
+int Yolo8PoseImpl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
   std::vector<std::pair<std::string, at::Tensor>> remapped;
   remapped.reserve(entries.size());
@@ -409,8 +409,8 @@ int YoloV8PoseImpl::load_from_state_dict(
   return load_state_dict_generic(*this, remapped);
 }
 
-// ─── YoloV8OBBImpl ────────────────────────────────────────────────────────
-YoloV8OBBImpl::YoloV8OBBImpl(YoloV8Scale s, int nc_, int ne_)
+// ─── Yolo8OBBImpl ────────────────────────────────────────────────────────
+Yolo8OBBImpl::Yolo8OBBImpl(Yolo8Scale s, int nc_, int ne_)
     : scale(s), nc(nc_), ne(ne_) {
   model = register_module("model", torch::nn::ModuleList());
   auto ch = build_backbone_neck(model, scale);
@@ -422,7 +422,7 @@ YoloV8OBBImpl::YoloV8OBBImpl(YoloV8Scale s, int nc_, int ne_)
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-YoloV8OBBImpl::forward_eval(torch::Tensor x) {
+Yolo8OBBImpl::forward_eval(torch::Tensor x) {
   auto outs = forward_backbone_neck(model, x);
   std::vector<torch::Tensor> det_in = {outs[15], outs[18], outs[21]};
   auto* o = model[22]->as<OBBImpl>();
@@ -430,7 +430,7 @@ YoloV8OBBImpl::forward_eval(torch::Tensor x) {
   return o->forward(det_in);
 }
 
-int YoloV8OBBImpl::load_from_state_dict(
+int Yolo8OBBImpl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
   std::vector<std::pair<std::string, at::Tensor>> remapped;
   remapped.reserve(entries.size());

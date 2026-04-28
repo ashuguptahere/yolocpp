@@ -1,4 +1,4 @@
-// Phase 5A/5B regression: YOLOv5 end-to-end on bus.jpg + YOLOv3 architecture
+// Phase 5A/5B regression: YOLO5 end-to-end on bus.jpg + YOLO3 architecture
 // shape check.
 
 #include <torch/torch.h>
@@ -7,8 +7,8 @@
 #include <map>
 
 #include "yolocpp/inference/predictor.hpp"
-#include "yolocpp/models/yolov3.hpp"
-#include "yolocpp/models/yolov5.hpp"
+#include "yolocpp/models/yolo3.hpp"
+#include "yolocpp/models/yolo5.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -18,9 +18,9 @@
 int main() {
   using namespace yolocpp;
 
-  // ─── YOLOv3: Darknet-53, ~62M params, 3-scale output 255×{13,26,52} ──
+  // ─── YOLO3: Darknet-53, ~62M params, 3-scale output 255×{13,26,52} ──
   {
-    models::YoloV3 m(/*nc=*/80);
+    models::Yolo3 m(/*nc=*/80);
     m->eval();
     long long n = 0;
     for (auto& p : m->parameters()) if (p.requires_grad()) n += p.numel();
@@ -34,19 +34,19 @@ int main() {
     EXPECT(outs[2].sizes() == torch::IntArrayRef({1, 255, 52, 52}), "v3 P3");
   }
 
-  // ─── YOLOv5 — verify all five scales (n/s/m/l/x) end-to-end ──────────
+  // ─── YOLO5 — verify all five scales (n/s/m/l/x) end-to-end ──────────
   struct V5Cfg {
     const char* path;
-    models::YoloV8Scale scale;
+    models::Yolo8Scale scale;
     const char* name;
     long long  expected_params_M_x10;  // expected param count × 10 (so 1.86M → 19)
   };
   V5Cfg v5cfgs[] = {
-      {"data/yolov5n.pt", models::kYoloV5n, "n",  19},   //  1.9M
-      {"data/yolov5s.pt", models::kYoloV5s, "s",  72},   //  7.2M
-      {"data/yolov5m.pt", models::kYoloV5m, "m", 211},   // 21.1M
-      {"data/yolov5l.pt", models::kYoloV5l, "l", 463},   // 46.3M
-      {"data/yolov5x.pt", models::kYoloV5x, "x", 868},   // 86.8M
+      {"data/yolo5n.pt", models::kYolo5n, "n",  19},   //  1.9M
+      {"data/yolo5s.pt", models::kYolo5s, "s",  72},   //  7.2M
+      {"data/yolo5m.pt", models::kYolo5m, "m", 211},   // 21.1M
+      {"data/yolo5l.pt", models::kYolo5l, "l", 463},   // 46.3M
+      {"data/yolo5x.pt", models::kYolo5x, "x", 868},   // 86.8M
   };
   for (const auto& cfg : v5cfgs) {
     auto dets = inference::predict_v5_to_file(

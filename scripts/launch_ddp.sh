@@ -5,8 +5,8 @@
 #   scripts/launch_ddp.sh <num_gpus> <yolocpp args...>
 #
 # Examples:
-#   scripts/launch_ddp.sh 2 task=detect mode=train data=coco model=yolov8n.pt epochs=50
-#   scripts/launch_ddp.sh 4 task=detect mode=train data=coco model=yolov8x.pt batch=64
+#   scripts/launch_ddp.sh 2 task=detect mode=train data=coco model=yolo8n.pt epochs=50
+#   scripts/launch_ddp.sh 4 task=detect mode=train data=coco model=yolo8x.pt batch=64
 #
 # The launcher sets WORLD_SIZE / RANK / LOCAL_RANK / MASTER_ADDR / MASTER_PORT
 # in each child process. The trainer's init_ddp_from_env() picks them up and

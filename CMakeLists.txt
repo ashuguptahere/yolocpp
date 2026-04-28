@@ -88,11 +88,20 @@ configure_file(
 add_library(yolocpp_core
   src/core/version.cpp
   src/core/device.cpp
-  src/models/yolov3.cpp
-  src/models/yolov5.cpp
-  src/models/yolov8.cpp
-  src/models/yolov8_classify.cpp
-  src/models/yolov8_tasks.cpp
+  src/models/yolo3.cpp
+  src/models/yolo4.cpp
+  src/models/yolo5.cpp
+  src/models/yolo6.cpp
+  src/models/yolo7.cpp
+  src/models/yolo8.cpp
+  src/models/yolo8_classify.cpp
+  src/models/yolo8_tasks.cpp
+  src/models/yolo9.cpp
+  src/models/yolo10.cpp
+  src/models/yolo11.cpp
+  src/models/yolo12.cpp
+  src/models/yolo13.cpp
+  src/models/yolo26.cpp
   src/inference/task_predictors.cpp
   src/tasks/classify_train.cpp
   src/tasks/segment_train.cpp
@@ -106,7 +115,7 @@ add_library(yolocpp_core
   src/inference/nms.cpp
   src/inference/predictor.cpp
   src/datasets/yolo_dataset.cpp
-  src/losses/yolov8_loss.cpp
+  src/losses/yolo8_loss.cpp
   src/cli/args.cpp
   src/cli/data_yaml.cpp
   src/cli/model_info.cpp

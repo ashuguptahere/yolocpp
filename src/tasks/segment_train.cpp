@@ -17,7 +17,7 @@
 
 #include "yolocpp/inference/letterbox.hpp"
 #include "yolocpp/inference/task_predictors.hpp"
-#include "yolocpp/losses/yolov8_loss.hpp"
+#include "yolocpp/losses/yolo8_loss.hpp"
 
 namespace fs = std::filesystem;
 
@@ -293,7 +293,7 @@ torch::Tensor compute_mask_loss(const torch::Tensor& coefs,
 
 }  // anonymous namespace
 
-void train_segment(models::YoloV8Segment model,
+void train_segment(models::Yolo8Segment model,
                    const SegDataset& train,
                    const SegDataset* val,
                    SegTrainConfig cfg) {
@@ -410,7 +410,7 @@ void train_segment(models::YoloV8Segment model,
   std::cout << "[seg-train] saved → " << ckpt << "\n";
 }
 
-SegValResult validate_segment(models::YoloV8Segment& model,
+SegValResult validate_segment(models::Yolo8Segment& model,
                                const SegDataset& dataset,
                                torch::Device device) {
   model->to(device);

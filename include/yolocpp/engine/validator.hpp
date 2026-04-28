@@ -8,14 +8,14 @@
 #include "yolocpp/datasets/yolo_dataset.hpp"
 #include "yolocpp/inference/nms.hpp"
 #include "yolocpp/metrics/map.hpp"
-#include "yolocpp/models/yolov5.hpp"
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo5.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 namespace yolocpp::engine {
 
 // Templated over the model-holder type so v8 and v5 (both expose
 // forward_eval / stride) share one implementation. Explicit instantiations
-// for YoloV8Detect and YoloV5Detect are in validator.cpp.
+// for Yolo8Detect and Yolo5Detect are in validator.cpp.
 template <typename ModelHolder>
 metrics::mAPResult validate(ModelHolder& model,
                             const datasets::YoloDataset& dataset,

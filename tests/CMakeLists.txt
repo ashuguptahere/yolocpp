@@ -11,7 +11,7 @@ function(yolocpp_add_test name)
 endfunction()
 
 yolocpp_add_test(smoke_test         smoke_test.cpp smoke_kernel.cu)
-yolocpp_add_test(test_yolov8_arch   test_yolov8_arch.cpp)
+yolocpp_add_test(test_yolo8_arch   test_yolo8_arch.cpp)
 yolocpp_add_test(test_pt_loader     test_pt_loader.cpp)
 yolocpp_add_test(test_predict       test_predict.cpp)
 yolocpp_add_test(test_train_overfit test_train_overfit.cpp)

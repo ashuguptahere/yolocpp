@@ -11,7 +11,7 @@
 //   • Gradient agreement between 1-GPU and 2-GPU training
 //
 // For full multi-GPU validation:
-//   scripts/launch_ddp.sh 2 task=detect mode=train data=coco8 model=yolov8n.pt
+//   scripts/launch_ddp.sh 2 task=detect mode=train data=coco8 model=yolo8n.pt
 
 #include <torch/torch.h>
 
@@ -20,7 +20,7 @@
 #include <set>
 
 #include "yolocpp/engine/ddp.hpp"
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -40,7 +40,7 @@ int main() {
   EXPECT(yolocpp::engine::is_rank0(st), "is_rank0 true at single-process");
 
   // No-op helpers.
-  yolocpp::models::YoloV8Detect m(yolocpp::models::kYoloV8n, /*nc=*/80);
+  yolocpp::models::Yolo8Detect m(yolocpp::models::kYolo8n, /*nc=*/80);
   yolocpp::engine::broadcast_module(st, *m);
   yolocpp::engine::all_reduce_grads(st, *m);
   yolocpp::engine::barrier(st);

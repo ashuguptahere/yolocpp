@@ -15,9 +15,9 @@
 #include <vector>
 
 #include "yolocpp/inference/predictor.hpp"   // for Detection
-#include "yolocpp/models/yolov8.hpp"
-#include "yolocpp/models/yolov8_classify.hpp"
-#include "yolocpp/models/yolov8_tasks.hpp"
+#include "yolocpp/models/yolo8.hpp"
+#include "yolocpp/models/yolo8_classify.hpp"
+#include "yolocpp/models/yolo8_tasks.hpp"
 
 namespace yolocpp::inference {
 
@@ -31,15 +31,15 @@ class ClassifyPredictor {
   // imgsz: classification typically uses 224 (Ultralytics default).
   ClassifyPredictor(const std::string& weights, int imgsz = 224,
                     std::string device = "", int nc = 1000,
-                    models::YoloV8Scale scale = models::kYoloV8n);
+                    models::Yolo8Scale scale = models::kYolo8n);
 
   ClassifyResult predict(const cv::Mat& bgr, int top_k = 5) const;
 
-  models::YoloV8Classify& model() { return model_; }
+  models::Yolo8Classify& model() { return model_; }
   int imgsz() const { return imgsz_; }
 
  private:
-  models::YoloV8Classify model_;
+  models::Yolo8Classify model_;
   torch::Device          device_;
   int                    imgsz_;
 };
@@ -57,7 +57,7 @@ class SegmentPredictor {
  public:
   SegmentPredictor(const std::string& weights, int imgsz = 640,
                    std::string device = "", int nc = 80,
-                   models::YoloV8Scale scale = models::kYoloV8n);
+                   models::Yolo8Scale scale = models::kYolo8n);
 
   std::vector<SegInstance> predict(const cv::Mat& bgr,
                                    NMSConfig conf = {}) const;
@@ -69,7 +69,7 @@ class SegmentPredictor {
   int imgsz() const { return imgsz_; }
 
  private:
-  models::YoloV8Segment model_;
+  models::Yolo8Segment model_;
   torch::Device         device_;
   int                   imgsz_;
 };
@@ -85,7 +85,7 @@ class PosePredictor {
  public:
   PosePredictor(const std::string& weights, int imgsz = 640,
                 std::string device = "", int num_kpts = 17, int kpt_dim = 3,
-                models::YoloV8Scale scale = models::kYoloV8n);
+                models::Yolo8Scale scale = models::kYolo8n);
 
   std::vector<PoseInstance> predict(const cv::Mat& bgr,
                                     NMSConfig conf = {}) const;
@@ -96,7 +96,7 @@ class PosePredictor {
   int imgsz() const { return imgsz_; }
 
  private:
-  models::YoloV8Pose model_;
+  models::Yolo8Pose model_;
   torch::Device     device_;
   int               imgsz_;
   int               num_kpts_, kpt_dim_;
@@ -114,7 +114,7 @@ class OBBPredictor {
  public:
   OBBPredictor(const std::string& weights, int imgsz = 1024,
                std::string device = "", int nc = 15,
-               models::YoloV8Scale scale = models::kYoloV8n);
+               models::Yolo8Scale scale = models::kYolo8n);
 
   std::vector<OBBInstance> predict(const cv::Mat& bgr,
                                    NMSConfig conf = {}) const;
@@ -126,7 +126,7 @@ class OBBPredictor {
   int imgsz() const { return imgsz_; }
 
  private:
-  models::YoloV8OBB model_;
+  models::Yolo8OBB model_;
   torch::Device     device_;
   int               imgsz_;
 };

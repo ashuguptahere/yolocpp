@@ -22,7 +22,7 @@
 // VERIFICATION STATUS:
 //   • Compiles + tested at world_size=1 on a single 5090.
 //   • For 2+ GPU validation, run on a multi-GPU machine with:
-//       scripts/launch_ddp.sh 2 task=detect mode=train data=coco8 model=yolov8n.pt
+//       scripts/launch_ddp.sh 2 task=detect mode=train data=coco8 model=yolo8n.pt
 //   • Bit-exact gradient agreement with single-GPU after `world_size` steps
 //     hasn't been validated here (no second GPU); the all-reduce code path
 //     follows the standard PyTorch DDP pattern.

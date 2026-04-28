@@ -598,7 +598,7 @@ void TrainerT<M>::run() {
 }
 
 // Explicit instantiations.
-template class TrainerT<models::YoloV8Detect>;
-template class TrainerT<models::YoloV5Detect>;
+template class TrainerT<models::Yolo8Detect>;
+template class TrainerT<models::Yolo5Detect>;
 
 }  // namespace yolocpp::engine

@@ -1,4 +1,4 @@
-#include "yolocpp/losses/yolov8_loss.hpp"
+#include "yolocpp/losses/yolo8_loss.hpp"
 
 #include <torch/nn/functional.h>
 

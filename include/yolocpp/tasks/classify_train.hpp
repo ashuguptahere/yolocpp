@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "yolocpp/models/yolov8_classify.hpp"
+#include "yolocpp/models/yolo8_classify.hpp"
 
 namespace yolocpp::tasks {
 
@@ -65,7 +65,7 @@ struct ClassifyTrainConfig {
   int        val_every = 0;
 };
 
-void train_classify(models::YoloV8Classify model,
+void train_classify(models::Yolo8Classify model,
                     const ClassifyDataset& train,
                     const ClassifyDataset* val,
                     ClassifyTrainConfig cfg);
@@ -76,7 +76,7 @@ struct ClassifyValResult {
   int    n_total;
 };
 
-ClassifyValResult validate_classify(models::YoloV8Classify& model,
+ClassifyValResult validate_classify(models::Yolo8Classify& model,
                                     const ClassifyDataset& dataset,
                                     torch::Device device);
 

@@ -8,7 +8,7 @@
 
 #include "yolocpp/cli/resolve.hpp"
 #include "yolocpp/inference/letterbox.hpp"
-#include "yolocpp/models/yolov5.hpp"
+#include "yolocpp/models/yolo5.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
 
 namespace yolocpp::inference {
@@ -39,7 +39,7 @@ static torch::Device resolve_device(std::string s) {
 }
 
 Predictor::Predictor(const std::string& weights, int imgsz, std::string device,
-                     int nc, models::YoloV8Scale scale)
+                     int nc, models::Yolo8Scale scale)
     : model_(scale, nc),
       device_(resolve_device(std::move(device))),
       imgsz_(imgsz) {
@@ -69,7 +69,7 @@ std::vector<Detection> Predictor::predict(const cv::Mat& bgr,
   torch::Tensor pred;
   {
     torch::NoGradGuard ng;
-    pred = const_cast<models::YoloV8Detect&>(model_)->forward_eval(x);
+    pred = const_cast<models::Yolo8Detect&>(model_)->forward_eval(x);
   }
   auto outs = nms(pred, conf);
   TORCH_CHECK(outs.size() == 1, "expected single image batch");
@@ -134,9 +134,9 @@ std::vector<Detection> Predictor::predict_to_file(
 std::vector<Detection> predict_v5_to_file(
     const std::string& weights, const std::string& in_path,
     const std::string& out_path, int imgsz, const std::string& device,
-    int nc, models::YoloV8Scale scale, NMSConfig nmscfg) {
+    int nc, models::Yolo8Scale scale, NMSConfig nmscfg) {
   auto dev = resolve_device(device);
-  models::YoloV5Detect model(scale, nc);
+  models::Yolo5Detect model(scale, nc);
   auto sd = serialization::load_state_dict(weights);
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v5-pred] loaded " << copied << " tensors from "

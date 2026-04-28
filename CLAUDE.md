@@ -5,9 +5,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project goal
 
 A pure-C++ replacement for Ultralytics. **No Python at runtime.** LibTorch for
-training/eval, TensorRT for deployment, OpenCV for image I/O. The codebase is
-currently at Phase 0 (foundation only) — see README.md for the phased roadmap
-through YOLOv8n → full v8 family → all YOLO versions → DETR/RT-DETR/ViT.
+training/eval, TensorRT for deployment, OpenCV for image I/O.
+
+### Supported YOLO versions (closed set)
+
+The project covers exactly twelve YOLO versions, with **no `v`** in any
+filename, identifier, namespace, class name, comment, or doc string:
+
+```
+yolo3   yolo4   yolo5   yolo6   yolo7   yolo8
+yolo9   yolo10  yolo11  yolo12  yolo13  yolo26
+```
+
+Anything outside this set (v1, v2, v14..v25, v27+) is **not supported and
+not planned**. When patching code, follow the convention everywhere — even
+when referencing legacy upstream Ultralytics URLs that still publish as
+`yolov<N>...pt`. The single legitimate place that strings differ from the
+canonical form is `src/cli/resolve.cpp::upstream_basename`, which maps a
+canonical local name back to the upstream URL when downloading v3..v10.
+
+### Implementation status
+
+`yolo8` is fully end-to-end (train / val / predict / export across all 5
+scales × 5 tasks). `yolo5` is end-to-end via the anchorless `*u.pt`
+variants. `yolo3` has the architecture in place (forward-shape verified;
+weight loader deferred). All other versions exist as **stubs** under
+`src/models/yolo<N>.cpp` + `include/yolocpp/models/yolo<N>.hpp` — the
+header carries the design intent; the source throws a clear
+`not implemented yet` from `forward()`. Implementation order — see
+README.md — prefers families that reuse the v8 Detect / DFL / TAL stack
+(yolo9/10/11) before the ones needing new heads (yolo26) or new state
+dict adapters (yolo4/6/7).
 
 ## Build, test, run
 
@@ -74,10 +102,11 @@ The architectural commitments are:
 - Each task (detect / segment / pose / OBB / classify) = head + loss +
   dataset format + postproc; the rest is shared.
 
-Phase 1 builds YOLOv8n end-to-end first (architecture, weight loader from
+Phase 1 built yolo8n end-to-end first (architecture, weight loader from
 Ultralytics `.pt` checkpoints, dataset loader, training loop, validation,
-inference, ONNX/TRT export) before scaling to the rest of v8, then earlier
-YOLOs, then transformer-based detectors.
+inference, ONNX/TRT export). Subsequent phases scale to the rest of v8,
+then to the other YOLO versions in the closed set above, then to
+transformer-based detectors (RT-DETR, ViT).
 
 ## CLI surface
 

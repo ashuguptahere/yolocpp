@@ -1,19 +1,19 @@
 #pragma once
 //
-// YOLOv3 architecture (canonical Darknet-53 backbone + 3-scale FPN head).
+// YOLO3 architecture (canonical Darknet-53 backbone + 3-scale FPN head).
 //
-// Status: architecture only. Weight loading from Ultralytics' yolov3.pt is
+// Status: architecture only. Weight loading from Ultralytics' yolo3.pt is
 // deferred — the legacy v3 weights use a flat key naming that doesn't map
 // onto our nested ModuleList layout, and the original Darknet weights are
 // in a different format altogether. Random-forward shape verification only.
 //
 // Reference: pjreddie's Darknet, with the 3-scale head from
-// "YOLOv3: An Incremental Improvement" (Redmon & Farhadi, 2018).
+// "YOLO3: An Incremental Improvement" (Redmon & Farhadi, 2018).
 //
 
 #include <torch/torch.h>
 
-#include "yolocpp/models/yolov8.hpp"  // reuse Conv from yolov8.hpp
+#include "yolocpp/models/yolo8.hpp"  // reuse Conv from yolo8.hpp
 
 namespace yolocpp::models {
 
@@ -35,7 +35,7 @@ struct DarknetBlockImpl : torch::nn::Module {
 };
 TORCH_MODULE(DarknetBlock);
 
-// ─── YoloV3 model ──────────────────────────────────────────────────────
+// ─── Yolo3 model ──────────────────────────────────────────────────────
 //
 // Backbone (Darknet-53):
 //   stem:  Conv 32, 3×3
@@ -47,7 +47,7 @@ TORCH_MODULE(DarknetBlock);
 //
 // Head: 3-scale FPN with 3 anchors per scale at 80 classes →
 //       per-scale output channels = 3 × (5 + 80) = 255.
-struct YoloV3Impl : torch::nn::Module {
+struct Yolo3Impl : torch::nn::Module {
   int nc;
   // Backbone
   Conv             stem{nullptr};
@@ -68,12 +68,12 @@ struct YoloV3Impl : torch::nn::Module {
   Conv             p3_out_pre{nullptr};
   torch::nn::Conv2d p3_out{nullptr};
 
-  explicit YoloV3Impl(int nc = 80);
+  explicit Yolo3Impl(int nc = 80);
 
   // Returns 3 raw output tensors at strides 32 / 16 / 8 (P5, P4, P3).
   // Each shape: [B, 3 * (5 + nc), H_i, W_i]
   std::vector<torch::Tensor> forward(torch::Tensor x);
 };
-TORCH_MODULE(YoloV3);
+TORCH_MODULE(Yolo3);
 
 }  // namespace yolocpp::models

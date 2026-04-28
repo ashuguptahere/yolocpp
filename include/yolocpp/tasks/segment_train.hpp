@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-#include "yolocpp/models/yolov8_tasks.hpp"
+#include "yolocpp/models/yolo8_tasks.hpp"
 
 namespace yolocpp::tasks {
 
@@ -72,7 +72,7 @@ struct SegTrainConfig {
   int        log_every = 10;
 };
 
-void train_segment(models::YoloV8Segment model,
+void train_segment(models::Yolo8Segment model,
                    const SegDataset& train,
                    const SegDataset* val,
                    SegTrainConfig cfg);
@@ -83,7 +83,7 @@ struct SegValResult {
   int    n_ground_truths;
 };
 
-SegValResult validate_segment(models::YoloV8Segment& model,
+SegValResult validate_segment(models::Yolo8Segment& model,
                               const SegDataset& dataset,
                               torch::Device device);
 

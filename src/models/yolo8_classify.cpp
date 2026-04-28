@@ -1,4 +1,4 @@
-#include "yolocpp/models/yolov8_classify.hpp"
+#include "yolocpp/models/yolo8_classify.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -20,7 +20,7 @@ torch::Tensor ClassifyImpl::forward(torch::Tensor x) {
   return linear(x);
 }
 
-YoloV8ClassifyImpl::YoloV8ClassifyImpl(YoloV8Scale s, int nc_)
+Yolo8ClassifyImpl::Yolo8ClassifyImpl(Yolo8Scale s, int nc_)
     : scale(s), nc(nc_) {
   model = register_module("model", torch::nn::ModuleList());
 
@@ -63,7 +63,7 @@ YoloV8ClassifyImpl::YoloV8ClassifyImpl(YoloV8Scale s, int nc_)
   }
 }
 
-torch::Tensor YoloV8ClassifyImpl::forward(torch::Tensor x) {
+torch::Tensor Yolo8ClassifyImpl::forward(torch::Tensor x) {
   for (size_t i = 0; i < model->size(); ++i) {
     if (auto m = model[i]->as<ConvImpl>())     x = m->forward(x);
     else if (auto m = model[i]->as<C2fImpl>()) x = m->forward(x);
@@ -72,7 +72,7 @@ torch::Tensor YoloV8ClassifyImpl::forward(torch::Tensor x) {
   return x;
 }
 
-int YoloV8ClassifyImpl::load_from_state_dict(
+int Yolo8ClassifyImpl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
   auto params = this->named_parameters();
   auto buffs  = this->named_buffers();

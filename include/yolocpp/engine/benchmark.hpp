@@ -7,7 +7,7 @@
 //   • TRT-FP32 — engine built without the FP16 builder flag
 //   • TRT-FP16 — engine built with FP16 enabled
 //
-// Engines are cached at <cache_dir>/yolov8n.<imgsz>.{onnx,fp32.trt,fp16.trt}
+// Engines are cached at <cache_dir>/yolo8n.<imgsz>.{onnx,fp32.trt,fp16.trt}
 // so repeated runs only pay for warmup + measurement.
 //
 

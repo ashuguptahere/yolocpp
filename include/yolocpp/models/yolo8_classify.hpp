@@ -1,6 +1,6 @@
 #pragma once
 //
-// YOLOv8 classification model.
+// YOLO8 classification model.
 //
 // Architecture (different topology from detect):
 //   layers 0–8 : same backbone modules as detect, but C2f depths from the
@@ -13,7 +13,7 @@
 
 #include <torch/torch.h>
 
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 namespace yolocpp::models {
 
@@ -25,12 +25,12 @@ struct ClassifyImpl : torch::nn::Module {
 };
 TORCH_MODULE(Classify);
 
-struct YoloV8ClassifyImpl : torch::nn::Module {
-  YoloV8Scale scale;
+struct Yolo8ClassifyImpl : torch::nn::Module {
+  Yolo8Scale scale;
   int         nc;
   torch::nn::ModuleList model{nullptr};
 
-  YoloV8ClassifyImpl(YoloV8Scale s, int nc);
+  Yolo8ClassifyImpl(Yolo8Scale s, int nc);
 
   // logits [N, nc]
   torch::Tensor forward(torch::Tensor x);
@@ -38,6 +38,6 @@ struct YoloV8ClassifyImpl : torch::nn::Module {
   int load_from_state_dict(
       const std::vector<std::pair<std::string, at::Tensor>>& entries);
 };
-TORCH_MODULE(YoloV8Classify);
+TORCH_MODULE(Yolo8Classify);
 
 }  // namespace yolocpp::models

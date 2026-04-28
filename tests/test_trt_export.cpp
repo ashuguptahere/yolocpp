@@ -1,5 +1,5 @@
 // End-to-end Phase 2 test:
-//   1. Load yolov8n.pt
+//   1. Load yolo8n.pt
 //   2. Export to ONNX
 //   3. Build a TRT engine from the ONNX (FP16 on Blackwell)
 //   4. Run inference on bus.jpg via the TRT runtime
@@ -32,20 +32,20 @@
 int main() {
   using namespace yolocpp;
 
-  const std::string pt   = "data/yolov8n.pt";
+  const std::string pt   = "data/yolo8n.pt";
   const std::string img  = "data/bus.jpg";
-  const std::string onnx = "build/yolov8n.test.onnx";
-  const std::string trt  = "build/yolov8n.test.trt";
+  const std::string onnx = "build/yolo8n.test.onnx";
+  const std::string trt  = "build/yolo8n.test.trt";
 
   // 1. Build the model from .pt.
-  models::YoloV8Detect model(models::kYoloV8n, /*nc=*/80);
+  models::Yolo8Detect model(models::kYolo8n, /*nc=*/80);
   auto sd = serialization::load_state_dict(pt);
   model->load_from_state_dict(sd.entries);
   model->eval();
 
   // 2. Export ONNX.
   serialization::OnnxExportConfig ocfg; ocfg.imgsz = 640;
-  serialization::export_yolov8_onnx(model, onnx, ocfg);
+  serialization::export_yolo8_onnx(model, onnx, ocfg);
   std::cout << "[trt-test] wrote " << onnx << "\n";
 
   // 3. Build TRT engine.

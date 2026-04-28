@@ -4,7 +4,7 @@
 //
 // Accepts Ultralytics-compatible invocations such as
 //
-//   yolocpp task=detect mode=train model=yolov8n.pt data=coco.yaml \
+//   yolocpp task=detect mode=train model=yolo8n.pt data=coco.yaml \
 //           epochs=100 imgsz=640 batch=16 device=cuda:0
 //
 // All arguments are unordered `key=value` pairs (no leading dashes).

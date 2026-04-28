@@ -152,7 +152,7 @@ PoseDataset::Batch PoseDataset::sample_batch(std::size_t bsz,
 // ============================================================================
 // train_pose — minimal: keypoint L1 + visibility BCE on the closest anchor
 // ============================================================================
-void train_pose(models::YoloV8Pose model,
+void train_pose(models::Yolo8Pose model,
                 const PoseDataset& train,
                 const PoseDataset* /*val*/,
                 PoseTrainConfig cfg) {
@@ -264,7 +264,7 @@ void train_pose(models::YoloV8Pose model,
   std::cout << "[pose-train] saved → " << ckpt << "\n";
 }
 
-PoseValResult validate_pose(models::YoloV8Pose& model,
+PoseValResult validate_pose(models::Yolo8Pose& model,
                              const PoseDataset& dataset,
                              torch::Device device) {
   model->to(device); model->eval();
@@ -404,7 +404,7 @@ OBBDataset::Batch OBBDataset::sample_batch(std::size_t bsz,
 // ============================================================================
 // train_obb — minimal: angle prediction loss on closest anchor
 // ============================================================================
-void train_obb(models::YoloV8OBB model,
+void train_obb(models::Yolo8OBB model,
                const OBBDataset& train,
                const OBBDataset* /*val*/,
                OBBTrainConfig cfg) {
@@ -498,7 +498,7 @@ void train_obb(models::YoloV8OBB model,
   std::cout << "[obb-train] saved → " << ckpt << "\n";
 }
 
-OBBValResult validate_obb(models::YoloV8OBB& model,
+OBBValResult validate_obb(models::Yolo8OBB& model,
                            const OBBDataset& dataset,
                            torch::Device device) {
   model->to(device); model->eval();

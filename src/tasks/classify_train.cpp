@@ -105,7 +105,7 @@ static torch::Device pick_device(std::string s) {
   return torch::Device(torch::kCPU);
 }
 
-void train_classify(models::YoloV8Classify model,
+void train_classify(models::Yolo8Classify model,
                     const ClassifyDataset& train,
                     const ClassifyDataset* val,
                     ClassifyTrainConfig cfg) {
@@ -185,7 +185,7 @@ void train_classify(models::YoloV8Classify model,
   std::cout << "[cls-train] saved → " << ckpt << "\n";
 }
 
-ClassifyValResult validate_classify(models::YoloV8Classify& model,
+ClassifyValResult validate_classify(models::Yolo8Classify& model,
                                      const ClassifyDataset& dataset,
                                      torch::Device device) {
   model->to(device);

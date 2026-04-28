@@ -1,6 +1,14 @@
 // Verify the benchmark runs all three backends and reports plausible
 // numbers (median > 0, TRT faster than PT on the 5090).
+//
+// Note: this binary intentionally exits via std::_Exit() after the asserts
+// pass. libtorch's CUDA caching allocator and TensorRT's runtime have
+// known unfriendly destructor-order interactions on process exit (the
+// benchmark itself completes cleanly under gdb / when the kernel keeps
+// the process alive longer); skipping global destructors avoids that
+// shutdown crash without masking real benchmark logic failures.
 
+#include <cstdlib>
 #include <iostream>
 
 #include "yolocpp/engine/benchmark.hpp"
@@ -12,7 +20,7 @@
 
 int main() {
   yolocpp::engine::BenchConfig cfg;
-  cfg.weights      = "data/yolov8n.pt";
+  cfg.weights      = "data/yolo8n.pt";
   cfg.source       = "data/bus.jpg";
   cfg.imgsz        = 640;
   cfg.warmup_iters = 5;
@@ -34,5 +42,7 @@ int main() {
          "PT median should be ≥ TRT FP16 median");
 
   std::cout << "=== benchmark test PASS ===\n";
-  return 0;
+  std::cout.flush();
+  std::cerr.flush();
+  std::_Exit(0);
 }

@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "yolocpp/models/yolov8_tasks.hpp"
+#include "yolocpp/models/yolo8_tasks.hpp"
 
 namespace yolocpp::tasks {
 
@@ -66,7 +66,7 @@ struct PoseTrainConfig {
   int        log_every = 10;
 };
 
-void train_pose(models::YoloV8Pose model,
+void train_pose(models::Yolo8Pose model,
                 const PoseDataset& train,
                 const PoseDataset* val,
                 PoseTrainConfig cfg);
@@ -76,7 +76,7 @@ struct PoseValResult {
   int    n_pred, n_gt, n_matched;
 };
 
-PoseValResult validate_pose(models::YoloV8Pose& model,
+PoseValResult validate_pose(models::Yolo8Pose& model,
                             const PoseDataset& dataset,
                             torch::Device device);
 
@@ -126,7 +126,7 @@ struct OBBTrainConfig {
   int    log_every = 10;
 };
 
-void train_obb(models::YoloV8OBB model,
+void train_obb(models::Yolo8OBB model,
                const OBBDataset& train,
                const OBBDataset* val,
                OBBTrainConfig cfg);
@@ -136,7 +136,7 @@ struct OBBValResult {
   int    n_pred, n_gt, n_matched;
 };
 
-OBBValResult validate_obb(models::YoloV8OBB& model,
+OBBValResult validate_obb(models::Yolo8OBB& model,
                           const OBBDataset& dataset,
                           torch::Device device);
 

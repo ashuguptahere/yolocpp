@@ -1,6 +1,6 @@
 #pragma once
 //
-// Trainer for YOLOv8 detection.
+// Trainer for YOLO8 detection.
 //
 // Implements:
 //   - SGD with momentum + weight decay (with no-decay group for biases / BN)
@@ -20,9 +20,9 @@
 #include <vector>
 
 #include "yolocpp/datasets/yolo_dataset.hpp"
-#include "yolocpp/losses/yolov8_loss.hpp"
-#include "yolocpp/models/yolov5.hpp"
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/losses/yolo8_loss.hpp"
+#include "yolocpp/models/yolo5.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 namespace yolocpp::engine {
 
@@ -54,8 +54,8 @@ struct TrainConfig {
   std::vector<std::pair<std::string, std::string>> args_for_yaml;
 };
 
-// Trainer is templated over the model-holder type (YoloV8Detect or
-// YoloV5Detect). Both share the same interface (forward_train, forward_eval,
+// Trainer is templated over the model-holder type (Yolo8Detect or
+// Yolo5Detect). Both share the same interface (forward_train, forward_eval,
 // stride, nc, scale, load_from_state_dict). Explicit instantiations live in
 // trainer.cpp.
 template <typename ModelHolder>
@@ -79,7 +79,7 @@ class TrainerT {
   torch::Device            device_;
 };
 
-using Trainer   = TrainerT<models::YoloV8Detect>;
-using TrainerV5 = TrainerT<models::YoloV5Detect>;
+using Trainer   = TrainerT<models::Yolo8Detect>;
+using TrainerV5 = TrainerT<models::Yolo5Detect>;
 
 }  // namespace yolocpp::engine

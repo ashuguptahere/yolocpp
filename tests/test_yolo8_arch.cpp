@@ -1,4 +1,4 @@
-// Architecture-only smoke test for YOLOv8n.
+// Architecture-only smoke test for YOLO8n.
 // - Builds the model
 // - Runs a random forward pass on CPU then on CUDA
 // - Verifies output shapes and that strides are {8, 16, 32}
@@ -9,7 +9,7 @@
 #include <iostream>
 #include <vector>
 
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -22,9 +22,9 @@
 int main() {
   using namespace yolocpp::models;
 
-  YoloV8Detect model(kYoloV8n, /*nc=*/80);
+  Yolo8Detect model(kYolo8n, /*nc=*/80);
   model->eval();
-  std::cout << "[arch] built YOLOv8n\n";
+  std::cout << "[arch] built YOLO8n\n";
 
   // Strides set?
   EXPECT(model->stride.size() == 3, "expected 3 detection levels");
@@ -38,7 +38,7 @@ int main() {
   for (const auto& p : model->parameters())
     if (p.requires_grad()) n_params += p.numel();
   std::cout << "[arch] trainable params: " << n_params << "\n";
-  // YOLOv8n is ~3.15M params with COCO head (nc=80). Allow ±10%.
+  // YOLO8n is ~3.15M params with COCO head (nc=80). Allow ±10%.
   EXPECT(n_params > 2'700'000 && n_params < 3'600'000,
          "param count outside expected range for v8n");
 

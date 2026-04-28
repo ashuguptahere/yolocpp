@@ -53,10 +53,31 @@ bool run_unzip(const fs::path& zip, const fs::path& out_dir,
 //   https://github.com/ultralytics/assets/releases/download/v0.0.0/<name>.zip
 const std::string kAssetBase = "https://github.com/ultralytics/assets/releases/download/v8.3.0";
 
+// Ultralytics publishes weights at `yolov<N>...pt` upstream (e.g. yolov5n.pt,
+// yolov8n.pt) and the new official lines `yolo11<x>.pt` / `yolo26<x>.pt`
+// without the 'v'. We accept BOTH the upstream name and our canonical
+// `yolo<N>` form. When the local file is missing we map back to the
+// upstream URL via `upstream_basename()` below.
 bool looks_like_ultralytics_weight(const std::string& base) {
   static const std::regex re(
-      R"(^(yolov[358][nsmlx]u?(-cls|-seg|-pose|-obb)?|yolov3(-tiny|-spp)?u?|rtdetr-[lx])\.pt$)");
+      R"(^(yolo[0-9]+[nsmlxce]?u?(-cls|-seg|-pose|-obb)?|yolo3(-tiny|-spp)?u?|rtdetr-[lx])\.pt$)");
   return std::regex_match(base, re);
+}
+
+// Translate a canonical local name (yolo5n.pt, yolo8n-seg.pt, yolo11n.pt) to
+// the upstream Ultralytics filename. v3/v5/v8/v9/v10 are published as
+// `yolov<N>...pt`; v11/v26 are published without the 'v' (they're already
+// canonical). Returns the input unchanged if no transform is needed.
+std::string upstream_basename(const std::string& base) {
+  static const std::regex re(R"(^yolo([0-9]+)(.*)$)");
+  std::smatch m;
+  if (!std::regex_match(base, m, re)) return base;
+  std::string num  = m[1].str();
+  std::string rest = m[2].str();
+  // Ultralytics upstream uses "yolov<N>" for v3..v10 and "yolo<N>" for v11+.
+  int n = std::stoi(num);
+  if (n >= 11) return base;        // already canonical upstream
+  return "yolov" + num + rest;     // re-insert the 'v'
 }
 
 }  // anonymous namespace
@@ -81,10 +102,15 @@ std::string resolve_weights(const std::string& spec) {
   }
 
   // 3) If recognized Ultralytics name, download.
+  //    The local cache is keyed by our canonical `yolo<N>` name, but
+  //    upstream still publishes v3..v10 as `yolov<N>...pt`, so we fetch
+  //    from the v-prefixed URL and save under the canonical name.
   if (looks_like_ultralytics_weight(base)) {
     auto target = home_cache() / "weights" / base;
-    if (run_curl(kAssetBase + "/" + base, target)) {
-      std::cerr << "[resolve] cached " << base << " at " << target << "\n";
+    std::string upstream = upstream_basename(base);
+    if (run_curl(kAssetBase + "/" + upstream, target)) {
+      std::cerr << "[resolve] cached " << base << " at " << target
+                << " (upstream: " << upstream << ")\n";
       return target.string();
     }
   }
@@ -153,9 +179,11 @@ std::string resolve_dataset(const std::string& spec) {
 std::string scale_from_filename(const std::string& path) {
   fs::path p(path);
   std::string base = p.filename().string();
-  // Match "yolov<digit><scale_letter>[u]?(-task)?.pt"
+  // Match canonical "yolo<digits><scale>[u]?(-task)?.pt" — and also accept the
+  // legacy upstream "yolov<digits>..." spelling for v3..v10 weights.
   std::smatch m;
-  static const std::regex re(R"(yolov[358]([nsmlx])u?(?:-(?:cls|seg|pose|obb))?\.pt$)");
+  static const std::regex re(
+      R"(yolov?[0-9]+([nsmlx])u?(?:-(?:cls|seg|pose|obb))?\.pt$)");
   if (std::regex_search(base, m, re)) return m[1].str();
 
   // Trained checkpoint (best.pt / last.pt) → look at sibling args.yaml's
@@ -187,21 +215,28 @@ std::string scale_from_filename(const std::string& path) {
 std::string version_from_filename(const std::string& path) {
   fs::path p(path);
   std::string base = p.filename().string();
-  if (base.rfind("yolov3", 0) == 0)  return "v3";
-  if (base.rfind("yolov5", 0) == 0)  return "v5";
-  if (base.rfind("yolov6", 0) == 0)  return "v6";
-  if (base.rfind("yolov7", 0) == 0)  return "v7";
-  if (base.rfind("yolov8", 0) == 0)  return "v8";
-  if (base.rfind("yolov9", 0) == 0)  return "v9";
-  if (base.rfind("yolov10", 0) == 0) return "v10";
-  if (base.rfind("yolo11",  0) == 0) return "v11";
-  if (base.rfind("yolov11", 0) == 0) return "v11";
-  if (base.rfind("yolo12",  0) == 0) return "v12";
-  if (base.rfind("yolov12", 0) == 0) return "v12";
-  if (base.rfind("rtdetr",  0) == 0) return "rtdetr";
+  // Strip optional upstream "yolov" prefix → "yolo" so we only need one
+  // table of canonical names below.
+  if (base.rfind("yolov", 0) == 0) base = "yolo" + base.substr(5);
+
+  // Order matters: longer prefixes first (yolo10/11/12/13/26 must be
+  // matched before yolo1/yolo2 to avoid collapsing to a shorter version).
+  if (base.rfind("yolo26", 0) == 0) return "v26";  // Ultralytics official
+  if (base.rfind("yolo13", 0) == 0) return "v13";  // Lei et al. (unofficial)
+  if (base.rfind("yolo12", 0) == 0) return "v12";  // Tian et al. (unofficial)
+  if (base.rfind("yolo11", 0) == 0) return "v11";  // Ultralytics official
+  if (base.rfind("yolo10", 0) == 0) return "v10";
+  if (base.rfind("yolo9",  0) == 0) return "v9";
+  if (base.rfind("yolo8",  0) == 0) return "v8";
+  if (base.rfind("yolo7",  0) == 0) return "v7";
+  if (base.rfind("yolo6",  0) == 0) return "v6";
+  if (base.rfind("yolo5",  0) == 0) return "v5";
+  if (base.rfind("yolo4",  0) == 0) return "v4";
+  if (base.rfind("yolo3",  0) == 0) return "v3";
+  if (base.rfind("rtdetr", 0) == 0) return "rtdetr";
 
   // Trained checkpoints (e.g. "best.pt") don't carry the version in their
-  // filename. Try the sibling args.yaml: it has a `model: yolov5n.pt` line
+  // filename. Try the sibling args.yaml: it has a `model: yolo5n.pt` line
   // that we can re-pattern-match on.
   fs::path sibling = p.parent_path() / "args.yaml";
   if (fs::exists(sibling)) {

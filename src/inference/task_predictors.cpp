@@ -30,7 +30,7 @@ static torch::Tensor imagenet_normalize(torch::Tensor img) { return img; }
 // ─── ClassifyPredictor ─────────────────────────────────────────────────────
 ClassifyPredictor::ClassifyPredictor(const std::string& weights, int imgsz,
                                      std::string device, int nc,
-                                     models::YoloV8Scale scale)
+                                     models::Yolo8Scale scale)
     : model_(scale, nc),
       device_(pick_device(std::move(device))),
       imgsz_(imgsz) {
@@ -58,7 +58,7 @@ ClassifyResult ClassifyPredictor::predict(const cv::Mat& bgr, int top_k) const {
   torch::Tensor logits;
   {
     torch::NoGradGuard ng;
-    logits = const_cast<models::YoloV8Classify&>(model_)->forward(x);
+    logits = const_cast<models::Yolo8Classify&>(model_)->forward(x);
   }
   auto probs = logits.softmax(/*dim=*/1).cpu();
   auto k     = std::min(top_k, (int)probs.size(1));
@@ -80,7 +80,7 @@ const std::vector<std::string>& imagenet_names() {
 // ─── SegmentPredictor ─────────────────────────────────────────────────────
 SegmentPredictor::SegmentPredictor(const std::string& weights, int imgsz,
                                    std::string device, int nc,
-                                   models::YoloV8Scale scale)
+                                   models::Yolo8Scale scale)
     : model_(scale, nc),
       device_(pick_device(std::move(device))),
       imgsz_(imgsz) {
@@ -99,7 +99,7 @@ std::vector<SegInstance> SegmentPredictor::predict(const cv::Mat& bgr,
   torch::Tensor pred, coefs, protos;
   {
     torch::NoGradGuard ng;
-    auto out = const_cast<models::YoloV8Segment&>(model_)->forward_eval(x);
+    auto out = const_cast<models::Yolo8Segment&>(model_)->forward_eval(x);
     pred   = std::get<0>(out);
     coefs  = std::get<1>(out);
     protos = std::get<2>(out);
@@ -261,7 +261,7 @@ std::vector<SegInstance> SegmentPredictor::predict_to_file(
 // ─── PosePredictor ────────────────────────────────────────────────────────
 PosePredictor::PosePredictor(const std::string& weights, int imgsz,
                               std::string device, int num_kpts, int kpt_dim,
-                              models::YoloV8Scale scale)
+                              models::Yolo8Scale scale)
     : model_(scale, /*nc=*/1, num_kpts, kpt_dim),
       device_(pick_device(std::move(device))),
       imgsz_(imgsz),
@@ -281,7 +281,7 @@ std::vector<PoseInstance> PosePredictor::predict(const cv::Mat& bgr,
   torch::Tensor pred, kpts;
   {
     torch::NoGradGuard ng;
-    auto out = const_cast<models::YoloV8Pose&>(model_)->forward_eval(x);
+    auto out = const_cast<models::Yolo8Pose&>(model_)->forward_eval(x);
     pred = std::get<0>(out);
     kpts = std::get<1>(out);
   }
@@ -400,7 +400,7 @@ std::vector<PoseInstance> PosePredictor::predict_to_file(
 // ─── OBBPredictor ─────────────────────────────────────────────────────────
 OBBPredictor::OBBPredictor(const std::string& weights, int imgsz,
                             std::string device, int nc,
-                            models::YoloV8Scale scale)
+                            models::Yolo8Scale scale)
     : model_(scale, nc, /*ne=*/1),
       device_(pick_device(std::move(device))),
       imgsz_(imgsz) {
@@ -436,7 +436,7 @@ std::vector<OBBInstance> OBBPredictor::predict(const cv::Mat& bgr,
   torch::Tensor pred, angle;
   {
     torch::NoGradGuard ng;
-    auto out = const_cast<models::YoloV8OBB&>(model_)->forward_eval(x);
+    auto out = const_cast<models::Yolo8OBB&>(model_)->forward_eval(x);
     pred  = std::get<0>(out);
     angle = std::get<1>(out);
   }

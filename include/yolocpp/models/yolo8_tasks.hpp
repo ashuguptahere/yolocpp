@@ -1,6 +1,6 @@
 #pragma once
 //
-// YOLOv8 segment / pose / OBB heads & wrapper models.
+// YOLO8 segment / pose / OBB heads & wrapper models.
 //
 // All three share the same 0–21 backbone+neck construction as detect; only
 // the final layer (idx 22) differs. The head extends the Detect head with an
@@ -12,7 +12,7 @@
 
 #include <vector>
 
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 namespace yolocpp::models {
 
@@ -41,7 +41,7 @@ struct SegmentImpl : torch::nn::Module {
   std::vector<double> stride;
 
   SegmentImpl(int nc, int nm, int npr_unscaled, std::vector<int> ch,
-              const YoloV8Scale& scale);
+              const Yolo8Scale& scale);
 
   // Forward: returns (decoded_pred, mask_coefs, prototypes)
   //   decoded_pred:  [N, 4 + nc, A]    (xyxy in input pixels, sigmoided cls)
@@ -92,45 +92,45 @@ TORCH_MODULE(OBB);
 
 // ─── Top-level models ─────────────────────────────────────────────────────
 
-struct YoloV8SegmentImpl : torch::nn::Module {
-  YoloV8Scale scale;
+struct Yolo8SegmentImpl : torch::nn::Module {
+  Yolo8Scale scale;
   int nc;
   torch::nn::ModuleList model{nullptr};
   std::vector<double> stride;
-  YoloV8SegmentImpl(YoloV8Scale s, int nc, int nm = 32, int npr_unscaled = 256);
+  Yolo8SegmentImpl(Yolo8Scale s, int nc, int nm = 32, int npr_unscaled = 256);
   // Returns (decoded, mask_coefs, prototypes)
   std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
       forward_eval(torch::Tensor x);
   int load_from_state_dict(
       const std::vector<std::pair<std::string, at::Tensor>>& entries);
 };
-TORCH_MODULE(YoloV8Segment);
+TORCH_MODULE(Yolo8Segment);
 
-struct YoloV8PoseImpl : torch::nn::Module {
-  YoloV8Scale scale;
+struct Yolo8PoseImpl : torch::nn::Module {
+  Yolo8Scale scale;
   int nc;
   int num_kpts, kpt_dim;
   torch::nn::ModuleList model{nullptr};
   std::vector<double> stride;
-  YoloV8PoseImpl(YoloV8Scale s, int nc = 1, int num_kpts = 17, int kpt_dim = 3);
+  Yolo8PoseImpl(Yolo8Scale s, int nc = 1, int num_kpts = 17, int kpt_dim = 3);
   // Returns (decoded, keypoints)
   std::tuple<torch::Tensor, torch::Tensor> forward_eval(torch::Tensor x);
   int load_from_state_dict(
       const std::vector<std::pair<std::string, at::Tensor>>& entries);
 };
-TORCH_MODULE(YoloV8Pose);
+TORCH_MODULE(Yolo8Pose);
 
-struct YoloV8OBBImpl : torch::nn::Module {
-  YoloV8Scale scale;
+struct Yolo8OBBImpl : torch::nn::Module {
+  Yolo8Scale scale;
   int nc;
   int ne;
   torch::nn::ModuleList model{nullptr};
   std::vector<double> stride;
-  YoloV8OBBImpl(YoloV8Scale s, int nc = 15, int ne = 1);
+  Yolo8OBBImpl(Yolo8Scale s, int nc = 15, int ne = 1);
   std::tuple<torch::Tensor, torch::Tensor> forward_eval(torch::Tensor x);
   int load_from_state_dict(
       const std::vector<std::pair<std::string, at::Tensor>>& entries);
 };
-TORCH_MODULE(YoloV8OBB);
+TORCH_MODULE(Yolo8OBB);
 
 }  // namespace yolocpp::models

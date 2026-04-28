@@ -1,4 +1,4 @@
-#include "yolocpp/models/yolov8.hpp"
+#include "yolocpp/models/yolo8.hpp"
 
 #include <torch/nn/functional.h>
 
@@ -21,7 +21,7 @@ static int autopad(int k, int p, int d = 1) {
   return k / 2;
 }
 
-int scale_channels(int c, const YoloV8Scale& s) {
+int scale_channels(int c, const Yolo8Scale& s) {
   c = std::min(c, s.max_channels);
   // ultralytics rounds to multiple of 8 in some places, but for v8 the
   // YAML-defined channels are already multiples of 8 and the multiplier
@@ -33,7 +33,7 @@ int scale_channels(int c, const YoloV8Scale& s) {
   return make_divisible(c * s.width_multiple, 8);
 }
 
-int scale_depth(int n, const YoloV8Scale& s) {
+int scale_depth(int n, const Yolo8Scale& s) {
   return std::max(1, (int)std::round(n * s.depth_multiple));
 }
 
@@ -234,9 +234,9 @@ torch::Tensor DetectImpl::decode(const std::vector<torch::Tensor>& feats) {
   return torch::cat({xyxy, cls}, /*dim=*/1);  // [N, 4 + nc, A]
 }
 
-// ─── YoloV8DetectImpl ──────────────────────────────────────────────────────
+// ─── Yolo8DetectImpl ──────────────────────────────────────────────────────
 //
-// Builds layers in the exact order of yolov8.yaml so that registration order
+// Builds layers in the exact order of yolo8.yaml so that registration order
 // = state_dict iteration order = pickle traversal order.
 
 namespace {
@@ -290,7 +290,7 @@ const std::vector<LayerSpec>& v8_yaml() {
 }
 }  // namespace
 
-YoloV8DetectImpl::YoloV8DetectImpl(YoloV8Scale s, int nc_) : scale(s), nc(nc_) {
+Yolo8DetectImpl::Yolo8DetectImpl(Yolo8Scale s, int nc_) : scale(s), nc(nc_) {
   model = register_module("model", torch::nn::ModuleList());
 
   const auto& yaml = v8_yaml();
@@ -398,7 +398,7 @@ YoloV8DetectImpl::YoloV8DetectImpl(YoloV8Scale s, int nc_) : scale(s), nc(nc_) {
   // overwritten anyway.
 }
 
-std::vector<torch::Tensor> YoloV8DetectImpl::forward_train(torch::Tensor x) {
+std::vector<torch::Tensor> Yolo8DetectImpl::forward_train(torch::Tensor x) {
   const auto& yaml = v8_yaml();
   std::vector<torch::Tensor> outs(yaml.size());
   for (size_t i = 0; i < yaml.size(); ++i) {
@@ -426,7 +426,7 @@ std::vector<torch::Tensor> YoloV8DetectImpl::forward_train(torch::Tensor x) {
   TORCH_CHECK(false, "unreachable");
 }
 
-torch::Tensor YoloV8DetectImpl::forward_eval(torch::Tensor x) {
+torch::Tensor Yolo8DetectImpl::forward_eval(torch::Tensor x) {
   auto feats = forward_train(x);
   // Last layer is Detect — pull it out and decode.
   const auto& yaml = v8_yaml();
@@ -434,7 +434,7 @@ torch::Tensor YoloV8DetectImpl::forward_eval(torch::Tensor x) {
   return d->decode(feats);
 }
 
-std::vector<std::string> YoloV8DetectImpl::state_keys() const {
+std::vector<std::string> Yolo8DetectImpl::state_keys() const {
   std::vector<std::string> keys;
   for (const auto& kv : this->named_parameters())
     keys.push_back(kv.key());
@@ -443,7 +443,7 @@ std::vector<std::string> YoloV8DetectImpl::state_keys() const {
   return keys;
 }
 
-std::vector<torch::Tensor*> YoloV8DetectImpl::state_tensors() {
+std::vector<torch::Tensor*> Yolo8DetectImpl::state_tensors() {
   std::vector<torch::Tensor*> tensors;
   for (auto& kv : this->named_parameters())
     tensors.push_back(&kv.value());
@@ -452,7 +452,7 @@ std::vector<torch::Tensor*> YoloV8DetectImpl::state_tensors() {
   return tensors;
 }
 
-int YoloV8DetectImpl::load_from_state_dict(
+int Yolo8DetectImpl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
   // named_parameters() returns OrderedDict by value, so keep one alive for
   // the duration of the copy. The tensors inside are reference-typed —
