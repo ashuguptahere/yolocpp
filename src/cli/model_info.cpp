@@ -23,7 +23,9 @@ namespace {
 // 64 is ambiguous for v11/v26 (m vs l). Caller must distinguish via depth
 // (model.6.m.1 exists for v11l, not v11m).
 std::string scale_from_channels(int ch, const std::string& version) {
-  if (version == "v11" || version == "v26") {
+  if (version == "v11" || version == "v26" || version == "v12") {
+    // v12 follows v11's stem channel rule: 16/32/64 for n/s/m+l, 96 for x
+    // (m and l both have 64; depth disambiguates — see below).
     static const std::unordered_map<int, std::string> table = {
         {16, "n"}, {32, "s"}, {64, "m"}, {96, "x"},
     };
@@ -43,6 +45,15 @@ ModelInfo from_state_dict(const serialization::StateDict& sd) {
   ModelInfo info;
   // First pass: find PSA marker (C2PSA's attention) → v11 or v26.
   bool has_psa = false;
+  // v12 marker: AAttn-with-MLP at backbone L6 or L8 (`model.6.m.0.0.mlp.0`
+  // or `model.8.m.0.0.mlp.0`). v11/v26 don't have an mlp inside their
+  // PSA block (they have `ffn.0`/`ffn.1` instead and at a different
+  // layer index).
+  bool has_v12_a2c2f = false;
+  // v13 marker: HyperACE-related keys at backbone idx 11 (channel_adjust)
+  // or any 'gate' parameter (HyperACE feature-distribution gates) — neither
+  // exists in v8/v11/v12/v26.
+  bool has_v13_marker = false;
   // v26 distinguishes from v11 by the absence of a DFL in the head AND a
   // direct-4 cv2 output. Probe both signals.
   bool has_dfl = false;
@@ -51,6 +62,15 @@ ModelInfo from_state_dict(const serialization::StateDict& sd) {
     if (k.find(".m.0.attn.qkv.conv.weight") != std::string::npos &&
         (k.rfind("model.9.", 0) == 0 || k.rfind("model.10.", 0) == 0)) {
       has_psa = true;
+    }
+    if ((k.rfind("model.6.m.0.0.mlp.0.conv.weight", 0) == 0) ||
+        (k.rfind("model.8.m.0.0.mlp.0.conv.weight", 0) == 0)) {
+      has_v12_a2c2f = true;
+    }
+    if (k.find(".channel_adjust.") != std::string::npos ||
+        (k.find(".gate") != std::string::npos &&
+         k.rfind("model.", 0) == 0)) {
+      has_v13_marker = true;
     }
     if (k.find(".dfl.conv.weight") != std::string::npos) has_dfl = true;
     if (cv2_out_dim < 0) {
@@ -71,7 +91,9 @@ ModelInfo from_state_dict(const serialization::StateDict& sd) {
       if (sz.size() == 4) {
         int ch     = (int)sz[0];
         int kernel = (int)sz[2];
-        if (is_v26)              info.version = "v26";
+        if (has_v13_marker)      info.version = "v13";
+        else if (has_v12_a2c2f)  info.version = "v12";
+        else if (is_v26)         info.version = "v26";
         else if (has_psa)        info.version = "v11";
         else if (kernel == 6)    info.version = "v5";
         else                     info.version = "v8";
@@ -94,6 +116,16 @@ ModelInfo from_state_dict(const serialization::StateDict& sd) {
   if ((info.version == "v11" || info.version == "v26") && info.scale == "m") {
     for (const auto& [k, t] : sd.entries) {
       if (k.rfind("model.6.m.1.", 0) == 0) {
+        info.scale = "l";
+        break;
+      }
+    }
+  }
+  // v12 ch=64 is ambiguous m vs l. Probe model.6 inner depth: l has m.1
+  // (and m.2/m.3) since depth=1.0 doubles the inner ABlock count.
+  if (info.version == "v12" && info.scale == "m") {
+    for (const auto& [k, t] : sd.entries) {
+      if (k.rfind("model.6.m.2.", 0) == 0) {
         info.scale = "l";
         break;
       }

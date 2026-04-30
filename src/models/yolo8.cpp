@@ -48,7 +48,8 @@ int scale_depth(int n, const Yolo8Scale& s) {
 
 // ─── Conv ──────────────────────────────────────────────────────────────────
 
-ConvImpl::ConvImpl(int c_in, int c_out, int k, int s, int p, int g, bool act)
+ConvImpl::ConvImpl(int c_in, int c_out, int k, int s, int p, int g, bool act,
+                   bool conv_bias)
     : act_silu(act) {
   auto pad = autopad(k, p);
   conv = register_module(
@@ -57,7 +58,7 @@ ConvImpl::ConvImpl(int c_in, int c_out, int k, int s, int p, int g, bool act)
                             .stride(s)
                             .padding(pad)
                             .groups(g)
-                            .bias(false)
+                            .bias(conv_bias)
                             .dilation(1)));
   // Ultralytics overrides BN eps to 1e-3 for detect/segment/pose/obb
   // (vs PyTorch default 1e-5). The classify models use plain 1e-5

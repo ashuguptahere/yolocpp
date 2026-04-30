@@ -14,6 +14,7 @@
 
 #include "yolocpp/inference/nms.hpp"
 #include "yolocpp/models/yolo11.hpp"
+#include "yolocpp/models/yolo12.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo8.hpp"
 
@@ -87,6 +88,16 @@ std::vector<Detection> predict_v26_to_file(
     const std::string& out_path, int imgsz = 640,
     const std::string& device = "", int nc = 80,
     models::Yolo26Scale scale = models::kYolo26n,
+    NMSConfig conf = {});
+
+// Predict with a YOLO12 (Tian et al., A2C2f-based) detection model.
+// Filename convention `yolo12<scale>.pt`. All 5 scales available from
+// Ultralytics' v8.3.0+ assets.
+std::vector<Detection> predict_v12_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 640,
+    const std::string& device = "", int nc = 80,
+    models::Yolo12Scale scale = models::kYolo12n,
     NMSConfig conf = {});
 
 }  // namespace yolocpp::inference

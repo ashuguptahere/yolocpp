@@ -26,16 +26,57 @@ canonical local name back to the upstream URL when downloading v3..v10.
 
 ### Implementation status
 
-`yolo8` and `yolo11` are fully end-to-end (train / val / predict / ONNX +
-TRT export across all 5 scales × 5 tasks). `yolo5` is end-to-end via the
-anchorless `*u.pt` variants. `yolo3` has the architecture in place
-(forward-shape verified; weight loader deferred). All other versions
-exist as **stubs** under `src/models/yolo<N>.cpp` +
+`yolo8`, `yolo11`, and `yolo26` are fully end-to-end (train / val /
+predict / ONNX + TRT export across all 5 scales × 5 tasks). `yolo12` is
+end-to-end for **detect** at all 5 scales (Python-equivalent on bus.jpg:
+5/5/5/6/5 detections matching Ultralytics exactly); task heads (segment
+/ pose / obb / classify) are architecturally in place but Ultralytics
+ships only detect weights for v12 (no -cls/-seg/-pose/-obb in v8.3.0+
+assets). `yolo5` is end-to-end via the anchorless `*u.pt` variants.
+`yolo3` has the architecture in place (forward-shape verified; weight
+loader deferred). `yolo13` is **not yet implemented** — its HyperACE +
+DSConv + FullPAD architecture is structurally distinct from anything
+else in the family (channel_adjust, learned gates, depthwise-separable
+strides, dual-kernel DSBottlenecks, hypergraph attention) and would
+need a substantial new module set. The CLI recognises v13 from filename
+and from the `channel_adjust`/`gate` markers in the state-dict, then
+errors out with a clear "not implemented" message rather than silently
+loading wrong weights.
+
+All other versions exist as **stubs** under `src/models/yolo<N>.cpp` +
 `include/yolocpp/models/yolo<N>.hpp` — the header carries the design
 intent; the source throws a clear `not implemented yet` from `forward()`.
 Implementation order — see README.md — prefers families that reuse the
 v8 Detect / DFL / TAL stack (yolo9/10) before the ones needing new heads
-(yolo26) or new state dict adapters (yolo4/6/7).
+(yolo4/6/7/13).
+
+### v12-specific notes
+
+The v12 build introduced three modules and one structural lesson:
+
+- `AAttn` (`yolo12.hpp`) — area-windowed multi-head self-attention. The
+  qkv conv's 3C output channels are interleaved **per-head**, not as
+  `[all_q, all_k, all_v]`. Splitting with `chunk(3, dim=1)` is wrong; the
+  correct reshape is `view(B, N, num_heads, 3*head_dim)` then
+  `permute(0, 2, 3, 1)` then `split_with_sizes([head_dim]*3, dim=2)`. We
+  shipped the wrong split first and saw 1–4 detections per scale on
+  bus.jpg vs Python's 5–6; after the fix v12 matches Python exactly.
+- `ABlock` — `x + attn(x)` then `x + mlp(x)`. The mlp is two 1×1 Convs
+  (first with SiLU, second `act=False`).
+- `A2C2f` — CSP block where each m[i] is `Sequential(ABlock × 2)` (when
+  `a2=True`) or a single `C3k(c_, c_, n=2)` (when `a2=False`). Differs
+  from C3k2/C2f in two ways: cv1 outputs `c_inner` (not `2*c_inner`)
+  and cv2 takes `(1+n)*c_inner` (not `(2+n)*c_inner`).
+- **`gamma` learned residual gate**: at scales `l` and `x`, Ultralytics'
+  parse_model overrides A2C2f to `residual=True, mlp_ratio=1.2`. The
+  residual is gated by a learned per-channel `gamma` parameter (shape
+  [c2]) — `out = x + gamma * y`. We caught the missing gate at predict
+  time on v12l: 300 detections at conf=0.25 (saturated cls) before adding
+  the gate, 3 after.
+- **pe.conv has bias=True for v12** (the only Conv in the codebase that
+  does — v8/v11/v26 use `bias=False` everywhere and let BN absorb the
+  bias). Added an opt-in `conv_bias` flag to `ConvImpl` that the AAttn
+  ctor flips on for the depthwise 7×7 pe.
 
 ### Parity status (resolved)
 

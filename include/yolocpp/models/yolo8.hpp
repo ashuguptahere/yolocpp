@@ -49,12 +49,17 @@ struct BnEpsScope {
 double get_default_bn_eps();
 
 // ─── Conv = Conv2d + BN + SiLU ─────────────────────────────────────────────
+//
+// `conv_bias` defaults to false (the v8/v11/v26 convention: BN absorbs
+// conv bias into β). Set true for v12's `pe` (the depthwise-7×7 positional
+// encoding inside AAttn ships with both `pe.conv.bias` AND `pe.bn.*` — BN
+// normalises post-bias, so we must keep the bias term to match training).
 struct ConvImpl : torch::nn::Module {
   torch::nn::Conv2d      conv{nullptr};
   torch::nn::BatchNorm2d bn{nullptr};
   bool                   act_silu = true;
   ConvImpl(int c_in, int c_out, int k = 1, int s = 1, int p = -1, int g = 1,
-           bool act = true);
+           bool act = true, bool conv_bias = false);
   torch::Tensor forward(torch::Tensor x);
 };
 TORCH_MODULE(Conv);

@@ -42,6 +42,8 @@
 #include "yolocpp/inference/trt_predictor.hpp"
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo11_tasks.hpp"
+#include "yolocpp/models/yolo12.hpp"
+#include "yolocpp/models/yolo12_tasks.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
 #include "yolocpp/models/yolo5.hpp"
@@ -403,6 +405,23 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
       std::cout << "[predict] (v26) " << dets.size() << " detections, wrote "
                 << out << "\n";
       return 0;
+    }
+    if (version == "v12") {
+      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
+      auto v12_scale = yolocpp::models::yolo12_scale_from_letter(scale_s);
+      auto dets = yolocpp::inference::predict_v12_to_file(
+          weights, source, out, imgsz, device, nc, v12_scale, nm);
+      std::cout << "[predict] (v12) " << dets.size() << " detections, wrote "
+                << out << "\n";
+      return 0;
+    }
+    if (version == "v13") {
+      std::cerr << "[error] yolo13 architecture (HyperACE / DSConv / "
+                   "FullPAD) requires deep specialized work to faithfully "
+                   "reproduce — not yet implemented in our forward path.\n"
+                   "        The .pt loads structurally distinct from v8/v11/v12; "
+                   "fall-through to v8 will fail.\n";
+      return 2;
     }
     static const std::vector<std::string> kKnown = {
         "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
