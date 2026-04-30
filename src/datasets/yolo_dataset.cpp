@@ -143,8 +143,13 @@ YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
     hsv_jitter(bgr, rng, aug_.hsv_h, aug_.hsv_s, aug_.hsv_v);
   }
 
-  // Letterbox.
-  auto lb = inference::letterbox(bgr, imgsz_);
+  // Letterbox. `rect=true` (val convention) pads only to a multiple of 32
+  // instead of squaring to imgsz×imgsz — fewer dead pixels, matches
+  // Ultralytics' val mAP path.
+  auto lb = inference::letterbox(bgr, imgsz_,
+                                  /*pad_color=*/cv::Scalar(114, 114, 114),
+                                  /*scale_up=*/false,
+                                  /*auto_minrec=*/aug_.rect);
   cv::Mat lb_img = lb.img;
   ex.gain  = lb.gain;
   ex.pad_x = lb.pad_x;

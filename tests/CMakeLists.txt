@@ -19,6 +19,16 @@ set_target_properties(inspect_pt PROPERTIES
   INSTALL_RPATH "${_yolocpp_rpath}"
 )
 
+# Per-layer parity comparator. Reads dumps from /tmp/yolocpp_parity/ written
+# by the (uncommitted) Python harness; not a ctest.
+add_executable(parity_compare parity_compare.cpp)
+target_link_libraries(parity_compare PRIVATE yolocpp_core)
+target_link_options(parity_compare PRIVATE "LINKER:--disable-new-dtags")
+set_target_properties(parity_compare PROPERTIES
+  BUILD_RPATH   "${_yolocpp_rpath}"
+  INSTALL_RPATH "${_yolocpp_rpath}"
+)
+
 yolocpp_add_test(smoke_test         smoke_test.cpp smoke_kernel.cu)
 yolocpp_add_test(test_yolo8_arch   test_yolo8_arch.cpp)
 yolocpp_add_test(test_pt_loader     test_pt_loader.cpp)

@@ -72,8 +72,10 @@ void scale_boxes(torch::Tensor& xyxy, const LetterboxResult& lb) {
   auto ys = xyxy.index({Slice(), Slice(1, 4, 2)});  // y1, y2
   xs.sub_(lb.pad_x).div_(lb.gain);
   ys.sub_(lb.pad_y).div_(lb.gain);
-  xs.clamp_(0, lb.orig_w - 1);
-  ys.clamp_(0, lb.orig_h - 1);
+  // Match Ultralytics' clip_boxes: clip to [0, orig_w] / [0, orig_h]
+  // (inclusive of the right/bottom edge), not [0, orig - 1].
+  xs.clamp_(0, lb.orig_w);
+  ys.clamp_(0, lb.orig_h);
 }
 
 }  // namespace yolocpp::inference

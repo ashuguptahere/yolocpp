@@ -218,7 +218,9 @@ std::vector<int> build_v26_backbone_neck(torch::nn::ModuleList& model,
       ch.push_back(c_out);
     } else if (s.kind == "SPPF") {
       int c_out = scale_channels_v26(s.a[0], scale);
-      model->push_back(SPPF(in_ch, c_out, s.a[1]));
+      // v26 SPPF: cv1 Identity-act + residual shortcut (see yolo26.cpp).
+      model->push_back(SPPF(in_ch, c_out, s.a[1],
+                            /*cv1_act=*/false, /*shortcut=*/true));
       ch.push_back(c_out);
     } else if (s.kind == "C2PSA") {
       int c_out = scale_channels_v26(s.a[0], scale);

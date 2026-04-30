@@ -69,11 +69,19 @@ struct C2fImpl : torch::nn::Module {
 TORCH_MODULE(C2f);
 
 // ─── SPPF (Spatial Pyramid Pooling – Fast) ────────────────────────────────
+//
+// `cv1_act = true` for v8/v11 (cv1 is Conv→BN→SiLU). v26's SPPF drops
+// the activation on cv1 (Identity instead of SiLU); pass false there.
+//
+// `shortcut = true` enables the residual `out + x` (only active when c1
+// == c2). v8/v11 don't use this; v26 does.
 struct SPPFImpl : torch::nn::Module {
   Conv cv1{nullptr};
   Conv cv2{nullptr};
   torch::nn::MaxPool2d m{nullptr};
-  SPPFImpl(int c1, int c2, int k = 5);
+  bool add = false;     // = shortcut && c1 == c2
+  SPPFImpl(int c1, int c2, int k = 5, bool cv1_act = true,
+           bool shortcut = false);
   torch::Tensor forward(torch::Tensor x);
 };
 TORCH_MODULE(SPPF);

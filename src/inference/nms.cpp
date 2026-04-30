@@ -63,23 +63,38 @@ std::vector<torch::Tensor> nms(torch::Tensor pred, NMSConfig cfg) {
     auto box = p.slice(/*dim=*/1, 0, 4);
     auto scr = p.slice(/*dim=*/1, 4, 4 + nc);
 
-    // Best class per anchor.
-    auto best = scr.max(/*dim=*/1, /*keepdim=*/false);
-    auto conf = std::get<0>(best);  // [A]
-    auto cls  = std::get<1>(best);  // [A] int64
-
-    // Confidence filter.
-    auto mask = conf > cfg.conf_thresh;
-    auto idx  = torch::nonzero(mask).flatten();
-    if (idx.numel() == 0) {
-      outputs.emplace_back(torch::zeros({0, 6}, p.options()));
-      continue;
+    torch::Tensor conf, cls;
+    if (cfg.multi_label) {
+      // For every (anchor, class) pair with score > conf, emit one row.
+      // Matches Ultralytics' val multi_label=True path.
+      auto mask = scr > cfg.conf_thresh;                      // [A, nc] bool
+      auto coords = torch::nonzero(mask);                     // [K, 2] (anchor, class)
+      if (coords.size(0) == 0) {
+        outputs.emplace_back(torch::zeros({0, 6}, p.options()));
+        continue;
+      }
+      auto anchor_idx = coords.select(1, 0);
+      auto class_idx  = coords.select(1, 1);
+      box  = box.index_select(0, anchor_idx);                 // [K, 4]
+      conf = scr.index({anchor_idx, class_idx});              // [K]
+      cls  = class_idx;                                       // [K] int64
+    } else {
+      // Single-label: pick the best class per anchor.
+      auto best = scr.max(/*dim=*/1, /*keepdim=*/false);
+      conf = std::get<0>(best);  // [A]
+      cls  = std::get<1>(best);  // [A] int64
+      auto mask = conf > cfg.conf_thresh;
+      auto idx  = torch::nonzero(mask).flatten();
+      if (idx.numel() == 0) {
+        outputs.emplace_back(torch::zeros({0, 6}, p.options()));
+        continue;
+      }
+      box  = box.index_select(0, idx);
+      conf = conf.index_select(0, idx);
+      cls  = cls.index_select(0, idx);
     }
-    box  = box.index_select(0, idx);
-    conf = conf.index_select(0, idx);
-    cls  = cls.index_select(0, idx);
 
-    if (idx.numel() > cfg.max_nms) {
+    if (conf.numel() > cfg.max_nms) {
       // keep top-max_nms by confidence
       auto topk = conf.topk(cfg.max_nms);
       auto ti = std::get<1>(topk);

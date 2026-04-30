@@ -50,7 +50,12 @@ ConvImpl::ConvImpl(int c_in, int c_out, int k, int s, int p, int g, bool act)
                             .groups(g)
                             .bias(false)
                             .dilation(1)));
-  bn = register_module("bn", torch::nn::BatchNorm2d(c_out));
+  // Ultralytics overrides BN eps to 1e-3 (vs PyTorch default 1e-5). With
+  // typical running_var ~ 0.01–0.05 the BN scale = γ/sqrt(var+eps) is ~3%
+  // larger at eps=1e-5 — that bias compounds through every Conv and was
+  // the v11 full-COCO mAP gap (parity comparator confirmed).
+  bn = register_module("bn", torch::nn::BatchNorm2d(
+      torch::nn::BatchNorm2dOptions(c_out).eps(1e-3)));
 }
 
 torch::Tensor ConvImpl::forward(torch::Tensor x) {
@@ -80,7 +85,9 @@ DWConvImpl::DWConvImpl(int c_in, int c_out, int k, int s, bool act)
                             .groups(g)
                             .bias(false)
                             .dilation(1)));
-  bn = register_module("bn", torch::nn::BatchNorm2d(c_out));
+  // Same Ultralytics BN-eps override as ConvImpl above (eps=1e-3, not 1e-5).
+  bn = register_module("bn", torch::nn::BatchNorm2d(
+      torch::nn::BatchNorm2dOptions(c_out).eps(1e-3)));
 }
 
 torch::Tensor DWConvImpl::forward(torch::Tensor x) {
@@ -143,9 +150,10 @@ torch::Tensor C2fImpl::forward(torch::Tensor x) {
 
 // ─── SPPF ──────────────────────────────────────────────────────────────────
 
-SPPFImpl::SPPFImpl(int c1, int c2, int k) {
+SPPFImpl::SPPFImpl(int c1, int c2, int k, bool cv1_act, bool shortcut) {
   int c_ = c1 / 2;
-  cv1 = register_module("cv1", Conv(c1, c_, 1, 1));
+  add = shortcut && (c1 == c2);
+  cv1 = register_module("cv1", Conv(c1, c_, 1, 1, /*p=*/-1, /*g=*/1, cv1_act));
   cv2 = register_module("cv2", Conv(c_ * 4, c2, 1, 1));
   m   = register_module(
       "m",
@@ -154,11 +162,13 @@ SPPFImpl::SPPFImpl(int c1, int c2, int k) {
 }
 
 torch::Tensor SPPFImpl::forward(torch::Tensor x) {
+  auto x_in = x;
   x = cv1(x);
   auto y1 = m(x);
   auto y2 = m(y1);
   auto y3 = m(y2);
-  return cv2(torch::cat({x, y1, y2, y3}, 1));
+  auto y  = cv2(torch::cat({x, y1, y2, y3}, 1));
+  return add ? (y + x_in) : y;
 }
 
 // ─── DFL ───────────────────────────────────────────────────────────────────

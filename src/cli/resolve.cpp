@@ -108,7 +108,12 @@ std::string resolve_weights(const std::string& spec) {
   if (looks_like_ultralytics_weight(base)) {
     auto target = home_cache() / "weights" / base;
     std::string upstream = upstream_basename(base);
-    if (run_curl(kAssetBase + "/" + upstream, target)) {
+    // v26 lives in the v8.4.0 asset release; everything else in v8.3.0.
+    std::string base_url = kAssetBase;
+    if (base.rfind("yolo26", 0) == 0) {
+      base_url = "https://github.com/ultralytics/assets/releases/download/v8.4.0";
+    }
+    if (run_curl(base_url + "/" + upstream, target)) {
       std::cerr << "[resolve] cached " << base << " at " << target
                 << " (upstream: " << upstream << ")\n";
       return target.string();

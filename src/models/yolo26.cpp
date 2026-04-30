@@ -246,7 +246,10 @@ void build_layer(torch::nn::ModuleList& model, const LSpec& spec, int in_ch,
     c_out_out = c_out;
   } else if (spec.kind == "SPPF") {
     int c_out = scale_channels_v26(spec.a[0], scale);
-    model->push_back(SPPF(in_ch, c_out, spec.a[1]));
+    // v26 SPPF: cv1 has Identity activation (not SiLU) AND adds a residual
+    // shortcut (out + input) when c1 == c2.
+    model->push_back(SPPF(in_ch, c_out, spec.a[1],
+                          /*cv1_act=*/false, /*shortcut=*/true));
     c_out_out = c_out;
   } else if (spec.kind == "C2PSA") {
     int c_out = scale_channels_v26(spec.a[0], scale);

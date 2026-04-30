@@ -25,7 +25,8 @@ metrics::mAPResult validate(ModelHolder& model,
                             inference::NMSConfig nms_cfg = {.conf_thresh = 0.001f,
                                                            .iou_thresh  = 0.7f,
                                                            .max_det     = 300,
-                                                           .max_nms     = 30000});
+                                                           .max_nms     = 30000,
+                                                           .multi_label = true});
 
 struct ValidationOutput {
   metrics::mAPResult                   map;

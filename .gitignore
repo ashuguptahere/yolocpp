@@ -25,3 +25,4 @@ coco8/
 data/
 *.pt
 runs/
+.claude/
