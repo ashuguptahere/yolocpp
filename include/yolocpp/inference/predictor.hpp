@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "yolocpp/inference/nms.hpp"
+#include "yolocpp/models/yolo11.hpp"
+#include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo8.hpp"
 
 namespace yolocpp::inference {
@@ -66,6 +68,25 @@ std::vector<Detection> predict_v5_to_file(
     const std::string& out_path, int imgsz = 640,
     const std::string& device = "", int nc = 80,
     models::Yolo8Scale scale = models::kYolo8n,
+    NMSConfig conf = {});
+
+// Predict with a YOLO11 detection model. Filename convention is `yolo11<scale>.pt`
+// (no 'v'). Pass scale explicitly via Yolo11Scale, or use yolo11_scale_from_filename.
+std::vector<Detection> predict_v11_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 640,
+    const std::string& device = "", int nc = 80,
+    models::Yolo11Scale scale = models::kYolo11n,
+    NMSConfig conf = {});
+
+// Predict with a YOLO26 (DFL-free) detection model. Filename convention is
+// `yolo26<scale>.pt` (no 'v'). NMS is still applied at runtime — the spec'd
+// NMS-free dual-head training isn't part of this predict path.
+std::vector<Detection> predict_v26_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 640,
+    const std::string& device = "", int nc = 80,
+    models::Yolo26Scale scale = models::kYolo26n,
     NMSConfig conf = {});
 
 }  // namespace yolocpp::inference

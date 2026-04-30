@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo8_classify.hpp"
 
 namespace yolocpp::tasks {
@@ -65,19 +66,42 @@ struct ClassifyTrainConfig {
   int        val_every = 0;
 };
 
-void train_classify(models::Yolo8Classify model,
-                    const ClassifyDataset& train,
-                    const ClassifyDataset* val,
-                    ClassifyTrainConfig cfg);
-
 struct ClassifyValResult {
   double top1_acc;
   double top5_acc;
   int    n_total;
 };
 
-ClassifyValResult validate_classify(models::Yolo8Classify& model,
-                                    const ClassifyDataset& dataset,
-                                    torch::Device device);
+// Internal template impl — defined in classify_train.cpp with explicit
+// instantiations for Yolo8Classify and Yolo11Classify.
+template <typename M>
+void train_classify_t(M model, const ClassifyDataset& train,
+                      const ClassifyDataset* val, ClassifyTrainConfig cfg);
+template <typename M>
+ClassifyValResult validate_classify_t(M& model, const ClassifyDataset& dataset,
+                                      torch::Device device);
+
+inline void train_classify(models::Yolo8Classify model,
+                           const ClassifyDataset& train,
+                           const ClassifyDataset* val,
+                           ClassifyTrainConfig cfg) {
+  train_classify_t(std::move(model), train, val, std::move(cfg));
+}
+inline void train_classify(models::Yolo11Classify model,
+                           const ClassifyDataset& train,
+                           const ClassifyDataset* val,
+                           ClassifyTrainConfig cfg) {
+  train_classify_t(std::move(model), train, val, std::move(cfg));
+}
+inline ClassifyValResult validate_classify(models::Yolo8Classify& model,
+                                           const ClassifyDataset& dataset,
+                                           torch::Device device) {
+  return validate_classify_t(model, dataset, device);
+}
+inline ClassifyValResult validate_classify(models::Yolo11Classify& model,
+                                           const ClassifyDataset& dataset,
+                                           torch::Device device) {
+  return validate_classify_t(model, dataset, device);
+}
 
 }  // namespace yolocpp::tasks

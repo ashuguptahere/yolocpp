@@ -44,11 +44,12 @@ static torch::nn::ModuleList build_cv4(const std::vector<int>& ch,
 // ─── SegmentImpl ──────────────────────────────────────────────────────────
 SegmentImpl::SegmentImpl(int nc_, int nm_, int npr_unscaled,
                          std::vector<int> ch_,
-                         const Yolo8Scale& sc)
+                         const Yolo8Scale& sc, bool legacy)
     : nm(nm_), npr(scale_channels(npr_unscaled, sc)),
       nl((int)ch_.size()), nc(nc_), reg_max(16), ch(std::move(ch_)) {
-  // Inner Detect handles cv2/cv3/dfl.
-  detect = register_module("detect", Detect(nc, ch));
+  // Inner Detect handles cv2/cv3/dfl. legacy=false picks up v11's
+  // DWConv-Conv cv3 form.
+  detect = register_module("detect", Detect(nc, ch, legacy));
   // cv4: mask-coefficient branches per level.
   int c4 = std::max(ch[0] / 4, nm);
   cv4    = register_module("cv4", build_cv4(ch, c4, nm));
@@ -81,11 +82,11 @@ SegmentImpl::forward(std::vector<torch::Tensor> x) {
 
 // ─── PoseImpl ─────────────────────────────────────────────────────────────
 PoseImpl::PoseImpl(int nc_, int num_kpts_, int kpt_dim_,
-                   std::vector<int> ch_)
+                   std::vector<int> ch_, bool legacy)
     : nl((int)ch_.size()), nc(nc_), reg_max(16), ch(std::move(ch_)),
       num_kpts(num_kpts_), kpt_dim(kpt_dim_) {
   nk = num_kpts * kpt_dim;
-  detect = register_module("detect", Detect(nc, ch));
+  detect = register_module("detect", Detect(nc, ch, legacy));
   int c4 = std::max(ch[0] / 4, nk);
   cv4    = register_module("cv4", build_cv4(ch, c4, nk));
 }
@@ -151,10 +152,10 @@ PoseImpl::forward(std::vector<torch::Tensor> x) {
 }
 
 // ─── OBBImpl ──────────────────────────────────────────────────────────────
-OBBImpl::OBBImpl(int nc_, int ne_, std::vector<int> ch_)
+OBBImpl::OBBImpl(int nc_, int ne_, std::vector<int> ch_, bool legacy)
     : ne(ne_), nl((int)ch_.size()), nc(nc_), reg_max(16),
       ch(std::move(ch_)) {
-  detect = register_module("detect", Detect(nc, ch));
+  detect = register_module("detect", Detect(nc, ch, legacy));
   int c4 = std::max(ch[0] / 4, ne * 4);
   cv4    = register_module("cv4", build_cv4(ch, c4, ne));
 }

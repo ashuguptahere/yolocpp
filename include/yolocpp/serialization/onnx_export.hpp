@@ -15,6 +15,8 @@
 
 #include <string>
 
+#include "yolocpp/models/yolo11.hpp"
+#include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo8.hpp"
 
 namespace yolocpp::serialization {
@@ -39,5 +41,20 @@ struct OnnxExportConfig {
 void export_yolo8_onnx(models::Yolo8Detect& model,
                         const std::string&    path,
                         const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO11 model to <path> as a single .onnx file. Same
+// output contract as export_yolo8_onnx — single tensor [N, 4 + nc, A] in
+// input pixel coords with sigmoided class scores.
+void export_yolo11_onnx(models::Yolo11Detect&  model,
+                         const std::string&    path,
+                         const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO26 (DFL-free) model. Same output contract as
+// export_yolo8_onnx / export_yolo11_onnx — single tensor [N, 4 + nc, A]
+// with sigmoided class scores. Box decode in the graph uses Softplus(box)
+// directly (no DFL projection).
+void export_yolo26_onnx(models::Yolo26Detect&  model,
+                         const std::string&    path,
+                         const OnnxExportConfig& cfg = {});
 
 }  // namespace yolocpp::serialization

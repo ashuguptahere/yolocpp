@@ -105,10 +105,11 @@ static torch::Device pick_device(std::string s) {
   return torch::Device(torch::kCPU);
 }
 
-void train_classify(models::Yolo8Classify model,
-                    const ClassifyDataset& train,
-                    const ClassifyDataset* val,
-                    ClassifyTrainConfig cfg) {
+template <typename M>
+void train_classify_t(M model,
+                      const ClassifyDataset& train,
+                      const ClassifyDataset* val,
+                      ClassifyTrainConfig cfg) {
   fs::create_directories(cfg.save_dir);
   auto device = pick_device(cfg.device);
   model->to(device);
@@ -160,11 +161,11 @@ void train_classify(models::Yolo8Classify model,
       torch::nn::utils::clip_grad_norm_(model->parameters(), 10.0);
       optim.step();
 
-      running_loss += loss.item<double>();
+      running_loss += loss.template item<double>();
       if (gstep % cfg.log_every == 0) {
         std::cout << "[cls-train] e=" << epoch << " s=" << step
                   << " lr=" << cfg.lr0 * scale
-                  << " loss=" << loss.item<double>() << "\n";
+                  << " loss=" << loss.template item<double>() << "\n";
       }
     }
     auto t1 = std::chrono::steady_clock::now();
@@ -173,7 +174,7 @@ void train_classify(models::Yolo8Classify model,
               << " in " << std::chrono::duration<double>(t1 - t0).count() << "s\n";
 
     if (val && cfg.val_every > 0 && (epoch + 1) % cfg.val_every == 0) {
-      auto vr = validate_classify(model, *val, device);
+      auto vr = validate_classify_t(model, *val, device);
       std::cout << "[cls-train] val top1=" << vr.top1_acc
                 << " top5=" << vr.top5_acc << "\n";
       model->train();
@@ -185,9 +186,10 @@ void train_classify(models::Yolo8Classify model,
   std::cout << "[cls-train] saved → " << ckpt << "\n";
 }
 
-ClassifyValResult validate_classify(models::Yolo8Classify& model,
-                                     const ClassifyDataset& dataset,
-                                     torch::Device device) {
+template <typename M>
+ClassifyValResult validate_classify_t(M& model,
+                                       const ClassifyDataset& dataset,
+                                       torch::Device device) {
   model->to(device);
   model->eval();
   int total = 0, top1 = 0, top5 = 0;
@@ -214,5 +216,17 @@ ClassifyValResult validate_classify(models::Yolo8Classify& model,
   r.top5_acc = total ? (double)top5 / total : 0.0;
   return r;
 }
+
+// Explicit instantiations for both Yolo8Classify and Yolo11Classify.
+template void train_classify_t<models::Yolo8Classify>(
+    models::Yolo8Classify, const ClassifyDataset&,
+    const ClassifyDataset*, ClassifyTrainConfig);
+template void train_classify_t<models::Yolo11Classify>(
+    models::Yolo11Classify, const ClassifyDataset&,
+    const ClassifyDataset*, ClassifyTrainConfig);
+template ClassifyValResult validate_classify_t<models::Yolo8Classify>(
+    models::Yolo8Classify&, const ClassifyDataset&, torch::Device);
+template ClassifyValResult validate_classify_t<models::Yolo11Classify>(
+    models::Yolo11Classify&, const ClassifyDataset&, torch::Device);
 
 }  // namespace yolocpp::tasks

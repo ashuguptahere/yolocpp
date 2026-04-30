@@ -20,7 +20,10 @@
 #include <vector>
 
 #include "yolocpp/datasets/yolo_dataset.hpp"
+#include "yolocpp/losses/yolo26_loss.hpp"
 #include "yolocpp/losses/yolo8_loss.hpp"
+#include "yolocpp/models/yolo11.hpp"
+#include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo5.hpp"
 #include "yolocpp/models/yolo8.hpp"
 
@@ -79,7 +82,9 @@ class TrainerT {
   torch::Device            device_;
 };
 
-using Trainer   = TrainerT<models::Yolo8Detect>;
-using TrainerV5 = TrainerT<models::Yolo5Detect>;
+using Trainer    = TrainerT<models::Yolo8Detect>;
+using TrainerV5  = TrainerT<models::Yolo5Detect>;
+using TrainerV11 = TrainerT<models::Yolo11Detect>;
+using TrainerV26 = TrainerT<models::Yolo26Detect>;
 
 }  // namespace yolocpp::engine

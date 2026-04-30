@@ -152,7 +152,8 @@ PoseDataset::Batch PoseDataset::sample_batch(std::size_t bsz,
 // ============================================================================
 // train_pose — minimal: keypoint L1 + visibility BCE on the closest anchor
 // ============================================================================
-void train_pose(models::Yolo8Pose model,
+template <typename M>
+void train_pose_t(M model,
                 const PoseDataset& train,
                 const PoseDataset* /*val*/,
                 PoseTrainConfig cfg) {
@@ -248,11 +249,11 @@ void train_pose(models::Yolo8Pose model,
       torch::nn::utils::clip_grad_norm_(model->parameters(), 10.0);
       optim.step();
 
-      sum_kpt += kpt_loss.item<double>();
+      sum_kpt += kpt_loss.template item<double>();
       if (gstep % cfg.log_every == 0)
         std::cout << "[pose-train] e=" << epoch << " s=" << step
-                  << " kpt=" << kpt_loss.item<double>()
-                  << " vis=" << vis_loss.item<double>() << "\n";
+                  << " kpt=" << kpt_loss.template item<double>()
+                  << " vis=" << vis_loss.template item<double>() << "\n";
     }
     auto t1 = std::chrono::steady_clock::now();
     std::cout << "[pose-train] epoch " << epoch
@@ -264,7 +265,8 @@ void train_pose(models::Yolo8Pose model,
   std::cout << "[pose-train] saved → " << ckpt << "\n";
 }
 
-PoseValResult validate_pose(models::Yolo8Pose& model,
+template <typename M>
+PoseValResult validate_pose_t(M& model,
                              const PoseDataset& dataset,
                              torch::Device device) {
   model->to(device); model->eval();
@@ -307,8 +309,8 @@ PoseValResult validate_pose(models::Yolo8Pose& model,
         auto sigma2 = 1.0;  // simplified
         auto oks_per = torch::exp(-d2 / (2 * sigma2 * 50 * 50));
         oks_per = oks_per * g_v.to(oks_per.dtype());
-        double oks = oks_per.sum().item<double>() /
-                     std::max<double>(1.0, g_v.sum().item<int64_t>());
+        double oks = oks_per.sum().template item<double>() /
+                     std::max<double>(1.0, g_v.sum().template item<int64_t>());
         best_oks = std::max(best_oks, oks);
       }
       if (best_oks > 0.5) ++n_matched;
@@ -404,7 +406,8 @@ OBBDataset::Batch OBBDataset::sample_batch(std::size_t bsz,
 // ============================================================================
 // train_obb — minimal: angle prediction loss on closest anchor
 // ============================================================================
-void train_obb(models::Yolo8OBB model,
+template <typename M>
+void train_obb_t(M model,
                const OBBDataset& train,
                const OBBDataset* /*val*/,
                OBBTrainConfig cfg) {
@@ -483,10 +486,10 @@ void train_obb(models::Yolo8OBB model,
       torch::nn::utils::clip_grad_norm_(model->parameters(), 10.0);
       optim.step();
 
-      sum_a += loss.item<double>();
+      sum_a += loss.template item<double>();
       if (gstep % cfg.log_every == 0)
         std::cout << "[obb-train] e=" << epoch << " s=" << step
-                  << " angle=" << loss.item<double>() << "\n";
+                  << " angle=" << loss.template item<double>() << "\n";
     }
     auto t1 = std::chrono::steady_clock::now();
     std::cout << "[obb-train] epoch " << epoch
@@ -498,7 +501,8 @@ void train_obb(models::Yolo8OBB model,
   std::cout << "[obb-train] saved → " << ckpt << "\n";
 }
 
-OBBValResult validate_obb(models::Yolo8OBB& model,
+template <typename M>
+OBBValResult validate_obb_t(M& model,
                            const OBBDataset& dataset,
                            torch::Device device) {
   model->to(device); model->eval();
@@ -560,5 +564,23 @@ OBBValResult validate_obb(models::Yolo8OBB& model,
   r.map_50 = n_gt ? (double)n_matched / n_gt : 0.0;
   return r;
 }
+
+// Explicit instantiations — Yolo8 and Yolo11 task model holders.
+template void train_pose_t<models::Yolo8Pose>(
+    models::Yolo8Pose, const PoseDataset&, const PoseDataset*, PoseTrainConfig);
+template void train_pose_t<models::Yolo11Pose>(
+    models::Yolo11Pose, const PoseDataset&, const PoseDataset*, PoseTrainConfig);
+template PoseValResult validate_pose_t<models::Yolo8Pose>(
+    models::Yolo8Pose&, const PoseDataset&, torch::Device);
+template PoseValResult validate_pose_t<models::Yolo11Pose>(
+    models::Yolo11Pose&, const PoseDataset&, torch::Device);
+template void train_obb_t<models::Yolo8OBB>(
+    models::Yolo8OBB, const OBBDataset&, const OBBDataset*, OBBTrainConfig);
+template void train_obb_t<models::Yolo11OBB>(
+    models::Yolo11OBB, const OBBDataset&, const OBBDataset*, OBBTrainConfig);
+template OBBValResult validate_obb_t<models::Yolo8OBB>(
+    models::Yolo8OBB&, const OBBDataset&, torch::Device);
+template OBBValResult validate_obb_t<models::Yolo11OBB>(
+    models::Yolo11OBB&, const OBBDataset&, torch::Device);
 
 }  // namespace yolocpp::tasks

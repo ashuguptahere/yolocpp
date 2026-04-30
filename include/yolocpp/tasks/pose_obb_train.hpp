@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo8_tasks.hpp"
 
 namespace yolocpp::tasks {
@@ -66,19 +67,36 @@ struct PoseTrainConfig {
   int        log_every = 10;
 };
 
-void train_pose(models::Yolo8Pose model,
-                const PoseDataset& train,
-                const PoseDataset* val,
-                PoseTrainConfig cfg);
-
 struct PoseValResult {
   double oks_map_50;        // mAP at OKS=0.5
   int    n_pred, n_gt, n_matched;
 };
 
-PoseValResult validate_pose(models::Yolo8Pose& model,
-                            const PoseDataset& dataset,
-                            torch::Device device);
+template <typename M>
+void train_pose_t(M model, const PoseDataset& train,
+                  const PoseDataset* val, PoseTrainConfig cfg);
+template <typename M>
+PoseValResult validate_pose_t(M& model, const PoseDataset& dataset,
+                               torch::Device device);
+
+inline void train_pose(models::Yolo8Pose model, const PoseDataset& train,
+                       const PoseDataset* val, PoseTrainConfig cfg) {
+  train_pose_t(std::move(model), train, val, std::move(cfg));
+}
+inline void train_pose(models::Yolo11Pose model, const PoseDataset& train,
+                       const PoseDataset* val, PoseTrainConfig cfg) {
+  train_pose_t(std::move(model), train, val, std::move(cfg));
+}
+inline PoseValResult validate_pose(models::Yolo8Pose& model,
+                                    const PoseDataset& dataset,
+                                    torch::Device device) {
+  return validate_pose_t(model, dataset, device);
+}
+inline PoseValResult validate_pose(models::Yolo11Pose& model,
+                                    const PoseDataset& dataset,
+                                    torch::Device device) {
+  return validate_pose_t(model, dataset, device);
+}
 
 // ─── OBB ──────────────────────────────────────────────────────────────────
 // Label format per line:
@@ -126,18 +144,35 @@ struct OBBTrainConfig {
   int    log_every = 10;
 };
 
-void train_obb(models::Yolo8OBB model,
-               const OBBDataset& train,
-               const OBBDataset* val,
-               OBBTrainConfig cfg);
-
 struct OBBValResult {
   double map_50;
   int    n_pred, n_gt, n_matched;
 };
 
-OBBValResult validate_obb(models::Yolo8OBB& model,
-                          const OBBDataset& dataset,
-                          torch::Device device);
+template <typename M>
+void train_obb_t(M model, const OBBDataset& train,
+                 const OBBDataset* val, OBBTrainConfig cfg);
+template <typename M>
+OBBValResult validate_obb_t(M& model, const OBBDataset& dataset,
+                             torch::Device device);
+
+inline void train_obb(models::Yolo8OBB model, const OBBDataset& train,
+                      const OBBDataset* val, OBBTrainConfig cfg) {
+  train_obb_t(std::move(model), train, val, std::move(cfg));
+}
+inline void train_obb(models::Yolo11OBB model, const OBBDataset& train,
+                      const OBBDataset* val, OBBTrainConfig cfg) {
+  train_obb_t(std::move(model), train, val, std::move(cfg));
+}
+inline OBBValResult validate_obb(models::Yolo8OBB& model,
+                                  const OBBDataset& dataset,
+                                  torch::Device device) {
+  return validate_obb_t(model, dataset, device);
+}
+inline OBBValResult validate_obb(models::Yolo11OBB& model,
+                                  const OBBDataset& dataset,
+                                  torch::Device device) {
+  return validate_obb_t(model, dataset, device);
+}
 
 }  // namespace yolocpp::tasks

@@ -293,7 +293,8 @@ torch::Tensor compute_mask_loss(const torch::Tensor& coefs,
 
 }  // anonymous namespace
 
-void train_segment(models::Yolo8Segment model,
+template <typename M>
+void train_segment_t(M model,
                    const SegDataset& train,
                    const SegDataset* val,
                    SegTrainConfig cfg) {
@@ -372,7 +373,10 @@ void train_segment(models::Yolo8Segment model,
 
       // Build a synthetic per-level feats from the model's last layer:
       // we recover feats by re-evaluating just the Detect inner head.
-      auto* seg_head = model->model[22]->as<models::SegmentImpl>();
+      // Head is always the last layer in the ModuleList (idx 22 for v8,
+      // 23 for v11). Use model->size() - 1 to stay version-agnostic.
+      auto* seg_head =
+          model->model[model->model->size() - 1]->template as<models::SegmentImpl>();
       // Run forward backbone+neck up through layer 21 to get det inputs.
       // Reuse the model's forward by stepping the ModuleList inline.
       torch::Tensor decoded = std::get<0>(out_tuple);
@@ -394,11 +398,11 @@ void train_segment(models::Yolo8Segment model,
       torch::nn::utils::clip_grad_norm_(model->parameters(), 10.0);
       optim.step();
 
-      sum_d += det_total.item<double>();
-      sum_m += mask_loss.item<double>();
+      sum_d += det_total.template item<double>();
+      sum_m += mask_loss.template item<double>();
       if (gstep % cfg.log_every == 0)
         std::cout << "[seg-train] e=" << epoch << " s=" << step
-                  << " mask=" << mask_loss.item<double>() << "\n";
+                  << " mask=" << mask_loss.template item<double>() << "\n";
     }
     auto t1 = std::chrono::steady_clock::now();
     std::cout << "[seg-train] epoch " << epoch
@@ -410,7 +414,8 @@ void train_segment(models::Yolo8Segment model,
   std::cout << "[seg-train] saved → " << ckpt << "\n";
 }
 
-SegValResult validate_segment(models::Yolo8Segment& model,
+template <typename M>
+SegValResult validate_segment_t(M& model,
                                const SegDataset& dataset,
                                torch::Device device) {
   model->to(device);
@@ -473,7 +478,7 @@ SegValResult validate_segment(models::Yolo8Segment& model,
     auto iou = inter / (m_a + g_a - inter + 1e-7f);
     auto best_per_gt = iou.max(0);
     auto best_iou    = std::get<0>(best_per_gt);
-    matched += (int)best_iou.gt(0.5f).sum().item<int64_t>();
+    matched += (int)best_iou.gt(0.5f).sum().template item<int64_t>();
   }
   SegValResult r;
   r.map_50           = total_gt ? (double)matched / total_gt : 0.0;
@@ -481,5 +486,15 @@ SegValResult validate_segment(models::Yolo8Segment& model,
   r.n_ground_truths  = total_gt;
   return r;
 }
+
+// Explicit instantiations — Yolo8Segment + Yolo11Segment.
+template void train_segment_t<models::Yolo8Segment>(
+    models::Yolo8Segment, const SegDataset&, const SegDataset*, SegTrainConfig);
+template void train_segment_t<models::Yolo11Segment>(
+    models::Yolo11Segment, const SegDataset&, const SegDataset*, SegTrainConfig);
+template SegValResult validate_segment_t<models::Yolo8Segment>(
+    models::Yolo8Segment&, const SegDataset&, torch::Device);
+template SegValResult validate_segment_t<models::Yolo11Segment>(
+    models::Yolo11Segment&, const SegDataset&, torch::Device);
 
 }  // namespace yolocpp::tasks

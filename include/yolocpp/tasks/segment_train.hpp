@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo8_tasks.hpp"
 
 namespace yolocpp::tasks {
@@ -72,19 +73,38 @@ struct SegTrainConfig {
   int        log_every = 10;
 };
 
-void train_segment(models::Yolo8Segment model,
-                   const SegDataset& train,
-                   const SegDataset* val,
-                   SegTrainConfig cfg);
-
 struct SegValResult {
   double map_50;     // mask mAP at IoU=0.5
   int    n_predictions;
   int    n_ground_truths;
 };
 
-SegValResult validate_segment(models::Yolo8Segment& model,
-                              const SegDataset& dataset,
-                              torch::Device device);
+template <typename M>
+void train_segment_t(M model, const SegDataset& train,
+                     const SegDataset* val, SegTrainConfig cfg);
+template <typename M>
+SegValResult validate_segment_t(M& model, const SegDataset& dataset,
+                                 torch::Device device);
+
+inline void train_segment(models::Yolo8Segment model,
+                          const SegDataset& train, const SegDataset* val,
+                          SegTrainConfig cfg) {
+  train_segment_t(std::move(model), train, val, std::move(cfg));
+}
+inline void train_segment(models::Yolo11Segment model,
+                          const SegDataset& train, const SegDataset* val,
+                          SegTrainConfig cfg) {
+  train_segment_t(std::move(model), train, val, std::move(cfg));
+}
+inline SegValResult validate_segment(models::Yolo8Segment& model,
+                                     const SegDataset& dataset,
+                                     torch::Device device) {
+  return validate_segment_t(model, dataset, device);
+}
+inline SegValResult validate_segment(models::Yolo11Segment& model,
+                                     const SegDataset& dataset,
+                                     torch::Device device) {
+  return validate_segment_t(model, dataset, device);
+}
 
 }  // namespace yolocpp::tasks

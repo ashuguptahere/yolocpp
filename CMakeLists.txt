@@ -99,9 +99,11 @@ add_library(yolocpp_core
   src/models/yolo9.cpp
   src/models/yolo10.cpp
   src/models/yolo11.cpp
+  src/models/yolo11_tasks.cpp
   src/models/yolo12.cpp
   src/models/yolo13.cpp
   src/models/yolo26.cpp
+  src/models/yolo26_tasks.cpp
   src/inference/task_predictors.cpp
   src/tasks/classify_train.cpp
   src/tasks/segment_train.cpp
@@ -116,6 +118,7 @@ add_library(yolocpp_core
   src/inference/predictor.cpp
   src/datasets/yolo_dataset.cpp
   src/losses/yolo8_loss.cpp
+  src/losses/yolo26_loss.cpp
   src/cli/args.cpp
   src/cli/data_yaml.cpp
   src/cli/model_info.cpp

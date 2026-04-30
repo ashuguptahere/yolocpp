@@ -13,6 +13,7 @@
 
 #include "yolocpp/engine/ddp.hpp"
 #include "yolocpp/engine/validator.hpp"
+#include "yolocpp/losses/yolo26_loss.hpp"
 #include "yolocpp/serialization/pt_save.hpp"
 
 namespace yolocpp::engine {
@@ -74,6 +75,49 @@ ParamGroups split_params(torch::nn::Module& m) {
   }
   return pg;
 }
+
+// Loss-type trait — selects the right loss for each model holder.
+//
+// Default (v8/v5/v11) → V8DetectionLoss (DFL-based).
+// Specialised for Yolo26Detect → Yolo26Loss (DFL-free, STAL + ProgLoss).
+//
+// Both losses expose:
+//   - a configurable nc field at construction
+//   - operator()(feats, tgt, strides, imgsz [, progress]) → LossOutput-like
+// LossOutput-like must have .total / .box / .cls / .dfl scalar tensors.
+template <typename M>
+struct LossTraits {
+  using LossT   = losses::V8DetectionLoss;
+  using OutputT = losses::LossOutput;
+  static LossT make(int nc) {
+    losses::LossConfig c; c.nc = nc; c.reg_max = 16;
+    return LossT(c);
+  }
+  static OutputT compute(const LossT& l,
+                         const std::vector<torch::Tensor>& feats,
+                         const torch::Tensor& tgt,
+                         const std::vector<double>& strides,
+                         int imgsz, double /*progress*/) {
+    return l(feats, tgt, strides, imgsz);
+  }
+};
+
+template <>
+struct LossTraits<models::Yolo26Detect> {
+  using LossT   = losses::Yolo26Loss;
+  using OutputT = losses::Yolo26LossOutput;
+  static LossT make(int nc) {
+    losses::Yolo26LossConfig c; c.nc = nc;
+    return LossT(c);
+  }
+  static OutputT compute(const LossT& l,
+                         const std::vector<torch::Tensor>& feats,
+                         const torch::Tensor& tgt,
+                         const std::vector<double>& strides,
+                         int imgsz, double progress) {
+    return l(feats, tgt, strides, imgsz, progress);
+  }
+};
 
 // Cosine-with-linear-warmup LR schedule. Returns lr scale ∈ [0, 1].
 double lr_scale(int epoch_step, int warmup_steps, int total_steps,
@@ -370,10 +414,8 @@ void TrainerT<M>::run() {
   }
   torch::optim::SGD optim(groups, opt_options);
 
-  losses::LossConfig lcfg;
-  lcfg.nc      = model_->nc;
-  lcfg.reg_max = 16;
-  losses::V8DetectionLoss loss(lcfg);
+  using Traits = LossTraits<M>;
+  auto loss = Traits::make(model_->nc);
 
   std::mt19937 rng(0x9E3779B9u);
   size_t       n      = train_.size();
@@ -455,7 +497,13 @@ void TrainerT<M>::run() {
       }
 
       auto feats = model_->forward_train(imgs);
-      auto lo    = loss(feats, tgt, model_->stride, cfg_.imgsz);
+      // ProgLoss progress: linearly ramp 0 → 1 across all training steps.
+      // (Yolo26Loss uses it; the default trait ignores the argument.)
+      double progress = (total_steps > 1)
+                            ? (double)gstep / (double)(total_steps - 1)
+                            : 1.0;
+      auto lo = Traits::compute(loss, feats, tgt, model_->stride,
+                                cfg_.imgsz, progress);
 
       optim.zero_grad();
       lo.total.backward();
@@ -600,5 +648,7 @@ void TrainerT<M>::run() {
 // Explicit instantiations.
 template class TrainerT<models::Yolo8Detect>;
 template class TrainerT<models::Yolo5Detect>;
+template class TrainerT<models::Yolo11Detect>;
+template class TrainerT<models::Yolo26Detect>;
 
 }  // namespace yolocpp::engine

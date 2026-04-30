@@ -59,6 +59,47 @@ torch::Tensor ConvImpl::forward(torch::Tensor x) {
   return x;
 }
 
+// ─── DWConv ────────────────────────────────────────────────────────────────
+// Depthwise: groups = gcd(c_in, c_out). With c_in == c_out this is the
+// classic depthwise conv (one filter per channel).
+
+static int int_gcd(int a, int b) {
+  while (b) { int t = b; b = a % b; a = t; }
+  return a;
+}
+
+DWConvImpl::DWConvImpl(int c_in, int c_out, int k, int s, bool act)
+    : act_silu(act) {
+  auto pad = autopad(k, -1);
+  int g = int_gcd(c_in, c_out);
+  conv = register_module(
+      "conv",
+      torch::nn::Conv2d(torch::nn::Conv2dOptions(c_in, c_out, k)
+                            .stride(s)
+                            .padding(pad)
+                            .groups(g)
+                            .bias(false)
+                            .dilation(1)));
+  bn = register_module("bn", torch::nn::BatchNorm2d(c_out));
+}
+
+torch::Tensor DWConvImpl::forward(torch::Tensor x) {
+  x = bn(conv(x));
+  if (act_silu) x = F::silu(x);
+  return x;
+}
+
+// ─── DWConvBlock = DWConv → Conv 1×1 (children registered as "0" / "1") ──
+
+DWConvBlockImpl::DWConvBlockImpl(int c_in, int c_out, int k_dw, bool act) {
+  dw = register_module("0", DWConv(c_in, c_in, k_dw, 1, /*act=*/true));
+  pw = register_module("1", Conv(c_in, c_out, 1, 1, /*p=*/-1, /*g=*/1, act));
+}
+
+torch::Tensor DWConvBlockImpl::forward(torch::Tensor x) {
+  return pw(dw(x));
+}
+
 // ─── Bottleneck ────────────────────────────────────────────────────────────
 
 BottleneckImpl::BottleneckImpl(int c1, int c2, bool shortcut, int g, double e,
@@ -145,7 +186,8 @@ torch::Tensor DFLImpl::forward(torch::Tensor x) {
 
 // ─── Detect ────────────────────────────────────────────────────────────────
 
-DetectImpl::DetectImpl(int nc_, std::vector<int> ch_) : nc(nc_), ch(std::move(ch_)) {
+DetectImpl::DetectImpl(int nc_, std::vector<int> ch_, bool legacy_)
+    : nc(nc_), legacy(legacy_), ch(std::move(ch_)) {
   nl = (int)ch.size();
   no = nc + reg_max * 4;
   // c2 = max(16, ch[0]//4, reg_max*4)
@@ -165,10 +207,22 @@ DetectImpl::DetectImpl(int nc_, std::vector<int> ch_) : nc(nc_), ch(std::move(ch
     cv2->push_back(reg);
 
     auto cls = torch::nn::Sequential();
-    cls->push_back(Conv(ch[i], c3, 3));
-    cls->push_back(Conv(c3,    c3, 3));
-    cls->push_back(torch::nn::Conv2d(
-        torch::nn::Conv2dOptions(c3, nc, 1)));
+    if (legacy) {
+      // v3 / v5 / v8 / v9: regular Conv→Conv→Conv2d.
+      cls->push_back(Conv(ch[i], c3, 3));
+      cls->push_back(Conv(c3,    c3, 3));
+      cls->push_back(torch::nn::Conv2d(
+          torch::nn::Conv2dOptions(c3, nc, 1)));
+    } else {
+      // v11+: nested (DWConv 3×3 → Conv 1×1) × 2 → Conv2d 1×1. Each pair is
+      // a DWConvBlock with children named "0"/"1", so the full state_dict
+      // path becomes cv3.<lvl>.<0|1>.<0|1>.{conv,bn}.<...> —
+      // matching Ultralytics' yolo11<x>.pt naming.
+      cls->push_back(DWConvBlock(ch[i], c3, /*k_dw=*/3));
+      cls->push_back(DWConvBlock(c3,    c3, /*k_dw=*/3));
+      cls->push_back(torch::nn::Conv2d(
+          torch::nn::Conv2dOptions(c3, nc, 1)));
+    }
     cv3->push_back(cls);
   }
   dfl = register_module("dfl", DFL(reg_max));

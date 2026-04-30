@@ -102,18 +102,49 @@ struct DetectImpl : torch::nn::Module {
   int  reg_max  = 16;
   int  nl       = 3;
   int  no       = 0;
+  // legacy=true: cv3 = Conv→Conv→Conv2d (the v3/v5/v8/v9 form).
+  // legacy=false: cv3 = (DWConv→Conv)→(DWConv→Conv)→Conv2d (the v11 form).
+  // cv2 (box regression) is identical in both forms.
+  bool legacy   = true;
   std::vector<int>     ch;          // per-level input channels
   std::vector<double>  stride;      // per-level stride (set by parent)
   torch::nn::ModuleList cv2{nullptr};   // regression branches (Sequential)
   torch::nn::ModuleList cv3{nullptr};   // classification branches (Sequential)
   DFL                  dfl{nullptr};
 
-  DetectImpl(int nc, std::vector<int> ch);
+  DetectImpl(int nc, std::vector<int> ch, bool legacy = true);
   std::vector<torch::Tensor> forward_features(std::vector<torch::Tensor> x);
   // Returns concat-form decoded prediction. Caller passes per-level strides.
   torch::Tensor decode(const std::vector<torch::Tensor>& feats);
 };
 TORCH_MODULE(Detect);
+
+// Depthwise conv (= Conv with groups = gcd(c_in, c_out); typically c_in==c_out).
+// Used by v11's Detect cv3 branch and other newer YOLO heads.
+struct DWConvImpl : torch::nn::Module {
+  torch::nn::Conv2d      conv{nullptr};
+  torch::nn::BatchNorm2d bn{nullptr};
+  bool                   act_silu = true;
+  DWConvImpl(int c_in, int c_out, int k = 1, int s = 1, bool act = true);
+  torch::Tensor forward(torch::Tensor x);
+};
+TORCH_MODULE(DWConv);
+
+// DWConvBlock = (DWConv 3×3) → (Conv 1×1). Registered children are named
+// "0" and "1" so when this is pushed into another Sequential at index i, the
+// resulting state_dict path becomes <prefix>.<i>.{0,1}.{conv,bn}.<...> —
+// matching Ultralytics' v11 Detect cv3 nesting exactly.
+//
+// libtorch's nn::Sequential cannot directly hold another nn::Sequential
+// (its forward is templated and that breaks AnyModule). This helper has a
+// concrete forward(Tensor)→Tensor so it can.
+struct DWConvBlockImpl : torch::nn::Module {
+  DWConv dw{nullptr};
+  Conv   pw{nullptr};
+  DWConvBlockImpl(int c_in, int c_out, int k_dw = 3, bool act = true);
+  torch::Tensor forward(torch::Tensor x);
+};
+TORCH_MODULE(DWConvBlock);
 
 // ─── Whole model ───────────────────────────────────────────────────────────
 //

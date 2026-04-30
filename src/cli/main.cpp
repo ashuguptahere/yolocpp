@@ -40,6 +40,10 @@
 #include "yolocpp/inference/predictor.hpp"
 #include "yolocpp/inference/task_predictors.hpp"
 #include "yolocpp/inference/trt_predictor.hpp"
+#include "yolocpp/models/yolo11.hpp"
+#include "yolocpp/models/yolo11_tasks.hpp"
+#include "yolocpp/models/yolo26.hpp"
+#include "yolocpp/models/yolo26_tasks.hpp"
 #include "yolocpp/models/yolo5.hpp"
 #include "yolocpp/models/yolo8.hpp"
 #include "yolocpp/models/yolo8_classify.hpp"
@@ -188,33 +192,61 @@ int cmd_train(const std::string& root, const std::string& names_csv,
 
 int cmd_export(const std::string& weights, const std::string& format,
                const std::string& out, int imgsz, const std::string& scale_s,
-               int nc, const std::string& input_name, bool fp16) {
-  auto scale = parse_scale(scale_s);
-  yolocpp::models::Yolo8Detect model(scale, nc);
-  auto sd = yolocpp::serialization::load_state_dict(weights);
-  model->load_from_state_dict(sd.entries);
-  model->eval();
+               int nc, const std::string& input_name, bool fp16,
+               const std::string& version_hint = "") {
+  // Determine version: explicit hint (from CLI) or filename inference.
+  std::string version = version_hint.empty()
+                            ? yolocpp::cli::version_from_filename(weights)
+                            : version_hint;
+
+  auto write_onnx = [&](const std::string& onnx_path) {
+    yolocpp::serialization::OnnxExportConfig ocfg;
+    ocfg.imgsz = imgsz; ocfg.input_name = input_name;
+    if (version == "v11") {
+      yolocpp::models::Yolo11Detect m(
+          yolocpp::models::yolo11_scale_from_letter(scale_s), nc);
+      auto sd = yolocpp::serialization::load_state_dict(weights);
+      m->load_from_state_dict(sd.entries);
+      m->eval();
+      yolocpp::serialization::export_yolo11_onnx(m, onnx_path, ocfg);
+    } else if (version == "v26") {
+      yolocpp::models::Yolo26Detect m(
+          yolocpp::models::yolo26_scale_from_letter(scale_s), nc);
+      auto sd = yolocpp::serialization::load_state_dict(weights);
+      m->load_from_state_dict(sd.entries);
+      m->eval();
+      yolocpp::serialization::export_yolo26_onnx(m, onnx_path, ocfg);
+    } else {
+      yolocpp::models::Yolo8Detect m(parse_scale(scale_s), nc);
+      auto sd = yolocpp::serialization::load_state_dict(weights);
+      m->load_from_state_dict(sd.entries);
+      m->eval();
+      yolocpp::serialization::export_yolo8_onnx(m, onnx_path, ocfg);
+    }
+  };
+
+  auto base_name = [&]() -> std::string {
+    if (version == "v11") return "yolo11";
+    if (version == "v26") return "yolo26";
+    return "yolo8";
+  }();
 
   if (format == "onnx") {
-    std::string path = out.empty() ? "yolo8n.onnx" : out;
-    yolocpp::serialization::OnnxExportConfig cfg;
-    cfg.imgsz      = imgsz;
-    cfg.input_name = input_name;
-    yolocpp::serialization::export_yolo8_onnx(model, path, cfg);
-    std::cout << "[export] wrote " << path << "\n";
+    std::string path = out.empty() ? (base_name + ".onnx") : out;
+    write_onnx(path);
+    std::cout << "[export] (" << version << ") wrote " << path << "\n";
     return 0;
   }
   if (format == "trt" || format == "engine") {
-    std::string onnx_tmp = (out.empty() ? "yolo8n.tmp.onnx"
-                                        : out + ".tmp.onnx");
-    std::string path     = out.empty() ? "yolo8n.trt" : out;
-    yolocpp::serialization::OnnxExportConfig ocfg;
-    ocfg.imgsz = imgsz; ocfg.input_name = input_name;
-    yolocpp::serialization::export_yolo8_onnx(model, onnx_tmp, ocfg);
+    std::string base    = base_name;
+    std::string onnx_tmp = out.empty() ? base + ".tmp.onnx"
+                                        : out + ".tmp.onnx";
+    std::string path     = out.empty() ? base + ".trt" : out;
+    write_onnx(onnx_tmp);
     yolocpp::serialization::TrtBuildConfig tcfg;
     tcfg.imgsz = imgsz; tcfg.fp16 = fp16; tcfg.input_name = input_name;
     yolocpp::serialization::build_trt_engine(onnx_tmp, path, tcfg);
-    std::cout << "[export] wrote " << path << "\n";
+    std::cout << "[export] (" << version << ") wrote " << path << "\n";
     return 0;
   }
   std::cerr << "[export] unknown format: " << format
@@ -258,6 +290,13 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
   if (out.empty()) out = "predict_" + task + "_out.jpg";
 
   if (task == "detect") {
+    // .trt engines are version-agnostic — the serialized graph already
+    // bakes in the architecture, so any task=detect TRT engine routes
+    // through the TrtPredictor regardless of which YOLO version produced it.
+    if (weights.size() >= 4 &&
+        weights.substr(weights.size() - 4) == ".trt") {
+      return cmd_predict(weights, source, out, imgsz, device, scale_s, nc, conf, iou);
+    }
     // version_hint comes from the dispatcher's state-dict-based inference;
     // fall back to filename heuristics if the caller didn't pass one.
     auto version = version_hint.empty()
@@ -265,7 +304,6 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
                        : version_hint;
     if (version == "v5") {
       yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      // v5 uses different depth/width scales than v8 — pick the right ones.
       auto v5_scale = yolocpp::models::yolo5_scale_from_letter(scale_s);
       auto dets = yolocpp::inference::predict_v5_to_file(
           weights, source, out, imgsz, device, nc, v5_scale, nm);
@@ -273,10 +311,24 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
                 << out << "\n";
       return 0;
     }
-    // The closed set of versions we recognise. Anything outside this list
-    // is rejected up-front; "v8"-compatible families (v9, v10, v11) and the
-    // unofficial v12/v13 forks share the v8 Detect head, so we currently
-    // route them through the v8 predict path with a hint.
+    if (version == "v11") {
+      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
+      auto v11_scale = yolocpp::models::yolo11_scale_from_letter(scale_s);
+      auto dets = yolocpp::inference::predict_v11_to_file(
+          weights, source, out, imgsz, device, nc, v11_scale, nm);
+      std::cout << "[predict] (v11) " << dets.size() << " detections, wrote "
+                << out << "\n";
+      return 0;
+    }
+    if (version == "v26") {
+      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
+      auto v26_scale = yolocpp::models::yolo26_scale_from_letter(scale_s);
+      auto dets = yolocpp::inference::predict_v26_to_file(
+          weights, source, out, imgsz, device, nc, v26_scale, nm);
+      std::cout << "[predict] (v26) " << dets.size() << " detections, wrote "
+                << out << "\n";
+      return 0;
+    }
     static const std::vector<std::string> kKnown = {
         "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
         "v11", "v12", "v13", "v26", "rtdetr"};
@@ -286,18 +338,51 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
       return 2;
     }
     static const std::vector<std::string> kStub = {
-        "v4", "v6", "v7", "v9", "v10", "v11", "v12", "v13", "v26"};
+        "v4", "v6", "v7", "v9", "v10", "v12", "v13"};
     if (std::find(kStub.begin(), kStub.end(), version) != kStub.end()) {
       std::cerr << "[hint] " << version
                 << " predict path not yet implemented; falling back to v8"
                 << " (works only for Detect-head-compatible weights —"
-                << " v9 / v10 / v11 / v12 / v13 share the v8 head; v4 / v6 / v7"
-                << " / v26 will fail to load)\n";
+                << " v9 / v10 / v12 / v13 share the v8 head; v4 / v6 / v7"
+                << " will fail to load)\n";
     }
     return cmd_predict(weights, source, out, imgsz, device, scale_s, nc, conf, iou);
   }
+  // For task variants we route on version_hint (or filename inference) too —
+  // v11 / v26 task models have a different module layout and can't load
+  // through the v8 task predictor classes.
+  auto task_version = version_hint.empty()
+                          ? yolocpp::cli::version_from_filename(weights)
+                          : version_hint;
+  bool is_v11 = (task_version == "v11");
+  bool is_v26 = (task_version == "v26");
+
   if (task == "classify") {
     int sz = (imgsz == 640) ? 224 : imgsz;  // classify default 224
+    if (is_v26) {
+      yolocpp::inference::Yolo26ClassifyPredictor p(
+          weights, sz, device, /*nc=*/1000,
+          yolocpp::models::yolo26_scale_from_letter(scale_s));
+      cv::Mat img = cv::imread(source, cv::IMREAD_COLOR);
+      if (img.empty()) throw std::runtime_error("could not read " + source);
+      auto r = p.predict(img, /*top_k=*/5);
+      std::cout << "[classify] (v26) top-5:\n";
+      for (auto& [cid, prob] : r.topk)
+        std::cout << "  " << cid << "  " << prob << "\n";
+      return 0;
+    }
+    if (is_v11) {
+      yolocpp::inference::Yolo11ClassifyPredictor p(
+          weights, sz, device, /*nc=*/1000,
+          yolocpp::models::yolo11_scale_from_letter(scale_s));
+      cv::Mat img = cv::imread(source, cv::IMREAD_COLOR);
+      if (img.empty()) throw std::runtime_error("could not read " + source);
+      auto r = p.predict(img, /*top_k=*/5);
+      std::cout << "[classify] (v11) top-5:\n";
+      for (auto& [cid, prob] : r.topk)
+        std::cout << "  " << cid << "  " << prob << "\n";
+      return 0;
+    }
     yolocpp::inference::ClassifyPredictor p(weights, sz, device, /*nc=*/1000,
                                              parse_scale(scale_s));
     cv::Mat img = cv::imread(source, cv::IMREAD_COLOR);
@@ -309,6 +394,22 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     return 0;
   }
   if (task == "segment") {
+    if (is_v26) {
+      yolocpp::inference::Yolo26SegmentPredictor p(
+          weights, imgsz, device, nc,
+          yolocpp::models::yolo26_scale_from_letter(scale_s));
+      auto insts = p.predict_to_file(source, out, c);
+      std::cout << "[segment] (v26) " << insts.size() << " instances, wrote " << out << "\n";
+      return 0;
+    }
+    if (is_v11) {
+      yolocpp::inference::Yolo11SegmentPredictor p(
+          weights, imgsz, device, nc,
+          yolocpp::models::yolo11_scale_from_letter(scale_s));
+      auto insts = p.predict_to_file(source, out, c);
+      std::cout << "[segment] (v11) " << insts.size() << " instances, wrote " << out << "\n";
+      return 0;
+    }
     yolocpp::inference::SegmentPredictor p(weights, imgsz, device, nc,
                                             parse_scale(scale_s));
     auto insts = p.predict_to_file(source, out, c);
@@ -316,6 +417,22 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     return 0;
   }
   if (task == "pose") {
+    if (is_v26) {
+      yolocpp::inference::Yolo26PosePredictor p(
+          weights, imgsz, device, /*num_kpts=*/17, /*kpt_dim=*/3,
+          yolocpp::models::yolo26_scale_from_letter(scale_s));
+      auto insts = p.predict_to_file(source, out, c);
+      std::cout << "[pose] (v26) " << insts.size() << " people, wrote " << out << "\n";
+      return 0;
+    }
+    if (is_v11) {
+      yolocpp::inference::Yolo11PosePredictor p(
+          weights, imgsz, device, /*num_kpts=*/17, /*kpt_dim=*/3,
+          yolocpp::models::yolo11_scale_from_letter(scale_s));
+      auto insts = p.predict_to_file(source, out, c);
+      std::cout << "[pose] (v11) " << insts.size() << " people, wrote " << out << "\n";
+      return 0;
+    }
     yolocpp::inference::PosePredictor p(weights, imgsz, device,
                                          /*num_kpts=*/17, /*kpt_dim=*/3,
                                          parse_scale(scale_s));
@@ -325,6 +442,22 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
   }
   if (task == "obb") {
     int sz = (imgsz == 640) ? 1024 : imgsz;  // OBB default 1024
+    if (is_v26) {
+      yolocpp::inference::Yolo26OBBPredictor p(
+          weights, sz, device, /*nc=*/15,
+          yolocpp::models::yolo26_scale_from_letter(scale_s));
+      auto insts = p.predict_to_file(source, out, c);
+      std::cout << "[obb] (v26) " << insts.size() << " rotated boxes, wrote " << out << "\n";
+      return 0;
+    }
+    if (is_v11) {
+      yolocpp::inference::Yolo11OBBPredictor p(
+          weights, sz, device, /*nc=*/15,
+          yolocpp::models::yolo11_scale_from_letter(scale_s));
+      auto insts = p.predict_to_file(source, out, c);
+      std::cout << "[obb] (v11) " << insts.size() << " rotated boxes, wrote " << out << "\n";
+      return 0;
+    }
     yolocpp::inference::OBBPredictor p(weights, sz, device, /*nc=*/15,
                                         parse_scale(scale_s));
     auto insts = p.predict_to_file(source, out, c);
@@ -492,6 +625,42 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
                   << "mAP@0.5:0.95 = " << res.map_50_95 << "\n";
         return 0;
       }
+      if (version == "v11") {
+        auto names = split_csv(names_csv);
+        if (names.empty()) names = yolocpp::inference::coco_names();
+        yolocpp::datasets::AugConfig vaug; vaug.augment = false;
+        yolocpp::datasets::YoloDataset ds(data, "val", imgsz, names, vaug);
+        auto v11_scale = yolocpp::models::yolo11_scale_from_letter(scale_s);
+        yolocpp::models::Yolo11Detect m(v11_scale, (int)names.size());
+        auto sd = yolocpp::serialization::load_state_dict(weights);
+        m->load_from_state_dict(sd.entries);
+        auto dev = device.empty()
+                       ? (torch::cuda::is_available() ? torch::Device(torch::kCUDA)
+                                                      : torch::Device(torch::kCPU))
+                       : torch::Device(device);
+        auto res = yolocpp::engine::validate(m, ds, dev);
+        std::cout << "mAP@0.5      = " << res.map_50    << "\n"
+                  << "mAP@0.5:0.95 = " << res.map_50_95 << "\n";
+        return 0;
+      }
+      if (version == "v26") {
+        auto names = split_csv(names_csv);
+        if (names.empty()) names = yolocpp::inference::coco_names();
+        yolocpp::datasets::AugConfig vaug; vaug.augment = false;
+        yolocpp::datasets::YoloDataset ds(data, "val", imgsz, names, vaug);
+        auto v26_scale = yolocpp::models::yolo26_scale_from_letter(scale_s);
+        yolocpp::models::Yolo26Detect m(v26_scale, (int)names.size());
+        auto sd = yolocpp::serialization::load_state_dict(weights);
+        m->load_from_state_dict(sd.entries);
+        auto dev = device.empty()
+                       ? (torch::cuda::is_available() ? torch::Device(torch::kCUDA)
+                                                      : torch::Device(torch::kCPU))
+                       : torch::Device(device);
+        auto res = yolocpp::engine::validate(m, ds, dev);
+        std::cout << "mAP@0.5      = " << res.map_50    << "\n"
+                  << "mAP@0.5:0.95 = " << res.map_50_95 << "\n";
+        return 0;
+      }
       return cmd_val(weights, data, names_csv, imgsz, device, scale_s);
     }
     if (task == "classify") {
@@ -608,6 +777,68 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
         trainer.run();
         return 0;
       }
+      if (version == "v26") {
+        auto names = split_csv(names_csv);
+        if (names.empty()) names = yolocpp::inference::coco_names();
+        int nc_v26 = (int)names.size();
+        yolocpp::datasets::YoloDataset train_ds(data, "train", imgsz, names);
+        auto v26_scale = yolocpp::models::yolo26_scale_from_letter(scale_s);
+        yolocpp::models::Yolo26Detect model(v26_scale, nc_v26);
+        if (!weights.empty()) {
+          auto sd = yolocpp::serialization::load_state_dict(weights);
+          int copied = model->load_from_state_dict(sd.entries);
+          std::cout << "[train] (v26) loaded " << copied
+                    << " weights from " << weights << "\n";
+        }
+        yolocpp::engine::TrainConfig cfg;
+        cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
+        cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
+        cfg.patience = patience; cfg.args_for_yaml = std::move(yaml_args);
+        std::string val_dir = data + "/images/val";
+        if (std::filesystem::exists(val_dir) &&
+            !std::filesystem::is_empty(val_dir)) {
+          yolocpp::datasets::AugConfig vaug; vaug.augment = false;
+          cfg.val_dataset = std::make_shared<yolocpp::datasets::YoloDataset>(
+              data, "val", imgsz, names, vaug);
+          cfg.val_every = 1;
+          std::cout << "[train] val split detected (" << cfg.val_dataset->size()
+                    << " imgs); will track best.pt by mAP@0.5:0.95\n";
+        }
+        yolocpp::engine::TrainerV26 trainer(model, train_ds, cfg);
+        trainer.run();
+        return 0;
+      }
+      if (version == "v11") {
+        auto names = split_csv(names_csv);
+        if (names.empty()) names = yolocpp::inference::coco_names();
+        int nc_v11 = (int)names.size();
+        yolocpp::datasets::YoloDataset train_ds(data, "train", imgsz, names);
+        auto v11_scale = yolocpp::models::yolo11_scale_from_letter(scale_s);
+        yolocpp::models::Yolo11Detect model(v11_scale, nc_v11);
+        if (!weights.empty()) {
+          auto sd = yolocpp::serialization::load_state_dict(weights);
+          int copied = model->load_from_state_dict(sd.entries);
+          std::cout << "[train] (v11) loaded " << copied
+                    << " weights from " << weights << "\n";
+        }
+        yolocpp::engine::TrainConfig cfg;
+        cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
+        cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
+        cfg.patience = patience; cfg.args_for_yaml = std::move(yaml_args);
+        std::string val_dir = data + "/images/val";
+        if (std::filesystem::exists(val_dir) &&
+            !std::filesystem::is_empty(val_dir)) {
+          yolocpp::datasets::AugConfig vaug; vaug.augment = false;
+          cfg.val_dataset = std::make_shared<yolocpp::datasets::YoloDataset>(
+              data, "val", imgsz, names, vaug);
+          cfg.val_every = 1;
+          std::cout << "[train] val split detected (" << cfg.val_dataset->size()
+                    << " imgs); will track best.pt by mAP@0.5:0.95\n";
+        }
+        yolocpp::engine::TrainerV11 trainer(model, train_ds, cfg);
+        trainer.run();
+        return 0;
+      }
       return cmd_train(data, names_csv, imgsz, epochs, batch, lr0,
                        device, scale_s, save_dir, weights, patience,
                        std::move(yaml_args));
@@ -675,7 +906,8 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
       std::cerr << "[error] export needs model=... format=onnx|trt\n";
       return 2;
     }
-    return cmd_export(weights, format, out, imgsz, scale_s, nc, input_name, fp16);
+    return cmd_export(weights, format, out, imgsz, scale_s, nc, input_name, fp16,
+                      a.has("version") ? a.get_str("version") : inferred_version);
   }
   if (mode == "benchmark") {
     if (weights.empty() || source.empty()) {

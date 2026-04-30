@@ -41,7 +41,7 @@ struct SegmentImpl : torch::nn::Module {
   std::vector<double> stride;
 
   SegmentImpl(int nc, int nm, int npr_unscaled, std::vector<int> ch,
-              const Yolo8Scale& scale);
+              const Yolo8Scale& scale, bool legacy = true);
 
   // Forward: returns (decoded_pred, mask_coefs, prototypes)
   //   decoded_pred:  [N, 4 + nc, A]    (xyxy in input pixels, sigmoided cls)
@@ -63,7 +63,8 @@ struct PoseImpl : torch::nn::Module {
   // kpt_shape = (num_kpts, dim) — typically (17, 3) for COCO pose
   int num_kpts = 17, kpt_dim = 3;
 
-  PoseImpl(int nc, int num_kpts, int kpt_dim, std::vector<int> ch);
+  PoseImpl(int nc, int num_kpts, int kpt_dim, std::vector<int> ch,
+           bool legacy = true);
 
   // Forward: returns (decoded_pred [N, 4 + nc, A], keypoints [N, num_kpts*3, A])
   // keypoints layout per-anchor: [x, y, conf] × num_kpts in image pixel coords.
@@ -81,7 +82,7 @@ struct OBBImpl : torch::nn::Module {
   std::vector<int> ch;
   std::vector<double> stride;
 
-  OBBImpl(int nc, int ne, std::vector<int> ch);
+  OBBImpl(int nc, int ne, std::vector<int> ch, bool legacy = true);
 
   // Forward: (decoded_pred [N, 4 + nc, A], angle [N, A])  — angle in radians,
   // decoded into [-π/4, 3π/4].
