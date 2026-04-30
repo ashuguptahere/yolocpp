@@ -43,7 +43,12 @@ ClassifyResult run_classify(M& model, torch::Device dev, int imgsz,
   cv::Mat resized;
   int short_side = std::min(bgr.rows, bgr.cols);
   double scale = (double)imgsz / short_side;
-  cv::resize(bgr, resized, {}, scale, scale, cv::INTER_LINEAR);
+  // INTER_AREA matches torchvision's antialiased BILINEAR for downsampling,
+  // which is what Ultralytics' classify_transforms uses (PIL-based pipeline
+  // with antialias=True). Plain INTER_LINEAR introduces aliasing that
+  // causes top-1 disagreement on real images at imgsz=224.
+  int interp = (scale < 1.0) ? cv::INTER_AREA : cv::INTER_LINEAR;
+  cv::resize(bgr, resized, {}, scale, scale, interp);
   int x0 = (resized.cols - imgsz) / 2;
   int y0 = (resized.rows - imgsz) / 2;
   cv::Mat cropped = resized(cv::Rect(x0, y0, imgsz, imgsz)).clone();

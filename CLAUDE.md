@@ -99,6 +99,97 @@ The marketing-published numbers (e.g. yolo11n=0.395) come from
 directly comparable to our square-letterbox path, and on that
 apples-to-apples basis we're parity-clean.
 
+### Task coverage matrix (predict/val/export/benchmark)
+
+The detect path is parity-validated end-to-end. The four other
+Ultralytics tasks (classify, segment, pose, obb) get the following
+treatment:
+
+```
+                detect   classify   segment   pose      obb
+predict (CLI)   ✓        ✓          ✓         ✓         ✓
+val (CLI)       ✓        ✓          ✓         ✓         ✓
+ONNX export     ✓        ✓          ✓         ✓         ✓
+TRT export      ✓        ✓          ✓         ✓         ✓
+benchmark       ✓        gap        gap       gap       gap
+```
+
+Predict-path smoke (`scripts/task_predict_sweep.sh`) runs every
+(version, task, scale) combination — **75 cases** for v8/v11/v26 × all
+5 tasks × n/s/m/l/x scales — and all 75 load Ultralytics' shipped
+weights without shape mismatch and produce non-empty output on
+`bus.jpg`.
+Per-task notes:
+
+- **classify**: all 15 (version × scale) variants load and forward.
+  Required two fixes vs the original code:
+  - The yolo8-cls YAML uses `max_channels = 1024` for ALL scales
+    (n/s/m/l/x), unlike the detect YAML which caps m at 768 and l/x at
+    512. Without overriding `Yolo8Scale.max_channels` to 1024 inside
+    `Yolo8ClassifyImpl`, layer 7's Conv shape mismatched on m/l/x.
+  - cv2 `INTER_LINEAR` resize → `INTER_AREA` for the downsample step
+    (matches torchvision's antialiased PIL BILINEAR closely), which
+    flipped top-1 on bus.jpg for v8s/v11s before the fix.
+- **segment**: instance counts within ±1 of Python on bus.jpg across
+  all (n,s) × (v8,v11,v26).
+- **pose**: people count = 4 across all variants, matching Python
+  exactly. v26 pose required head-shape fix: Ultralytics' v26 Pose head
+  emits an additional uncertainty (sigma) branch alongside the
+  keypoints (cv4 outputs `nk + nk_sigma = 51 + 34 = 85` channels
+  instead of 51). `Pose26Impl` now allocates the wider cv4 and slices
+  off the sigma channels at inference.
+- **obb**: rotated-box counts within ±2 of Python on bus.jpg.
+
+ONNX exporters for the four task heads were added (`scripts/onnx_export_sweep.sh`
+covers all 75 (version, task, scale) combinations; `tests/parity_compare`
+remains for layer-level detect parity, and `/tmp/yolocpp_parity/validate_onnx_tasks.py`
+runs onnxruntime forward and compares against Ultralytics Python).
+Numerical match summary on the deterministic `arange(N)/N` input:
+
+```
+v8/v11 detect    : max|Δ| ≤ 0.01     (fp32 noise)
+v8/v11 classify  : max|Δ| ≤ 1e-5     (after the cls BN-eps fix below)
+v8/v11 segment   : max|Δ| ≤ 0.002
+v8/v11 pose      : max|Δ| ≤ 0.002    (after the kpt-decode fix below)
+v8/v11 obb       : max|Δ| ≤ 0.004    (after the dist2rbox fix below)
+v26 every task   : (no compare)      — Python emits e2e NMS-free format
+```
+
+Two extra fixes shipped along with the new task exporters:
+
+1. **Classify BN epsilon** — Ultralytics' yaml-built models use BN
+   `eps=1e-3` for detect/seg/pose/obb but plain PyTorch default `1e-5`
+   for the *cls* models. We added `BnEpsScope` (a thread-local switch
+   in `yolo8.cpp`) and push `BnEpsScope(1e-5)` from each `Yolo*Classify`
+   constructor so all internal Convs pick up the right eps. The
+   exporter's `fuse_conv_bn` now also reads `bn->options.eps()` from
+   the live module instead of hardcoding 1e-3.
+2. **Pose keypoint decode** — `PoseImpl::forward` had `(xy*2 − 1)*stride
+   + anchor_pix`, which is Ultralytics' formula minus `0.5*stride`. The
+   correct expression in pixel coords is `xy*2*stride + (anchor_pix
+   − 0.5*stride)`, equivalent to Python's `(xy*2 + cell_idx)*stride`.
+   Caught only by the ONNX validator — it produces a 4–16 pixel keypoint
+   offset depending on level, big enough to fail parity but small enough
+   that the predict path's bus.jpg counts still passed. Same fix applied
+   to `Pose26Impl::forward` and to `emit_kpt_decode` in the ONNX
+   exporter.
+3. **OBB rotated decode** — `OBBImpl::forward` was using the standard
+   `dist2bbox` (axis-aligned) decode from `DetectImpl`, not Ultralytics'
+   angle-aware `dist2rbox`. The rotated decode shifts the box center
+   along the predicted angle:
+   `cx_feat = (xf*cos − yf*sin) + anchor_x_feat` (and similarly for y),
+   where `xf = (r − l)/2`, `yf = (b − t)/2` are the centre offsets in
+   feature units. Width/height are still `l + r` and `t + b`. Inlined
+   the rotated decode in both `OBBImpl::forward` and `OBB26Impl::forward`
+   and added `emit_rbox_decode` + `emit_detect_obb_dfl` /
+   `emit_detect_obb_v26` graph emitters; the three OBB exporters now
+   compute the angle first and feed it into the rotated decode.
+   Numerical diff vs Python collapsed from ~30–80 px to fp32 noise
+   (≤ 4e-3).
+
+Benchmark CLI is still detect-only — straightforward extension to
+classify/seg/pose/obb but not done yet.
+
 ### v11-specific notes
 
 The v11 build introduced new shared infrastructure that all subsequent

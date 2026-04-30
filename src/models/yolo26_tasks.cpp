@@ -63,13 +63,14 @@ Segment26Impl::forward(std::vector<torch::Tensor> x) {
 // ─── Pose26Impl ───────────────────────────────────────────────────────────
 
 Pose26Impl::Pose26Impl(int nc_, int num_kpts_, int kpt_dim_,
-                       std::vector<int> ch_)
-    : nl((int)ch_.size()), nc(nc_), ch(std::move(ch_)),
+                       std::vector<int> ch_, int nk_sigma_)
+    : nk_sigma(nk_sigma_), nl((int)ch_.size()), nc(nc_), ch(std::move(ch_)),
       num_kpts(num_kpts_), kpt_dim(kpt_dim_) {
   nk = num_kpts * kpt_dim;
   detect = register_module("detect", Detect26(nc, ch));
-  int c4 = std::max(ch[0] / 4, nk);
-  cv4    = register_module("cv4", build_cv4_v26(ch, c4, nk));
+  int total = nk + nk_sigma;                  // v26 cv4 emits both kpts + σ
+  int c4 = std::max(ch[0] / 4, total);
+  cv4    = register_module("cv4", build_cv4_v26(ch, c4, total));
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
@@ -78,14 +79,16 @@ Pose26Impl::forward(std::vector<torch::Tensor> x) {
   auto feats   = detect->forward_features(x);
   auto decoded = detect->decode(feats);
 
+  int total = nk + nk_sigma;
   std::vector<torch::Tensor> ks;
   for (int i = 0; i < nl; ++i) {
     auto* seq = cv4[i]->as<torch::nn::SequentialImpl>();
     auto y    = seq->forward(x[i]);
     auto N    = y.size(0);
-    ks.push_back(y.reshape({N, nk, -1}));
+    ks.push_back(y.reshape({N, total, -1}));
   }
-  auto raw = torch::cat(ks, 2);                      // [N, nk, A]
+  auto full = torch::cat(ks, 2);                     // [N, nk+nk_sigma, A]
+  auto raw  = full.slice(/*dim=*/1, 0, nk);          // [N, nk, A] — drop σ for inference
 
   auto N = raw.size(0);
   auto A = raw.size(2);
@@ -111,7 +114,10 @@ Pose26Impl::forward(std::vector<torch::Tensor> x) {
   auto conf = kpts.slice(2, 2, 3);
   auto anc_b = anc_full.transpose(0, 1).unsqueeze(0).unsqueeze(0);
   auto str_b = str_full.unsqueeze(0).unsqueeze(0).unsqueeze(0);
-  auto xy_pix = (xy * 2.0 - 1.0) * str_b + anc_b;
+  // Ultralytics formula: kpts_pix = (xy * 2 + cell_idx) * stride
+  //                              = xy*2*stride + (anchor_pix - 0.5*stride)
+  // (See the matching note in yolo8_tasks.cpp for the bug history.)
+  auto xy_pix = xy * 2.0 * str_b + (anc_b - 0.5 * str_b);
   auto conf_s = conf.sigmoid();
   auto kpts_dec = torch::cat({xy_pix, conf_s}, /*dim=*/2);
 
@@ -130,9 +136,9 @@ OBB26Impl::OBB26Impl(int nc_, int ne_, std::vector<int> ch_)
 std::tuple<torch::Tensor, torch::Tensor>
 OBB26Impl::forward(std::vector<torch::Tensor> x) {
   detect->stride = stride;
-  auto feats   = detect->forward_features(x);
-  auto decoded = detect->decode(feats);
+  auto feats = detect->forward_features(x);
 
+  // ── Angle branch ───────────────────────────────────────────────────────
   std::vector<torch::Tensor> as;
   for (int i = 0; i < nl; ++i) {
     auto* seq = cv4[i]->as<torch::nn::SequentialImpl>();
@@ -140,8 +146,58 @@ OBB26Impl::forward(std::vector<torch::Tensor> x) {
     auto N    = y.size(0);
     as.push_back(y.reshape({N, ne, -1}));
   }
-  auto angle = torch::cat(as, /*dim=*/2);
+  auto angle = torch::cat(as, /*dim=*/2);                    // [N, 1, A]
   angle = (angle.sigmoid() - 0.25) * M_PI;
+
+  // ── Rotated decode (DFL-free; matches Ultralytics' dist2rbox) ──────────
+  std::vector<torch::Tensor> flat_pred;
+  std::vector<torch::Tensor> anchors_feat, str_t;
+  for (int i = 0; i < nl; ++i) {
+    auto t = feats[i];
+    auto N_ = t.size(0);
+    auto h  = t.size(2);
+    auto w  = t.size(3);
+    flat_pred.push_back(t.view({N_, detect->no, h * w}));
+    auto opts = torch::TensorOptions().device(t.device()).dtype(t.dtype());
+    auto sy = torch::arange(h, opts) + 0.5;
+    auto sx = torch::arange(w, opts) + 0.5;
+    auto gy = sy.view({h, 1}).expand({h, w});
+    auto gx = sx.view({1, w}).expand({h, w});
+    anchors_feat.push_back(torch::stack({gx, gy}, -1).view({h * w, 2}));
+    str_t.push_back(torch::full({h * w}, stride[i], opts));
+  }
+  auto pred = torch::cat(flat_pred, /*dim=*/2);              // [N, 4+nc, A]
+  auto anc  = torch::cat(anchors_feat, /*dim=*/0);
+  auto strd = torch::cat(str_t,         /*dim=*/0);
+
+  auto box_raw = pred.slice(/*dim=*/1, 0, 4);                // [N, 4, A]
+  auto cls     = pred.slice(/*dim=*/1, 4, detect->no);
+  auto box_pos = torch::nn::functional::softplus(box_raw);   // distances ≥ 0
+  auto lt = box_pos.slice(/*dim=*/1, 0, 2);
+  auto rb = box_pos.slice(/*dim=*/1, 2, 4);
+
+  auto xf = (rb.select(1, 0) - lt.select(1, 0)) * 0.5;
+  auto yf = (rb.select(1, 1) - lt.select(1, 1)) * 0.5;
+  auto a_sq = angle.squeeze(1);
+  auto cos_a = a_sq.cos();
+  auto sin_a = a_sq.sin();
+  auto anc_x = anc.select(1, 0).unsqueeze(0);
+  auto anc_y = anc.select(1, 1).unsqueeze(0);
+  auto cx_feat = xf * cos_a - yf * sin_a + anc_x;
+  auto cy_feat = xf * sin_a + yf * cos_a + anc_y;
+  auto w_feat  = lt.select(1, 0) + rb.select(1, 0);
+  auto h_feat  = lt.select(1, 1) + rb.select(1, 1);
+  auto cx_pix = cx_feat * strd.unsqueeze(0);
+  auto cy_pix = cy_feat * strd.unsqueeze(0);
+  auto w_pix  = w_feat  * strd.unsqueeze(0);
+  auto h_pix  = h_feat  * strd.unsqueeze(0);
+  auto x1 = cx_pix - w_pix * 0.5;
+  auto y1 = cy_pix - h_pix * 0.5;
+  auto x2 = cx_pix + w_pix * 0.5;
+  auto y2 = cy_pix + h_pix * 0.5;
+  auto xyxy = torch::stack({x1, y1, x2, y2}, /*dim=*/1);
+  cls = cls.sigmoid();
+  auto decoded = torch::cat({xyxy, cls}, /*dim=*/1);
   return {decoded, angle.squeeze(1)};
 }
 
@@ -440,6 +496,9 @@ int Yolo26OBBImpl::load_from_state_dict(
 // ─── Yolo26ClassifyImpl ───────────────────────────────────────────────────
 Yolo26ClassifyImpl::Yolo26ClassifyImpl(Yolo26Scale s, int nc_)
     : scale(s), nc(nc_) {
+  // Classify models use BN eps=1e-5 (not the 1e-3 detect override) — see
+  // yolo8.cpp's BnEpsScope and the matching note in yolo8_classify.cpp.
+  BnEpsScope eps_scope(1e-5);
   model = register_module("model", torch::nn::ModuleList());
   const auto& y = v26_cls_yaml();
   std::vector<int> ch;

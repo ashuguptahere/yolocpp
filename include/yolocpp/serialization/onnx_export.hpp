@@ -16,8 +16,12 @@
 #include <string>
 
 #include "yolocpp/models/yolo11.hpp"
+#include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo26.hpp"
+#include "yolocpp/models/yolo26_tasks.hpp"
 #include "yolocpp/models/yolo8.hpp"
+#include "yolocpp/models/yolo8_classify.hpp"
+#include "yolocpp/models/yolo8_tasks.hpp"
 
 namespace yolocpp::serialization {
 
@@ -56,5 +60,62 @@ void export_yolo11_onnx(models::Yolo11Detect&  model,
 void export_yolo26_onnx(models::Yolo26Detect&  model,
                          const std::string&    path,
                          const OnnxExportConfig& cfg = {});
+
+// ─── Classify exporters ───────────────────────────────────────────────────
+// Output: single tensor [N, nc] of pre-softmax class logits.
+void export_yolo8_classify_onnx(models::Yolo8Classify&  model,
+                                const std::string&     path,
+                                const OnnxExportConfig& cfg = {});
+void export_yolo11_classify_onnx(models::Yolo11Classify& model,
+                                 const std::string&     path,
+                                 const OnnxExportConfig& cfg = {});
+void export_yolo26_classify_onnx(models::Yolo26Classify& model,
+                                 const std::string&     path,
+                                 const OnnxExportConfig& cfg = {});
+
+// ─── Segment exporters ────────────────────────────────────────────────────
+// Three outputs:
+//   "output"  [N, 4 + nc, A]   xyxy + sigmoided cls (same as detect)
+//   "coefs"   [N, nm, A]       mask coefficients
+//   "protos"  [N, nm, h_p, w_p] mask prototypes from P3
+void export_yolo8_segment_onnx(models::Yolo8Segment&  model,
+                                const std::string&     path,
+                                const OnnxExportConfig& cfg = {});
+void export_yolo11_segment_onnx(models::Yolo11Segment& model,
+                                 const std::string&     path,
+                                 const OnnxExportConfig& cfg = {});
+void export_yolo26_segment_onnx(models::Yolo26Segment& model,
+                                 const std::string&     path,
+                                 const OnnxExportConfig& cfg = {});
+
+// ─── Pose exporters ───────────────────────────────────────────────────────
+// Two outputs:
+//   "output"     [N, 4 + nc, A]
+//   "keypoints"  [N, num_kpts*kpt_dim, A]  decoded (xy in pixels, conf sigmoid)
+// For v26 the cv4 emits an extra σ branch (`nk_sigma`) which we slice off
+// inside the graph — keypoint output stays [N, num_kpts*kpt_dim, A].
+void export_yolo8_pose_onnx(models::Yolo8Pose&  model,
+                             const std::string& path,
+                             const OnnxExportConfig& cfg = {});
+void export_yolo11_pose_onnx(models::Yolo11Pose& model,
+                              const std::string& path,
+                              const OnnxExportConfig& cfg = {});
+void export_yolo26_pose_onnx(models::Yolo26Pose& model,
+                              const std::string& path,
+                              const OnnxExportConfig& cfg = {});
+
+// ─── OBB exporters ────────────────────────────────────────────────────────
+// Two outputs:
+//   "output" [N, 4 + nc, A]
+//   "angle"  [N, A]           rotation angle in radians, ∈ [-π/4, 3π/4]
+void export_yolo8_obb_onnx(models::Yolo8OBB&  model,
+                            const std::string& path,
+                            const OnnxExportConfig& cfg = {});
+void export_yolo11_obb_onnx(models::Yolo11OBB& model,
+                             const std::string& path,
+                             const OnnxExportConfig& cfg = {});
+void export_yolo26_obb_onnx(models::Yolo26OBB& model,
+                             const std::string& path,
+                             const OnnxExportConfig& cfg = {});
 
 }  // namespace yolocpp::serialization

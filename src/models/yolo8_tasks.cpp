@@ -134,17 +134,21 @@ PoseImpl::forward(std::vector<torch::Tensor> x) {
   auto str_full = torch::cat(str_t, 0);              // [A]
 
   // Apply ultralytics decode.
-  // kpts[:, :, :2] = (raw[:, :, :2] * 2 + (anc - 0.5)) * stride
-  // kpts[:, :, 2] = sigmoid(raw[:, :, 2])
+  //   In feature units: kpts_xy_feat = xy * 2 + (anchor_feat - 0.5)
+  //                     kpts_xy_pix  = kpts_xy_feat * stride
+  //   With anchor_feat = cell_idx + 0.5 (make_anchors offset),
+  //                     kpts_xy_pix  = (xy * 2 + cell_idx) * stride
+  //                                  = xy * 2 * stride + cell_idx * stride
+  //                                  = xy * 2 * stride + (anchor_pix - 0.5*stride)
+  // (Earlier code had `(xy*2 - 1)*stride + anchor_pix` which is off by
+  //  −0.5*stride per element — produced 4–16 pixel keypoint offsets vs
+  //  Ultralytics depending on level. Caught by the ONNX-vs-Python parity
+  //  comparator.)
   auto xy   = kpts.slice(2, 0, 2);                   // [N, K, 2, A]
   auto conf = kpts.slice(2, 2, 3);                   // [N, K, 1, A]
   auto anc_b = anc_full.transpose(0, 1).unsqueeze(0).unsqueeze(0);  // [1,1,2,A]
   auto str_b = str_full.unsqueeze(0).unsqueeze(0).unsqueeze(0);     // [1,1,1,A]
-  // Note: Ultralytics' new-style decode uses (xy * 2 + anchor - 0.5) * stride
-  // where anchor is in feature units. Our anc_full is already in pixel units
-  // (cell_idx + 0.5) * stride, i.e. anc_pixel. So the equivalent in pixel
-  // coords is: (xy * 2 - 1) * stride + anc_pixel.
-  auto xy_pix = (xy * 2.0 - 1.0) * str_b + anc_b;
+  auto xy_pix = xy * 2.0 * str_b + (anc_b - 0.5 * str_b);
   auto conf_s = conf.sigmoid();
   auto kpts_dec = torch::cat({xy_pix, conf_s}, /*dim=*/2);  // [N, K, 3, A]
 
@@ -163,9 +167,9 @@ OBBImpl::OBBImpl(int nc_, int ne_, std::vector<int> ch_, bool legacy)
 std::tuple<torch::Tensor, torch::Tensor>
 OBBImpl::forward(std::vector<torch::Tensor> x) {
   detect->stride = stride;
-  auto feats   = detect->forward_features(x);
-  auto decoded = detect->decode(feats);
+  auto feats = detect->forward_features(x);
 
+  // ── Angle branch: cv4 + sigmoid + shift to [-π/4, 3π/4] ────────────────
   std::vector<torch::Tensor> as;
   for (int i = 0; i < nl; ++i) {
     auto* seq = cv4[i]->as<torch::nn::SequentialImpl>();
@@ -173,11 +177,69 @@ OBBImpl::forward(std::vector<torch::Tensor> x) {
     auto N    = y.size(0);
     as.push_back(y.reshape({N, ne, -1}));
   }
-  auto angle = torch::cat(as, /*dim=*/2);            // [N, 1, A]
+  auto angle = torch::cat(as, /*dim=*/2);             // [N, ne=1, A]
+  angle = (angle.sigmoid() - 0.25) * M_PI;            // [N, 1, A]
 
-  // Decode: angle = (sigmoid(raw) - 0.25) * pi → range [-π/4, 3π/4]
-  angle = (angle.sigmoid() - 0.25) * M_PI;
-  return {decoded, angle.squeeze(1)};                // [N, A]
+  // ── Rotated-box decode (Ultralytics dist2rbox) ─────────────────────────
+  // Per-anchor: lt, rb in feature units (DFL expectation), then
+  //   xf = (r - l)/2,  yf = (b - t)/2
+  //   cx_feat = xf*cos − yf*sin + anchor_x_feat
+  //   cy_feat = xf*sin + yf*cos + anchor_y_feat
+  //   w_feat  = l + r,   h_feat = t + b
+  // Multiply by stride → pixels; convert to xyxy (the predictor reverses
+  // back to the rotated rect via the angle).
+  std::vector<torch::Tensor> flat_pred;
+  std::vector<torch::Tensor> anchors_feat;            // (cell+0.5) per A
+  std::vector<torch::Tensor> str_t;                   // [A]
+  for (int i = 0; i < nl; ++i) {
+    auto t = feats[i];
+    auto N_ = t.size(0);
+    auto h  = t.size(2);
+    auto w  = t.size(3);
+    flat_pred.push_back(t.view({N_, detect->no, h * w}));
+    auto opts = torch::TensorOptions().device(t.device()).dtype(t.dtype());
+    auto sy = torch::arange(h, opts) + 0.5;
+    auto sx = torch::arange(w, opts) + 0.5;
+    auto gy = sy.view({h, 1}).expand({h, w});
+    auto gx = sx.view({1, w}).expand({h, w});
+    anchors_feat.push_back(torch::stack({gx, gy}, -1).view({h * w, 2}));
+    str_t.push_back(torch::full({h * w}, stride[i], opts));
+  }
+  auto pred = torch::cat(flat_pred, /*dim=*/2);                 // [N, no, A]
+  auto anc  = torch::cat(anchors_feat, /*dim=*/0);              // [A, 2]
+  auto strd = torch::cat(str_t,         /*dim=*/0);             // [A]
+
+  auto box = pred.slice(/*dim=*/1, 0,           4 * reg_max);
+  auto cls = pred.slice(/*dim=*/1, 4 * reg_max, detect->no);
+  auto dist = detect->dfl(box);                                  // [N, 4, A] (feature units)
+  auto lt = dist.slice(/*dim=*/1, 0, 2);                         // [N, 2, A]
+  auto rb = dist.slice(/*dim=*/1, 2, 4);
+
+  auto xf = (rb.select(1, 0) - lt.select(1, 0)) * 0.5;           // [N, A]
+  auto yf = (rb.select(1, 1) - lt.select(1, 1)) * 0.5;
+  auto a_sq = angle.squeeze(1);                                  // [N, A]
+  auto cos_a = a_sq.cos();
+  auto sin_a = a_sq.sin();
+  auto anc_x = anc.select(1, 0).unsqueeze(0);                    // [1, A]
+  auto anc_y = anc.select(1, 1).unsqueeze(0);
+  auto cx_feat = xf * cos_a - yf * sin_a + anc_x;                // [N, A]
+  auto cy_feat = xf * sin_a + yf * cos_a + anc_y;
+  auto w_feat  = lt.select(1, 0) + rb.select(1, 0);              // [N, A]
+  auto h_feat  = lt.select(1, 1) + rb.select(1, 1);
+
+  auto cx_pix = cx_feat * strd.unsqueeze(0);                     // [N, A]
+  auto cy_pix = cy_feat * strd.unsqueeze(0);
+  auto w_pix  = w_feat  * strd.unsqueeze(0);
+  auto h_pix  = h_feat  * strd.unsqueeze(0);
+  auto x1 = cx_pix - w_pix * 0.5;
+  auto y1 = cy_pix - h_pix * 0.5;
+  auto x2 = cx_pix + w_pix * 0.5;
+  auto y2 = cy_pix + h_pix * 0.5;
+  auto xyxy = torch::stack({x1, y1, x2, y2}, /*dim=*/1);         // [N, 4, A]
+
+  cls = cls.sigmoid();
+  auto decoded = torch::cat({xyxy, cls}, /*dim=*/1);             // [N, 4+nc, A]
+  return {decoded, angle.squeeze(1)};
 }
 
 // ─── Shared backbone+neck builder for layers 0..21 ────────────────────────

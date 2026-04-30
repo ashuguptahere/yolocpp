@@ -34,6 +34,20 @@ constexpr Yolo8Scale kYolo8m{0.67, 0.75, 768};
 constexpr Yolo8Scale kYolo8l{1.00, 1.00, 512};
 constexpr Yolo8Scale kYolo8x{1.00, 1.25, 512};
 
+// Thread-local BN epsilon override for ConvImpl / DWConvImpl.
+//
+// Ultralytics' yaml-built models use BN eps=1e-3 for detect/segment/pose/
+// obb, but plain PyTorch default 1e-5 for the *cls models. Switching this
+// global before constructing a Yolo*Classify (and restoring afterward)
+// lets all cls submodules pick up the right eps without threading a new
+// parameter through every CSP block constructor.
+struct BnEpsScope {
+  double prev;
+  BnEpsScope(double new_eps);
+  ~BnEpsScope();
+};
+double get_default_bn_eps();
+
 // ─── Conv = Conv2d + BN + SiLU ─────────────────────────────────────────────
 struct ConvImpl : torch::nn::Module {
   torch::nn::Conv2d      conv{nullptr};

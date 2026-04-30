@@ -193,7 +193,8 @@ int cmd_train(const std::string& root, const std::string& names_csv,
 int cmd_export(const std::string& weights, const std::string& format,
                const std::string& out, int imgsz, const std::string& scale_s,
                int nc, const std::string& input_name, bool fp16,
-               const std::string& version_hint = "") {
+               const std::string& version_hint = "",
+               const std::string& task = "detect") {
   // Determine version: explicit hint (from CLI) or filename inference.
   std::string version = version_hint.empty()
                             ? yolocpp::cli::version_from_filename(weights)
@@ -202,39 +203,112 @@ int cmd_export(const std::string& weights, const std::string& format,
   auto write_onnx = [&](const std::string& onnx_path) {
     yolocpp::serialization::OnnxExportConfig ocfg;
     ocfg.imgsz = imgsz; ocfg.input_name = input_name;
-    if (version == "v11") {
-      yolocpp::models::Yolo11Detect m(
-          yolocpp::models::yolo11_scale_from_letter(scale_s), nc);
-      auto sd = yolocpp::serialization::load_state_dict(weights);
-      m->load_from_state_dict(sd.entries);
-      m->eval();
-      yolocpp::serialization::export_yolo11_onnx(m, onnx_path, ocfg);
-    } else if (version == "v26") {
-      yolocpp::models::Yolo26Detect m(
-          yolocpp::models::yolo26_scale_from_letter(scale_s), nc);
-      auto sd = yolocpp::serialization::load_state_dict(weights);
-      m->load_from_state_dict(sd.entries);
-      m->eval();
-      yolocpp::serialization::export_yolo26_onnx(m, onnx_path, ocfg);
+    auto sd = yolocpp::serialization::load_state_dict(weights);
+    if (task == "detect") {
+      if (version == "v11") {
+        yolocpp::models::Yolo11Detect m(
+            yolocpp::models::yolo11_scale_from_letter(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo11_onnx(m, onnx_path, ocfg);
+      } else if (version == "v26") {
+        yolocpp::models::Yolo26Detect m(
+            yolocpp::models::yolo26_scale_from_letter(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo26_onnx(m, onnx_path, ocfg);
+      } else {
+        yolocpp::models::Yolo8Detect m(parse_scale(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo8_onnx(m, onnx_path, ocfg);
+      }
+    } else if (task == "classify") {
+      if (ocfg.imgsz == 640) ocfg.imgsz = 224;
+      if (nc < 0 || nc == 80) nc = 1000;
+      if (version == "v11") {
+        yolocpp::models::Yolo11Classify m(
+            yolocpp::models::yolo11_scale_from_letter(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo11_classify_onnx(m, onnx_path, ocfg);
+      } else if (version == "v26") {
+        yolocpp::models::Yolo26Classify m(
+            yolocpp::models::yolo26_scale_from_letter(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo26_classify_onnx(m, onnx_path, ocfg);
+      } else {
+        yolocpp::models::Yolo8Classify m(parse_scale(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo8_classify_onnx(m, onnx_path, ocfg);
+      }
+    } else if (task == "segment") {
+      if (version == "v11") {
+        yolocpp::models::Yolo11Segment m(
+            yolocpp::models::yolo11_scale_from_letter(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo11_segment_onnx(m, onnx_path, ocfg);
+      } else if (version == "v26") {
+        yolocpp::models::Yolo26Segment m(
+            yolocpp::models::yolo26_scale_from_letter(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo26_segment_onnx(m, onnx_path, ocfg);
+      } else {
+        yolocpp::models::Yolo8Segment m(parse_scale(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo8_segment_onnx(m, onnx_path, ocfg);
+      }
+    } else if (task == "pose") {
+      if (version == "v11") {
+        yolocpp::models::Yolo11Pose m(
+            yolocpp::models::yolo11_scale_from_letter(scale_s),
+            /*nc=*/1, /*num_kpts=*/17, /*kpt_dim=*/3);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo11_pose_onnx(m, onnx_path, ocfg);
+      } else if (version == "v26") {
+        yolocpp::models::Yolo26Pose m(
+            yolocpp::models::yolo26_scale_from_letter(scale_s),
+            /*nc=*/1, /*num_kpts=*/17, /*kpt_dim=*/3);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo26_pose_onnx(m, onnx_path, ocfg);
+      } else {
+        yolocpp::models::Yolo8Pose m(
+            parse_scale(scale_s), /*nc=*/1, /*num_kpts=*/17, /*kpt_dim=*/3);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo8_pose_onnx(m, onnx_path, ocfg);
+      }
+    } else if (task == "obb") {
+      // OBB nc default is 15 (DOTA) when caller passed the detect default 80.
+      int obb_nc = (nc == 80) ? 15 : nc;
+      if (version == "v11") {
+        yolocpp::models::Yolo11OBB m(
+            yolocpp::models::yolo11_scale_from_letter(scale_s), obb_nc, /*ne=*/1);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo11_obb_onnx(m, onnx_path, ocfg);
+      } else if (version == "v26") {
+        yolocpp::models::Yolo26OBB m(
+            yolocpp::models::yolo26_scale_from_letter(scale_s), obb_nc, /*ne=*/1);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo26_obb_onnx(m, onnx_path, ocfg);
+      } else {
+        yolocpp::models::Yolo8OBB m(parse_scale(scale_s), obb_nc, /*ne=*/1);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo8_obb_onnx(m, onnx_path, ocfg);
+      }
     } else {
-      yolocpp::models::Yolo8Detect m(parse_scale(scale_s), nc);
-      auto sd = yolocpp::serialization::load_state_dict(weights);
-      m->load_from_state_dict(sd.entries);
-      m->eval();
-      yolocpp::serialization::export_yolo8_onnx(m, onnx_path, ocfg);
+      throw std::runtime_error("export: unsupported task '" + task + "'");
     }
   };
 
   auto base_name = [&]() -> std::string {
-    if (version == "v11") return "yolo11";
-    if (version == "v26") return "yolo26";
-    return "yolo8";
+    std::string base = (version == "v11") ? "yolo11"
+                       : (version == "v26") ? "yolo26"
+                       : "yolo8";
+    if (task != "detect") base += "_" + task;
+    return base;
   }();
 
   if (format == "onnx") {
     std::string path = out.empty() ? (base_name + ".onnx") : out;
     write_onnx(path);
-    std::cout << "[export] (" << version << ") wrote " << path << "\n";
+    std::cout << "[export] (" << version << "/" << task << ") wrote "
+              << path << "\n";
     return 0;
   }
   if (format == "trt" || format == "engine") {
@@ -246,7 +320,8 @@ int cmd_export(const std::string& weights, const std::string& format,
     yolocpp::serialization::TrtBuildConfig tcfg;
     tcfg.imgsz = imgsz; tcfg.fp16 = fp16; tcfg.input_name = input_name;
     yolocpp::serialization::build_trt_engine(onnx_tmp, path, tcfg);
-    std::cout << "[export] (" << version << ") wrote " << path << "\n";
+    std::cout << "[export] (" << version << "/" << task << ") wrote "
+              << path << "\n";
     return 0;
   }
   std::cerr << "[export] unknown format: " << format
@@ -907,7 +982,8 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
       return 2;
     }
     return cmd_export(weights, format, out, imgsz, scale_s, nc, input_name, fp16,
-                      a.has("version") ? a.get_str("version") : inferred_version);
+                      a.has("version") ? a.get_str("version") : inferred_version,
+                      task);
   }
   if (mode == "benchmark") {
     if (weights.empty() || source.empty()) {

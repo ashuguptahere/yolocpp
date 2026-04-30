@@ -305,6 +305,9 @@ int Yolo11OBBImpl::load_from_state_dict(
 // ─── Yolo11ClassifyImpl ───────────────────────────────────────────────────
 Yolo11ClassifyImpl::Yolo11ClassifyImpl(Yolo11Scale s, int nc_)
     : scale(s), nc(nc_) {
+  // Classify models use BN eps=1e-5 (not the 1e-3 detect override) — see
+  // yolo8.cpp's BnEpsScope and the matching note in yolo8_classify.cpp.
+  BnEpsScope eps_scope(1e-5);
   model = register_module("model", torch::nn::ModuleList());
   const auto& y = v11_cls_yaml();
   std::vector<int> ch;

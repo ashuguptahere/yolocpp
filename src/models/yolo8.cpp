@@ -21,6 +21,15 @@ static int autopad(int k, int p, int d = 1) {
   return k / 2;
 }
 
+namespace {
+thread_local double g_default_bn_eps = 1e-3;
+}
+double get_default_bn_eps() { return g_default_bn_eps; }
+BnEpsScope::BnEpsScope(double new_eps) : prev(g_default_bn_eps) {
+  g_default_bn_eps = new_eps;
+}
+BnEpsScope::~BnEpsScope() { g_default_bn_eps = prev; }
+
 int scale_channels(int c, const Yolo8Scale& s) {
   c = std::min(c, s.max_channels);
   // ultralytics rounds to multiple of 8 in some places, but for v8 the
@@ -50,12 +59,12 @@ ConvImpl::ConvImpl(int c_in, int c_out, int k, int s, int p, int g, bool act)
                             .groups(g)
                             .bias(false)
                             .dilation(1)));
-  // Ultralytics overrides BN eps to 1e-3 (vs PyTorch default 1e-5). With
-  // typical running_var ~ 0.01–0.05 the BN scale = γ/sqrt(var+eps) is ~3%
-  // larger at eps=1e-5 — that bias compounds through every Conv and was
-  // the v11 full-COCO mAP gap (parity comparator confirmed).
+  // Ultralytics overrides BN eps to 1e-3 for detect/segment/pose/obb
+  // (vs PyTorch default 1e-5). The classify models use plain 1e-5
+  // though — Yolo*Classify constructors push a `BnEpsScope(1e-5)` before
+  // building their children so this picks up the cls value.
   bn = register_module("bn", torch::nn::BatchNorm2d(
-      torch::nn::BatchNorm2dOptions(c_out).eps(1e-3)));
+      torch::nn::BatchNorm2dOptions(c_out).eps(g_default_bn_eps)));
 }
 
 torch::Tensor ConvImpl::forward(torch::Tensor x) {
@@ -85,9 +94,9 @@ DWConvImpl::DWConvImpl(int c_in, int c_out, int k, int s, bool act)
                             .groups(g)
                             .bias(false)
                             .dilation(1)));
-  // Same Ultralytics BN-eps override as ConvImpl above (eps=1e-3, not 1e-5).
+  // Same BN-eps thread-local override as ConvImpl.
   bn = register_module("bn", torch::nn::BatchNorm2d(
-      torch::nn::BatchNorm2dOptions(c_out).eps(1e-3)));
+      torch::nn::BatchNorm2dOptions(c_out).eps(g_default_bn_eps)));
 }
 
 torch::Tensor DWConvImpl::forward(torch::Tensor x) {

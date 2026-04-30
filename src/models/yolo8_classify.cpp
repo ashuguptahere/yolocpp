@@ -22,6 +22,13 @@ torch::Tensor ClassifyImpl::forward(torch::Tensor x) {
 
 Yolo8ClassifyImpl::Yolo8ClassifyImpl(Yolo8Scale s, int nc_)
     : scale(s), nc(nc_) {
+  // Ultralytics' yolo8-cls.yaml uses max_channels=1024 for ALL scales
+  // (n/s/m/l/x), unlike the detect yaml which caps m at 768 and l/x at 512.
+  scale.max_channels = 1024;
+  // Classify models were trained with PyTorch's default BatchNorm eps=1e-5,
+  // not the 1e-3 detect/seg/pose/obb override. Push the thread-local default
+  // so every Conv / DWConv built below picks up 1e-5.
+  BnEpsScope eps_scope(1e-5);
   model = register_module("model", torch::nn::ModuleList());
 
   // YAML for classify:
