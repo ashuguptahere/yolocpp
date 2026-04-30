@@ -43,6 +43,7 @@
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo12.hpp"
+#include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo12_tasks.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
@@ -136,12 +137,36 @@ int cmd_val(const std::string& weights, const std::string& root,
             std::string scale_s) {
   auto names = split_csv(names_csv);
   if (names.empty()) names = yolocpp::inference::coco_names();
-  yolocpp::inference::Predictor p(weights, imgsz, device, (int)names.size(),
-                                   parse_scale(scale_s));
+  int nc = (int)names.size();
   yolocpp::datasets::AugConfig aug; aug.augment = false;
   yolocpp::datasets::YoloDataset ds(root, "val", imgsz, names, aug);
-  auto torch_dev = p.device();
-  auto res = yolocpp::engine::validate(p.model(), ds, torch_dev);
+  auto torch_dev = (device == "cpu") ? torch::Device(torch::kCPU)
+                  : torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0)
+                                                : torch::Device(torch::kCPU);
+
+  auto v_hint = yolocpp::cli::version_from_filename(weights);
+  auto run = [&](auto& model) {
+    auto sd = yolocpp::serialization::load_state_dict(weights);
+    model->load_from_state_dict(sd.entries);
+    model->to(torch_dev); model->eval();
+    auto res = yolocpp::engine::validate(model, ds, torch_dev);
+    std::cout << "mAP@0.5      = " << res.map_50    << "\n"
+              << "mAP@0.5:0.95 = " << res.map_50_95 << "\n";
+  };
+  if (v_hint == "v12") {
+    yolocpp::models::Yolo12Detect m(
+        yolocpp::models::yolo12_scale_from_letter(scale_s), nc);
+    run(m); return 0;
+  }
+  if (v_hint == "v13") {
+    yolocpp::models::Yolo13Detect m(
+        yolocpp::models::yolo13_scale_from_letter(scale_s), nc);
+    run(m); return 0;
+  }
+  // Fallback: v8/v5 path via Predictor (existing behaviour).
+  yolocpp::inference::Predictor p(weights, imgsz, device, nc,
+                                   parse_scale(scale_s));
+  auto res = yolocpp::engine::validate(p.model(), ds, p.device());
   std::cout << "mAP@0.5      = " << res.map_50    << "\n"
             << "mAP@0.5:0.95 = " << res.map_50_95 << "\n";
   return 0;
@@ -159,13 +184,7 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   int nc = (int)names.size();
 
   yolocpp::datasets::YoloDataset train_ds(root, "train", imgsz, names);
-  auto scale = parse_scale(scale_s);
-  yolocpp::models::Yolo8Detect model(scale, nc);
-  if (!init_weights.empty()) {
-    auto sd = yolocpp::serialization::load_state_dict(init_weights);
-    int copied = model->load_from_state_dict(sd.entries);
-    std::cout << "[train] loaded " << copied << " weights from " << init_weights << "\n";
-  }
+
   yolocpp::engine::TrainConfig cfg;
   cfg.epochs     = epochs;
   cfg.batch_size = batch_size;
@@ -187,6 +206,38 @@ int cmd_train(const std::string& root, const std::string& names_csv,
     std::cout << "[train] val split detected (" << cfg.val_dataset->size()
               << " imgs); will track best.pt by mAP@0.5:0.95\n";
   }
+
+  std::string v_hint =
+      init_weights.empty() ? "" : yolocpp::cli::version_from_filename(init_weights);
+
+  auto load_init = [&](auto& model) {
+    if (init_weights.empty()) return;
+    auto sd = yolocpp::serialization::load_state_dict(init_weights);
+    int copied = model->load_from_state_dict(sd.entries);
+    std::cout << "[train] loaded " << copied << " weights from "
+              << init_weights << "\n";
+  };
+
+  if (v_hint == "v12") {
+    yolocpp::models::Yolo12Detect model(
+        yolocpp::models::yolo12_scale_from_letter(scale_s), nc);
+    load_init(model);
+    yolocpp::engine::TrainerV12 trainer(model, train_ds, cfg);
+    trainer.run();
+    return 0;
+  }
+  if (v_hint == "v13") {
+    yolocpp::models::Yolo13Detect model(
+        yolocpp::models::yolo13_scale_from_letter(scale_s), nc);
+    load_init(model);
+    yolocpp::engine::TrainerV13 trainer(model, train_ds, cfg);
+    trainer.run();
+    return 0;
+  }
+  // Default v8 path.
+  auto scale = parse_scale(scale_s);
+  yolocpp::models::Yolo8Detect model(scale, nc);
+  load_init(model);
   yolocpp::engine::Trainer trainer(model, train_ds, cfg);
   trainer.run();
   return 0;
@@ -201,6 +252,24 @@ int cmd_export(const std::string& weights, const std::string& format,
   std::string version = version_hint.empty()
                             ? yolocpp::cli::version_from_filename(weights)
                             : version_hint;
+
+  // v12 / v13 export: ONNX graph emitters not yet written (would mirror
+  // export_yolo11_onnx with new emit_a2c2f / emit_aattn / emit_hyperace).
+  // Bail clearly instead of falling through to v8 and producing a
+  // misleading shape mismatch.
+  if (version == "v12") {
+    std::cerr << "[export] yolo12 ONNX/TRT export not yet implemented "
+                 "— predict path is parity-clean and can be used directly. "
+                 "Need emit_a2c2f / emit_aattn graph emitters.\n";
+    return 2;
+  }
+  if (version == "v13") {
+    std::cerr << "[export] yolo13 ONNX/TRT export not yet implemented "
+                 "— forward path is parity-clean and predict works, but "
+                 "ONNX emitters for HyperACE / FullPAD_Tunnel / "
+                 "AdaHGConv etc. are not written.\n";
+    return 2;
+  }
 
   auto write_onnx = [&](const std::string& onnx_path) {
     yolocpp::serialization::OnnxExportConfig ocfg;
@@ -416,12 +485,13 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
       return 0;
     }
     if (version == "v13") {
-      std::cerr << "[error] yolo13 architecture (HyperACE / DSConv / "
-                   "FullPAD) requires deep specialized work to faithfully "
-                   "reproduce — not yet implemented in our forward path.\n"
-                   "        The .pt loads structurally distinct from v8/v11/v12; "
-                   "fall-through to v8 will fail.\n";
-      return 2;
+      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
+      auto v13_scale = yolocpp::models::yolo13_scale_from_letter(scale_s);
+      auto dets = yolocpp::inference::predict_v13_to_file(
+          weights, source, out, imgsz, device, nc, v13_scale, nm);
+      std::cout << "[predict] (v13) " << dets.size() << " detections, wrote "
+                << out << "\n";
+      return 0;
     }
     static const std::vector<std::string> kKnown = {
         "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",

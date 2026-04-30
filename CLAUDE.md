@@ -27,21 +27,37 @@ canonical local name back to the upstream URL when downloading v3..v10.
 ### Implementation status
 
 `yolo8`, `yolo11`, and `yolo26` are fully end-to-end (train / val /
-predict / ONNX + TRT export across all 5 scales × 5 tasks). `yolo12` is
-end-to-end for **detect** at all 5 scales (Python-equivalent on bus.jpg:
-5/5/5/6/5 detections matching Ultralytics exactly); task heads (segment
-/ pose / obb / classify) are architecturally in place but Ultralytics
-ships only detect weights for v12 (no -cls/-seg/-pose/-obb in v8.3.0+
-assets). `yolo5` is end-to-end via the anchorless `*u.pt` variants.
+predict / ONNX + TRT export across all 5 scales × 5 tasks).
+
+`yolo12` is end-to-end for **detect** at all 5 scales: predict, val, and
+train are wired (validator/trainer templated on model class and
+explicitly instantiated for `Yolo12Detect` in `validator.cpp` /
+`trainer.cpp`). Forward is parity-clean with Ultralytics Python (5/5/5/6/5
+on bus.jpg matching exactly). Task heads (segment / pose / obb /
+classify) are architecturally in place but Ultralytics ships only detect
+weights for v12 (no -cls/-seg/-pose/-obb in v8.3.0+ assets). **ONNX/TRT
+export is the only gap** — graph emitters for `A2C2f` / `AAttn` /
+`ABlock` (with area-windowing reshape and gamma residual gate) are not
+yet written; predict/val/train use libtorch directly.
+
+`yolo13` (iMoonLab fork) is end-to-end for **detect** at all 4 published
+scales (n / s / l / x — iMoonLab does not ship `m`). Forward is parity-
+clean: cls-channel max|Δ| ≤ 7.6e-10 vs Python across all four scales,
+predict on bus.jpg returns 5/5/6/5 detections (within ±1 of Python's
+6/5/7/6 — the residual is conf/iou micro-diff, not a forward bug). The
+new module set lives in `src/models/yolo13.cpp`: `DSConv`,
+`DSBottleneck`, `DSC3k`, `DSC3k2`, `DownsampleConv`, `FullPADTunnel`,
+`FuseModule`, `AdaHyperedgeGen`, `AdaHGConv`, `AdaHGComputation`,
+`C3AH`, `HyperACE`, plus v13-specific `V13AAttn` / `V13ABlock` /
+`V13A2C2f` (the iMoonLab fork's AAttn has separate `qk`/`v` convs and
+k=5 pe instead of v12's fused k=7 qkv). Validator and trainer support
+v13 via the same template-instantiation pattern as v12. Task heads
+(seg / pose / obb / classify) are not architecturally in place for v13
+yet — the iMoonLab fork itself ships only detect.
+
+`yolo5` is end-to-end via the anchorless `*u.pt` variants.
 `yolo3` has the architecture in place (forward-shape verified; weight
-loader deferred). `yolo13` is **not yet implemented** — its HyperACE +
-DSConv + FullPAD architecture is structurally distinct from anything
-else in the family (channel_adjust, learned gates, depthwise-separable
-strides, dual-kernel DSBottlenecks, hypergraph attention) and would
-need a substantial new module set. The CLI recognises v13 from filename
-and from the `channel_adjust`/`gate` markers in the state-dict, then
-errors out with a clear "not implemented" message rather than silently
-loading wrong weights.
+loader deferred).
 
 All other versions exist as **stubs** under `src/models/yolo<N>.cpp` +
 `include/yolocpp/models/yolo<N>.hpp` — the header carries the design
@@ -49,6 +65,44 @@ intent; the source throws a clear `not implemented yet` from `forward()`.
 Implementation order — see README.md — prefers families that reuse the
 v8 Detect / DFL / TAL stack (yolo9/10) before the ones needing new heads
 (yolo4/6/7/13).
+
+### v13-specific notes
+
+The iMoonLab v13 build introduced a non-trivial new module set with
+hypergraph attention. Key structural gotchas caught during parity work:
+
+- **`AdaHyperedgeGen`** (parameterised by `prototype_base`,
+  `context_net`, `pre_head_proj`) generates a per-token hyperedge
+  participation matrix via context-pooled prototypes + multi-head
+  similarity + softmax over the node dim. Per-head prototype split must
+  match Python: `view(B, M, num_heads, head_dim).permute(0, 2, 1, 3)`.
+- **`AdaHGConv`**: `edge_proj` and `node_proj` are `nn.Sequential` of
+  `[Linear, GELU]`. Register them with explicit child names "0" and "1"
+  so state-dict keys land at `<prefix>.0.{weight,bias}`. Reach into the
+  Linear via `seq[0]->as<torch::nn::LinearImpl>()` for weight injection.
+- **`HyperACE`** parse_model rules: `c1 = ch[f[1]]` (the SECOND from-source,
+  not the first). `n` (the yaml repeats column) becomes the `n` arg
+  scaled by depth, with `parse_model n` reset to 1 for the next layer.
+  `num_hyperedges` scales with `0.5 / 1.0 / 1.0 / 1.5` for n/s/l/x.
+  `channel_adjust=True` for n/s, `False` for l/x.
+- **`DownsampleConv`** at l/x: parse_model passes `channel_adjust=False`
+  AND clamps `c2 = c1` (no doubling). At n/s the default doubles
+  channels via a 1×1 Conv.
+- **`DSC3k2`** at l/x: parse_model overrides `dsc3k=True` regardless of
+  YAML — same pattern as `C3k2` at l/x in v11.
+- **`V13A2C2f`** at l/x: parse_model appends `residual=True,
+  mlp_ratio=1.5`. Gamma is initialised to `0.01 * ones(c2)` (NOT
+  `ones(c2)` like v12); state_dict load overwrites.
+- **`V13AAttn` differs from v12 `AAttn`** in three structural ways:
+  separate `qk` (out=2C) and `v` (out=C) convs (NOT a fused 3C qkv);
+  pe is depthwise k=5 (not k=7); pe operates on `v` directly (not on
+  the qkv stream) and is added inside attention output before `proj`.
+  Reusing v12's `AAttnImpl` would shape-mismatch on the pe weight.
+- **End-to-end parity** validated by `tests/test_v13_full.cpp` (cls
+  max|Δ| ≤ 7.6e-10 across all 4 scales) and `tests/test_v13_ada.cpp`
+  (six bit-exact module checks for AdaHyperedgeGen, AdaHGConv,
+  AdaHGComputation, C3AH, HyperACE). Per-layer divergence localizer is
+  `tests/test_v13_layer_diff.cpp` (built but not registered as a ctest).
 
 ### v12-specific notes
 
@@ -139,6 +193,24 @@ The marketing-published numbers (e.g. yolo11n=0.395) come from
 `rect=True` inference. Ultralytics' own `m.val(rect=False)` is what's
 directly comparable to our square-letterbox path, and on that
 apples-to-apples basis we're parity-clean.
+
+### Per-version capability matrix (detect, current state)
+
+```
+              predict    val        train      ONNX/TRT export
+yolo8         ✅         ✅         ✅         ✅
+yolo11        ✅         ✅         ✅         ✅
+yolo12        ✅         ✅         ✅         ⚠️ gap
+yolo13        ✅         ✅         ✅         ⚠️ gap
+yolo26        ✅         ✅         ✅         ✅
+```
+
+The v12/v13 ONNX/TRT export gap is structural: graph emitters for
+`A2C2f` / `AAttn` (and the v13 `HyperACE` / `FullPAD_Tunnel` /
+`AdaHGConv` set) are not yet written. predict/val/train use libtorch
+directly so all three work fully — only deployment via ONNX/TRT is
+blocked. The cli refuses these export paths with a clear message; it
+does not silently fall through to v8.
 
 ### Task coverage matrix (predict/val/export/benchmark)
 

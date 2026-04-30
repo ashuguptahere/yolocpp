@@ -499,5 +499,17 @@ template metrics::mAPResult validate<models::Yolo26Detect>(
 template ValidationOutput validate_with_records<models::Yolo26Detect>(
     models::Yolo26Detect&, const datasets::YoloDataset&, torch::Device,
     inference::NMSConfig);
+template metrics::mAPResult validate<models::Yolo12Detect>(
+    models::Yolo12Detect&, const datasets::YoloDataset&, torch::Device,
+    inference::NMSConfig);
+template ValidationOutput validate_with_records<models::Yolo12Detect>(
+    models::Yolo12Detect&, const datasets::YoloDataset&, torch::Device,
+    inference::NMSConfig);
+template metrics::mAPResult validate<models::Yolo13Detect>(
+    models::Yolo13Detect&, const datasets::YoloDataset&, torch::Device,
+    inference::NMSConfig);
+template ValidationOutput validate_with_records<models::Yolo13Detect>(
+    models::Yolo13Detect&, const datasets::YoloDataset&, torch::Device,
+    inference::NMSConfig);
 
 }  // namespace yolocpp::engine

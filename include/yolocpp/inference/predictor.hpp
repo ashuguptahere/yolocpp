@@ -15,6 +15,7 @@
 #include "yolocpp/inference/nms.hpp"
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo12.hpp"
+#include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo8.hpp"
 
@@ -98,6 +99,15 @@ std::vector<Detection> predict_v12_to_file(
     const std::string& out_path, int imgsz = 640,
     const std::string& device = "", int nc = 80,
     models::Yolo12Scale scale = models::kYolo12n,
+    NMSConfig conf = {});
+
+// Predict with a YOLO13 (iMoonLab fork: HyperACE / FullPAD) detection
+// model. Filename convention `yolo13<scale>.pt`; only n/s/l/x ship.
+std::vector<Detection> predict_v13_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 640,
+    const std::string& device = "", int nc = 80,
+    models::Yolo13Scale scale = models::kYolo13n,
     NMSConfig conf = {});
 
 }  // namespace yolocpp::inference

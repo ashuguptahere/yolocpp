@@ -44,6 +44,18 @@ yolocpp_add_test(test_ddp_smoke     test_ddp_smoke.cpp)
 yolocpp_add_test(test_v3_v5         test_v3_v5.cpp)
 yolocpp_add_test(test_yolo11        test_yolo11.cpp)
 yolocpp_add_test(test_yolo26_train  test_yolo26_train.cpp)
+yolocpp_add_test(test_v13_ada       test_v13_ada.cpp)
+yolocpp_add_test(test_v13_full      test_v13_full.cpp)
+set_tests_properties(test_v13_full PROPERTIES
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 120)
+add_executable(test_v13_layer_diff test_v13_layer_diff.cpp)
+target_link_libraries(test_v13_layer_diff PRIVATE yolocpp_core)
+target_link_options(test_v13_layer_diff PRIVATE "LINKER:--disable-new-dtags")
+set_target_properties(test_v13_layer_diff PROPERTIES
+  BUILD_RPATH   "${_yolocpp_rpath}"
+  INSTALL_RPATH "${_yolocpp_rpath}"
+)
 set_tests_properties(test_yolo11 PROPERTIES
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 300)

@@ -649,6 +649,8 @@ void TrainerT<M>::run() {
 template class TrainerT<models::Yolo8Detect>;
 template class TrainerT<models::Yolo5Detect>;
 template class TrainerT<models::Yolo11Detect>;
+template class TrainerT<models::Yolo12Detect>;
+template class TrainerT<models::Yolo13Detect>;
 template class TrainerT<models::Yolo26Detect>;
 
 }  // namespace yolocpp::engine

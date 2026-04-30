@@ -23,6 +23,8 @@
 #include "yolocpp/losses/yolo26_loss.hpp"
 #include "yolocpp/losses/yolo8_loss.hpp"
 #include "yolocpp/models/yolo11.hpp"
+#include "yolocpp/models/yolo12.hpp"
+#include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo5.hpp"
 #include "yolocpp/models/yolo8.hpp"
@@ -85,6 +87,8 @@ class TrainerT {
 using Trainer    = TrainerT<models::Yolo8Detect>;
 using TrainerV5  = TrainerT<models::Yolo5Detect>;
 using TrainerV11 = TrainerT<models::Yolo11Detect>;
+using TrainerV12 = TrainerT<models::Yolo12Detect>;
+using TrainerV13 = TrainerT<models::Yolo13Detect>;
 using TrainerV26 = TrainerT<models::Yolo26Detect>;
 
 }  // namespace yolocpp::engine
