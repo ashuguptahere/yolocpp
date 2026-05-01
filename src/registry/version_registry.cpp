@@ -36,6 +36,8 @@
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
 #include "yolocpp/datasets/yolo_dataset.hpp"
+#include "yolocpp/engine/benchmark.hpp"
+#include "yolocpp/engine/benchmark_internal.hpp"
 #include "yolocpp/engine/trainer.hpp"
 #include "yolocpp/engine/validator.hpp"
 #include "yolocpp/inference/nms.hpp"
@@ -156,6 +158,20 @@ void run_train_with(Holder& m,
   trainer.run();
 }
 
+// Shared PT-FP32 benchmark driver: load weights into the supplied
+// holder, wrap in GenericPredictor, time it via bench_one().
+template <typename Holder>
+engine::BenchResult run_bench_pt_with(Holder& m,
+                                      const engine::BenchConfig& cfg,
+                                      const cv::Mat& img) {
+  auto sd = serialization::load_state_dict(cfg.weights);
+  m->load_from_state_dict(sd.entries);
+  auto dev = engine::detail::pick_device(cfg.device);
+  engine::detail::GenericPredictor<Holder> p(std::move(m), cfg.imgsz, dev);
+  return engine::detail::bench_one("PT (libtorch FP32)", img, p,
+                                    cfg.warmup_iters, cfg.iters);
+}
+
 // Default imgsz lookups shared by multiple versions.
 int detect_imgsz_default(const std::string& /*scale*/,
                          const std::string& task) {
@@ -200,6 +216,11 @@ VersionAdapter make_v3() {
                           const engine::TrainConfig& cfg) {
     models::Yolo3 m(models::kYolo3, nc);
     run_train_with(m, init, std::move(ds), cfg);
+  };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string&) {
+    models::Yolo3 m(models::kYolo3, cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
   };
   return a;
 }
@@ -248,6 +269,11 @@ VersionAdapter make_v4() {
     models::Yolo4 m(nc);
     run_train_with(m, init, std::move(ds), cfg);
   };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string&) {
+    models::Yolo4 m(cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
+  };
   return a;
 }
 
@@ -291,6 +317,11 @@ VersionAdapter make_v5() {
                           const engine::TrainConfig& cfg) {
     models::Yolo5Detect m(models::yolo5_scale_from_letter(scale), nc);
     run_train_with(m, init, std::move(ds), cfg);
+  };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string& scale) {
+    models::Yolo5Detect m(models::yolo5_scale_from_letter(scale), cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
   };
   return a;
 }
@@ -345,6 +376,12 @@ VersionAdapter make_v6() {
     models::Yolo6 m(nc, r.scale, /*reg_max=*/16, /*p6=*/r.p6);
     run_train_with(m, init, std::move(ds), cfg);
   };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string& scale) {
+    auto r = resolve_v6(scale);
+    models::Yolo6 m(cfg.nc, r.scale, /*reg_max=*/16, /*p6=*/r.p6);
+    return run_bench_pt_with(m, cfg, img);
+  };
   return a;
 }
 
@@ -391,6 +428,11 @@ VersionAdapter make_v7() {
                           const engine::TrainConfig& cfg) {
     models::Yolo7 m(models::yolo7_scale_from_letter(scale), nc);
     run_train_with(m, init, std::move(ds), cfg);
+  };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string& scale) {
+    models::Yolo7 m(models::yolo7_scale_from_letter(scale), cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
   };
   return a;
 }
@@ -480,6 +522,11 @@ VersionAdapter make_v9() {
     models::Yolo9 m(models::yolo9_scale_from_letter(scale), nc);
     run_train_with(m, init, std::move(ds), cfg);
   };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string& scale) {
+    models::Yolo9 m(models::yolo9_scale_from_letter(scale), cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
+  };
   return a;
 }
 
@@ -522,6 +569,11 @@ VersionAdapter make_v10() {
                           const engine::TrainConfig& cfg) {
     models::Yolo10 m(models::yolo10_scale_from_letter(scale), nc);
     run_train_with(m, init, std::move(ds), cfg);
+  };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string& scale) {
+    models::Yolo10 m(models::yolo10_scale_from_letter(scale), cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
   };
   return a;
 }
@@ -589,6 +641,11 @@ VersionAdapter make_v11() {
     models::Yolo11Detect m(models::yolo11_scale_from_letter(scale), nc);
     run_train_with(m, init, std::move(ds), cfg);
   };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string& scale) {
+    models::Yolo11Detect m(models::yolo11_scale_from_letter(scale), cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
+  };
   return a;
 }
 
@@ -634,6 +691,11 @@ VersionAdapter make_v12() {
     models::Yolo12Detect m(models::yolo12_scale_from_letter(scale), nc);
     run_train_with(m, init, std::move(ds), cfg);
   };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string& scale) {
+    models::Yolo12Detect m(models::yolo12_scale_from_letter(scale), cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
+  };
   return a;
 }
 
@@ -677,6 +739,11 @@ VersionAdapter make_v13() {
                           const engine::TrainConfig& cfg) {
     models::Yolo13Detect m(models::yolo13_scale_from_letter(scale), nc);
     run_train_with(m, init, std::move(ds), cfg);
+  };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string& scale) {
+    models::Yolo13Detect m(models::yolo13_scale_from_letter(scale), cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
   };
   return a;
 }
@@ -743,6 +810,11 @@ VersionAdapter make_v26() {
                           const engine::TrainConfig& cfg) {
     models::Yolo26Detect m(models::yolo26_scale_from_letter(scale), nc);
     run_train_with(m, init, std::move(ds), cfg);
+  };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                      const std::string& scale) {
+    models::Yolo26Detect m(models::yolo26_scale_from_letter(scale), cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
   };
   return a;
 }

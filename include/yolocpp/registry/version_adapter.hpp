@@ -47,6 +47,11 @@ class YoloDataset;
 }
 namespace yolocpp::engine {
 struct TrainConfig;
+struct BenchConfig;
+struct BenchResult;
+}
+namespace cv {
+class Mat;
 }
 
 namespace yolocpp::registry {
@@ -131,6 +136,15 @@ struct VersionAdapter {
                      yolocpp::datasets::YoloDataset train_ds,
                      const yolocpp::engine::TrainConfig& cfg)>
       run_train_detect;
+
+  // PT FP32 benchmark — construct the right holder, wrap in
+  // `engine::detail::GenericPredictor`, run `bench_one()`. Returns
+  // the timed `BenchResult`. v8 leaves this empty (handled by the
+  // legacy `inference::Predictor` benchmark fallback).
+  std::function<yolocpp::engine::BenchResult(const yolocpp::engine::BenchConfig& cfg,
+                                             const cv::Mat& img,
+                                             const std::string& scale)>
+      benchmark_pt;
 };
 
 class Registry {

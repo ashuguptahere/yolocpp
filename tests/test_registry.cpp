@@ -50,6 +50,8 @@ int main() {
              id + " has no run_val hook");
       EXPECT(static_cast<bool>(a->run_train_detect),
              id + " has no run_train_detect hook");
+      EXPECT(static_cast<bool>(a->benchmark_pt),
+             id + " has no benchmark_pt hook");
     } else {
       EXPECT(!a->predict_to_file,
              "v8 must NOT register predict_to_file (uses unified Predictor)");
@@ -57,6 +59,8 @@ int main() {
              "v8 must NOT register run_val (uses unified Predictor)");
       EXPECT(!a->run_train_detect,
              "v8 must NOT register run_train_detect (uses engine::Trainer)");
+      EXPECT(!a->benchmark_pt,
+             "v8 must NOT register benchmark_pt (legacy Predictor fallback)");
     }
 
     std::set<std::string> tasks(a->supported_tasks.begin(),
