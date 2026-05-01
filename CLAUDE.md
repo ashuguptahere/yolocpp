@@ -129,6 +129,16 @@ preemptively bump.
   unwanted.
 - **Never push.** The maintainer pushes by hand. Don't add `git push`
   to scripts or run it from automation either.
+- **Test before every commit.** Build (`cmake --build build`), run the
+  relevant ctest subset, and exercise the touched CLI / API path on a
+  real artefact when one is available. Never `git add -A` and commit
+  on the assumption that "it should work" — verify each diff first.
+- **Rethink before staging.** Before `git add`, re-read `git diff` and
+  remove anything that isn't required by the task: stray
+  whitespace-only edits, trial debug prints, half-finished
+  refactors, unrelated rewordings, files touched by accident. The
+  commit must be the *minimum* diff that achieves the goal — no
+  drive-by changes piggy-backing on the same commit.
 - New tasks discovered mid-implementation: file under the parent's
   `#NA`/`#NB` suffix in TODO.md when related + dependent, otherwise
   append to the end of the queue.
