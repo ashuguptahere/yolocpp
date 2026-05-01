@@ -31,6 +31,14 @@ struct BenchConfig {
   bool        run_pt      = true;
   bool        run_trt_fp32 = true;
   bool        run_trt_fp16 = true;
+  // YOLO version + scale dispatch. When empty, inferred from the
+  // weights filename (`cli::version_from_filename` / `scale_from_filename`).
+  // The PT path constructs the correct model (Yolo3/4/5/6/7/8/9/10/11/
+  // 12/13/26 detect) and the ONNX export step calls the matching
+  // `export_yolo*_onnx`. TRT inference is graph-agnostic (TrtPredictor).
+  std::string version;            // "v3", "v5", "v6", ..., "v26"
+  std::string scale;              // "n", "s", "m", "l", "x", or version-specific
+  int         nc = 80;
 };
 
 struct BenchResult {

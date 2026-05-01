@@ -19,7 +19,7 @@
 //     box regression, depthwise-separable cv2/cv3 (mobile-friendly).
 //   - Predict / eval / ONNX export paths are wired end-to-end across all
 //     5 scales × 5 tasks. TRT export goes through the ONNX route.
-//   - Training requires the STAL assigner + ProgLoss; not yet implemented
+//   - Training uses the STAL assigner + ProgLoss via Yolo26Loss
 //     (the v8 DFL-based loss is incompatible with the DFL-free head).
 //
 

@@ -1,122 +1,248 @@
 #include "yolocpp/models/yolo3.hpp"
 
+#include <stdexcept>
+
 namespace yolocpp::models {
 
-// ─── DarknetResidual ────────────────────────────────────────────────────
-DarknetResidualImpl::DarknetResidualImpl(int c) {
-  cv1 = register_module("cv1", Conv(c,     c / 2, 1, 1));
-  cv2 = register_module("cv2", Conv(c / 2, c,     3, 1));
+namespace {
+struct Spec {
+  std::vector<int> from;
+  int              n_repeat;
+  std::string      kind;
+  std::vector<int> args;   // Conv: [c_out, k, s]; Bottleneck: [c_out, shortcut(0/1)]
+};
+const std::vector<Spec>& v3_yaml() {
+  // Ultralytics yolov3.yaml @ depth/width 1.0. Bottleneck shortcut
+  // defaults to True; we explicitly mark False with args[1]=0.
+  static const std::vector<Spec> y = {
+      // Backbone (darknet-53)
+      {{-1}, 1, "Conv",       {32, 3, 1}},                  // 0
+      {{-1}, 1, "Conv",       {64, 3, 2}},                  // 1 P1/2
+      {{-1}, 1, "Bottleneck", {64}},                        // 2
+      {{-1}, 1, "Conv",       {128, 3, 2}},                 // 3 P2/4
+      {{-1}, 2, "Bottleneck", {128}},                       // 4
+      {{-1}, 1, "Conv",       {256, 3, 2}},                 // 5 P3/8
+      {{-1}, 8, "Bottleneck", {256}},                       // 6
+      {{-1}, 1, "Conv",       {512, 3, 2}},                 // 7 P4/16
+      {{-1}, 8, "Bottleneck", {512}},                       // 8
+      {{-1}, 1, "Conv",       {1024, 3, 2}},                // 9 P5/32
+      {{-1}, 4, "Bottleneck", {1024}},                      // 10
+      // Head — P5 branch
+      {{-1}, 1, "Bottleneck", {1024, 0}},                   // 11
+      {{-1}, 1, "Conv",       {512, 1, 1}},                 // 12
+      {{-1}, 1, "Conv",       {1024, 3, 1}},                // 13
+      {{-1}, 1, "Conv",       {512, 1, 1}},                 // 14
+      {{-1}, 1, "Conv",       {1024, 3, 1}},                // 15  P5
+      // Head — P4 branch
+      {{-2}, 1, "Conv",       {256, 1, 1}},                 // 16  (from layer 14)
+      {{-1}, 1, "Upsample",   {2}},                         // 17
+      {{-1, 8}, 1, "Concat",  {}},                          // 18
+      {{-1}, 1, "Bottleneck", {512, 0}},                    // 19
+      {{-1}, 1, "Bottleneck", {512, 0}},                    // 20
+      {{-1}, 1, "Conv",       {256, 1, 1}},                 // 21
+      {{-1}, 1, "Conv",       {512, 3, 1}},                 // 22  P4
+      // Head — P3 branch
+      {{-2}, 1, "Conv",       {128, 1, 1}},                 // 23  (from layer 21)
+      {{-1}, 1, "Upsample",   {2}},                         // 24
+      {{-1, 6}, 1, "Concat",  {}},                          // 25
+      {{-1}, 1, "Bottleneck", {256, 0}},                    // 26
+      {{-1}, 2, "Bottleneck", {256, 0}},                    // 27  P3
+      {{27, 22, 15}, 1, "Detect", {}},                      // 28
+  };
+  return y;
 }
-torch::Tensor DarknetResidualImpl::forward(torch::Tensor x) {
-  return x + cv2(cv1(x));
+}  // namespace
+
+Yolo3Impl::Yolo3Impl(Yolo3Scale scale_, int nc_) : scale(scale_), nc(nc_) {
+  model = register_module("model", torch::nn::ModuleList());
+  const auto& yaml = v3_yaml();
+  std::vector<int> ch;
+  const int c_in_img = 3;
+
+  auto resolve_idx = [](int f, int i) { return f < 0 ? i + f : f; };
+  auto in_ch_for = [&](size_t i) -> int {
+    const auto& s = yaml[i];
+    if (s.kind == "Concat") {
+      int sum = 0;
+      for (int f : s.from) {
+        int idx = resolve_idx(f, (int)i);
+        sum += (idx == -1) ? c_in_img : ch[idx];
+      }
+      return sum;
+    }
+    int f = s.from[0];
+    int idx = resolve_idx(f, (int)i);
+    return (idx == -1) ? c_in_img : ch[idx];
+  };
+
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    int in_ch = in_ch_for(i);
+
+    if (s.kind == "Conv") {
+      int c_out = s.args[0], k = s.args[1], st = s.args[2];
+      model->push_back(Conv(in_ch, c_out, k, st));
+      ch.push_back(c_out);
+    } else if (s.kind == "Bottleneck") {
+      int c_out = s.args[0];
+      bool shortcut = !(s.args.size() > 1 && s.args[1] == 0);
+      // Upstream parse_model: n=1 → bare module; n>1 → nn.Sequential.
+      // Match the keys exactly: bare gives `model.<i>.cv1.*`, Sequential
+      // gives `model.<i>.<sub>.cv1.*`.
+      if (s.n_repeat == 1) {
+        model->push_back(Bottleneck(in_ch, c_out, shortcut, /*g=*/1, /*e=*/0.5));
+      } else {
+        // Build a Sequential so its children are named "0".."n-1".
+        torch::nn::Sequential seq;
+        // First Bottleneck takes in_ch (may differ from c_out for the
+        // first one in the chain); subsequent take c_out → c_out.
+        seq->push_back(Bottleneck(in_ch, c_out, shortcut, 1, 0.5));
+        for (int j = 1; j < s.n_repeat; ++j) {
+          seq->push_back(Bottleneck(c_out, c_out, shortcut, 1, 0.5));
+        }
+        model->push_back(seq);
+      }
+      ch.push_back(c_out);
+    } else if (s.kind == "Upsample") {
+      double sf = (double)s.args[0];
+      model->push_back(torch::nn::Upsample(
+          torch::nn::UpsampleOptions()
+              .scale_factor(std::vector<double>{sf, sf})
+              .mode(torch::kNearest)));
+      ch.push_back(in_ch);
+    } else if (s.kind == "Concat") {
+      model->push_back(torch::nn::Identity());
+      ch.push_back(in_ch);
+    } else if (s.kind == "Detect") {
+      std::vector<int> det_ch;
+      for (int f : s.from) det_ch.push_back(ch[f]);
+      model->push_back(Detect(nc, det_ch, /*legacy=*/true));
+      ch.push_back(0);
+    } else {
+      throw std::runtime_error("yolo3: unknown layer kind '" + s.kind + "'");
+    }
+  }
 }
 
-// ─── DarknetBlock ───────────────────────────────────────────────────────
-DarknetBlockImpl::DarknetBlockImpl(int c_in, int c_out, int n) {
-  down = register_module("down", Conv(c_in, c_out, 3, 2));
-  m    = register_module("m",    torch::nn::ModuleList());
-  for (int i = 0; i < n; ++i) m->push_back(DarknetResidual(c_out));
-}
-torch::Tensor DarknetBlockImpl::forward(torch::Tensor x) {
-  x = down(x);
-  for (size_t i = 0; i < m->size(); ++i)
-    x = m[i]->as<DarknetResidualImpl>()->forward(x);
-  return x;
-}
+torch::Tensor Yolo3Impl::forward_eval(torch::Tensor x) {
+  const auto& yaml = v3_yaml();
+  std::vector<torch::Tensor> outs(yaml.size());
+  auto resolve_idx = [](int f, int i) { return f < 0 ? i + f : f; };
 
-// ─── Yolo3 ─────────────────────────────────────────────────────────────
-Yolo3Impl::Yolo3Impl(int nc_) : nc(nc_) {
-  // Backbone
-  stem = register_module("stem", Conv(3, 32, 3, 1));
-  b1   = register_module("b1", DarknetBlock(32,  64,  1));
-  b2   = register_module("b2", DarknetBlock(64,  128, 2));
-  b3   = register_module("b3", DarknetBlock(128, 256, 8));   // P3
-  b4   = register_module("b4", DarknetBlock(256, 512, 8));   // P4
-  b5   = register_module("b5", DarknetBlock(512, 1024, 4));  // P5
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    torch::Tensor in;
+    if (s.kind == "Concat") {
+      std::vector<torch::Tensor> parts;
+      for (int f : s.from) {
+        int idx = resolve_idx(f, (int)i);
+        parts.push_back(idx == -1 ? x : outs[idx]);
+      }
+      in = torch::cat(parts, /*dim=*/1);
+    } else if (s.kind != "Detect") {
+      int f   = s.from[0];
+      int idx = resolve_idx(f, (int)i);
+      in      = (idx == -1) ? x : outs[idx];
+    }
 
-  int out_ch = 3 * (5 + nc);  // 3 anchors × (4 box + 1 obj + nc cls)
-
-  // P5 head — 5 alternating 1×1 / 3×3 convs, then output 1×1.
-  p5_pre1 = register_module("p5_pre1", Conv(1024, 512, 1, 1));
-  p5_pre2 = register_module("p5_pre2", Conv(512,  1024, 3, 1));
-  p5_pre3 = register_module("p5_pre3", Conv(1024, 512, 1, 1));
-  p5_pre4 = register_module("p5_pre4", Conv(512,  1024, 3, 1));
-  p5_pre5 = register_module("p5_pre5", Conv(1024, 512, 1, 1));
-  p5_out_pre = register_module("p5_out_pre", Conv(512, 1024, 3, 1));
-  p5_out = register_module("p5_out",
-      torch::nn::Conv2d(torch::nn::Conv2dOptions(1024, out_ch, 1)));
-
-  // P4 head — reduce P5_pre5 (512 ch) → 256 ch, upsample, concat with b4 (512 ch)
-  // → 768 ch, then 5-conv tower outputting at 256.
-  p4_red  = register_module("p4_red", Conv(512, 256, 1, 1));
-  p4_pre1 = register_module("p4_pre1", Conv(768, 256, 1, 1));
-  p4_pre2 = register_module("p4_pre2", Conv(256, 512, 3, 1));
-  p4_pre3 = register_module("p4_pre3", Conv(512, 256, 1, 1));
-  p4_pre4 = register_module("p4_pre4", Conv(256, 512, 3, 1));
-  p4_pre5 = register_module("p4_pre5", Conv(512, 256, 1, 1));
-  p4_out_pre = register_module("p4_out_pre", Conv(256, 512, 3, 1));
-  p4_out = register_module("p4_out",
-      torch::nn::Conv2d(torch::nn::Conv2dOptions(512, out_ch, 1)));
-
-  // P3 head — reduce P4_pre5 (256 ch) → 128 ch, upsample, concat with b3 (256 ch)
-  // → 384 ch, then 5-conv tower at 128.
-  p3_red  = register_module("p3_red", Conv(256, 128, 1, 1));
-  p3_pre1 = register_module("p3_pre1", Conv(384, 128, 1, 1));
-  p3_pre2 = register_module("p3_pre2", Conv(128, 256, 3, 1));
-  p3_pre3 = register_module("p3_pre3", Conv(256, 128, 1, 1));
-  p3_pre4 = register_module("p3_pre4", Conv(128, 256, 3, 1));
-  p3_pre5 = register_module("p3_pre5", Conv(256, 128, 1, 1));
-  p3_out_pre = register_module("p3_out_pre", Conv(128, 256, 3, 1));
-  p3_out = register_module("p3_out",
-      torch::nn::Conv2d(torch::nn::Conv2dOptions(256, out_ch, 1)));
+    if (s.kind == "Conv") {
+      outs[i] = model[i]->as<ConvImpl>()->forward(in);
+    } else if (s.kind == "Bottleneck") {
+      if (s.n_repeat == 1) {
+        outs[i] = model[i]->as<BottleneckImpl>()->forward(in);
+      } else {
+        outs[i] = model[i]->as<torch::nn::SequentialImpl>()->forward(in);
+      }
+    } else if (s.kind == "Upsample") {
+      outs[i] = model[i]->as<torch::nn::UpsampleImpl>()->forward(in);
+    } else if (s.kind == "Concat") {
+      outs[i] = in;
+    } else if (s.kind == "Detect") {
+      auto* d = model[i]->as<DetectImpl>();
+      std::vector<torch::Tensor> det_in;
+      for (int f : s.from) det_in.push_back(outs[f]);
+      if (stride.empty()) {
+        int img_h = (int)x.size(2);
+        for (auto& t : det_in) stride.push_back((double)img_h / (double)t.size(2));
+        d->stride = stride;
+      }
+      auto feats = d->forward_features(det_in);
+      outs[i]    = d->decode(feats);
+    }
+  }
+  return outs.back();
 }
 
-std::vector<torch::Tensor> Yolo3Impl::forward(torch::Tensor x) {
-  // Backbone
-  auto y = stem(x);
-  y = b1(y);
-  y = b2(y);
-  auto p3_feat = b3(y);
-  auto p4_feat = b4(p3_feat);
-  auto p5_feat = b5(p4_feat);
+std::vector<torch::Tensor> Yolo3Impl::forward_train(torch::Tensor x) {
+  // Mirror of forward_eval up to (but not through) the Detect decode — we
+  // return d->forward_features(det_in) directly so V8DetectionLoss can
+  // consume the per-scale raw [B, 4*reg_max+nc, H_i, W_i] feature maps.
+  const auto& yaml = v3_yaml();
+  std::vector<torch::Tensor> outs(yaml.size());
+  auto resolve_idx = [](int f, int i) { return f < 0 ? i + f : f; };
 
-  // P5 head
-  auto x5 = p5_pre1(p5_feat);
-  x5 = p5_pre2(x5);
-  x5 = p5_pre3(x5);
-  x5 = p5_pre4(x5);
-  x5 = p5_pre5(x5);
-  auto out5 = p5_out(p5_out_pre(x5));
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    torch::Tensor in;
+    if (s.kind == "Concat") {
+      std::vector<torch::Tensor> parts;
+      for (int f : s.from) {
+        int idx = resolve_idx(f, (int)i);
+        parts.push_back(idx == -1 ? x : outs[idx]);
+      }
+      in = torch::cat(parts, /*dim=*/1);
+    } else if (s.kind != "Detect") {
+      int f   = s.from[0];
+      int idx = resolve_idx(f, (int)i);
+      in      = (idx == -1) ? x : outs[idx];
+    }
 
-  // P4 head: upsample(reduce(x5)) ⊕ p4_feat
-  auto u4 = torch::nn::functional::interpolate(
-      p4_red(x5),
-      torch::nn::functional::InterpolateFuncOptions()
-          .scale_factor(std::vector<double>{2.0, 2.0})
-          .mode(torch::kNearest));
-  auto x4 = torch::cat({u4, p4_feat}, /*dim=*/1);
-  x4 = p4_pre1(x4);
-  x4 = p4_pre2(x4);
-  x4 = p4_pre3(x4);
-  x4 = p4_pre4(x4);
-  x4 = p4_pre5(x4);
-  auto out4 = p4_out(p4_out_pre(x4));
+    if (s.kind == "Conv") {
+      outs[i] = model[i]->as<ConvImpl>()->forward(in);
+    } else if (s.kind == "Bottleneck") {
+      if (s.n_repeat == 1) {
+        outs[i] = model[i]->as<BottleneckImpl>()->forward(in);
+      } else {
+        outs[i] = model[i]->as<torch::nn::SequentialImpl>()->forward(in);
+      }
+    } else if (s.kind == "Upsample") {
+      outs[i] = model[i]->as<torch::nn::UpsampleImpl>()->forward(in);
+    } else if (s.kind == "Concat") {
+      outs[i] = in;
+    } else if (s.kind == "Detect") {
+      auto* d = model[i]->as<DetectImpl>();
+      std::vector<torch::Tensor> det_in;
+      for (int f : s.from) det_in.push_back(outs[f]);
+      if (stride.empty()) {
+        int img_h = (int)x.size(2);
+        for (auto& t : det_in) stride.push_back((double)img_h / (double)t.size(2));
+        d->stride = stride;
+      }
+      return d->forward_features(det_in);
+    }
+  }
+  TORCH_CHECK(false, "Yolo3Impl::forward_train: no Detect layer in yaml");
+}
 
-  // P3 head: upsample(reduce(x4)) ⊕ p3_feat
-  auto u3 = torch::nn::functional::interpolate(
-      p3_red(x4),
-      torch::nn::functional::InterpolateFuncOptions()
-          .scale_factor(std::vector<double>{2.0, 2.0})
-          .mode(torch::kNearest));
-  auto x3 = torch::cat({u3, p3_feat}, /*dim=*/1);
-  x3 = p3_pre1(x3);
-  x3 = p3_pre2(x3);
-  x3 = p3_pre3(x3);
-  x3 = p3_pre4(x3);
-  x3 = p3_pre5(x3);
-  auto out3 = p3_out(p3_out_pre(x3));
-
-  return {out5, out4, out3};  // strides 32, 16, 8
+int Yolo3Impl::load_from_state_dict(
+    const std::vector<std::pair<std::string, at::Tensor>>& entries) {
+  auto params  = this->named_parameters(true);
+  auto buffers = this->named_buffers(true);
+  int n = 0;
+  for (const auto& e : entries) {
+    if (auto* p = params.find(e.first)) {
+      if (p->sizes() != e.second.sizes()) continue;
+      torch::NoGradGuard ng;
+      p->copy_(e.second.to(p->device(), p->dtype()));
+      ++n;
+    } else if (auto* b = buffers.find(e.first)) {
+      if (b->sizes() != e.second.sizes()) continue;
+      torch::NoGradGuard ng;
+      b->copy_(e.second.to(b->device(), b->dtype()));
+      ++n;
+    }
+  }
+  return n;
 }
 
 }  // namespace yolocpp::models

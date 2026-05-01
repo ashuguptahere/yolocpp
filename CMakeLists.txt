@@ -1,10 +1,14 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(yolocpp
-  VERSION 0.1.0
+  VERSION 0.25.0
   DESCRIPTION "Pure C++ computer-vision suite (LibTorch + TensorRT)"
   LANGUAGES C CXX CUDA
 )
+# Pre-1.0 versioning policy lives in CHANGELOG.md. Bump the third digit
+# (PATCH) for additive changes; bump the second (MINOR) when a new YOLO
+# version, task, or pipeline lands. Stay on 0.x.y until the user
+# declares the project 1.0-ready.
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -111,6 +115,12 @@ add_library(yolocpp_core
   src/tasks/pose_obb_train.cpp
   src/serialization/pt_loader.cpp
   src/serialization/pt_save.cpp
+  src/serialization/darknet_weights.cpp
+  src/serialization/yolov6_weights.cpp
+  src/serialization/yolov7_weights.cpp
+  src/serialization/yolov9_weights.cpp
+  src/serialization/yolov10_weights.cpp
+  src/serialization/yolov3_weights.cpp
   src/serialization/onnx_export.cpp
   src/serialization/trt_export.cpp
   src/inference/trt_predictor.cpp
@@ -120,6 +130,9 @@ add_library(yolocpp_core
   src/datasets/yolo_dataset.cpp
   src/losses/yolo8_loss.cpp
   src/losses/yolo26_loss.cpp
+  src/losses/yolo6_loss.cpp
+  src/losses/yolo7_loss.cpp
+  src/losses/yolo10_loss.cpp
   src/cli/args.cpp
   src/cli/data_yaml.cpp
   src/cli/model_info.cpp

@@ -17,7 +17,13 @@
 #include "yolocpp/models/yolo12.hpp"
 #include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
+#include "yolocpp/models/yolo3.hpp"
+#include "yolocpp/models/yolo4.hpp"
+#include "yolocpp/models/yolo6.hpp"
+#include "yolocpp/models/yolo7.hpp"
 #include "yolocpp/models/yolo8.hpp"
+#include "yolocpp/models/yolo9.hpp"
+#include "yolocpp/models/yolo10.hpp"
 
 namespace yolocpp::inference {
 
@@ -62,6 +68,75 @@ class Predictor {
 
 // 80 standard COCO names (in Ultralytics order).
 const std::vector<std::string>& coco_names();
+
+// Predict with a YOLO3 (Ultralytics' anchor-free yolov3u variant —
+// Darknet-53 backbone + v8-style DFL Detect head). Weights are
+// converted from `yolov3u.pt` via `convert_yolov3_pt` (fp16 → fp32).
+std::vector<Detection> predict_v3_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 640,
+    const std::string& device = "", int nc = 80,
+    NMSConfig conf = {});
+
+// Predict with a YOLO4 (CSPDarknet53 + SPP + PANet, anchor-based) model.
+// Weights must be in our `.pt` form — produced by
+// `serialization::convert_yolov4_weights(yolov4.weights, yolo4.pt)` from
+// AlexeyAB's Darknet release. The default imgsz=608 matches yolov4.cfg's
+// `width`/`height` (the anchors are calibrated to that size; we rescale
+// them automatically when imgsz differs).
+std::vector<Detection> predict_v4_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 608,
+    const std::string& device = "", int nc = 80,
+    NMSConfig conf = {});
+
+// Predict with a YOLO6 (Meituan v3.0 deploy form) model. Weights must be
+// in our `.pt` form — produced by `convert_yolov6_pt(yolov6s.pt, yolo6s.pt)`
+// from Meituan's release. The resolver auto-runs the conversion when the
+// upstream `.pt` is found in `data/` or the cache.
+// v6 P6 variants (yolov6{n,s,m,l}6.pt) need `p6=true` to construct the
+// 6-stage backbone + 4-level head and default to `imgsz=1280`.
+std::vector<Detection> predict_v6_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 640,
+    const std::string& device = "", int nc = 80,
+    models::Yolo6Scale scale = models::kYolo6s,
+    bool p6 = false,
+    NMSConfig conf = {});
+
+// Predict with a YOLO7 (WongKinYiu, anchor-based IDetect) model. Weights
+// must be in our `.pt` form — produced by
+// `convert_yolov7_pt(yolov7.pt → yolo7.pt)` (RepConv fusion + fp16→fp32);
+// the resolver auto-runs the conversion.
+std::vector<Detection> predict_v7_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 640,
+    const std::string& device = "", int nc = 80,
+    models::Yolo7Scale scale = models::Yolo7Scale::Base,
+    NMSConfig conf = {});
+
+// Predict with a YOLO9 (yolov9c, GELAN backbone + v8-style anchor-free
+// Detect head) model. Weights must be in our `.pt` form — produced by
+// `convert_yolov9_pt(yolov9c.pt → yolo9.pt)` (RepConv fusion + fp16→fp32);
+// the resolver auto-runs the conversion.
+std::vector<Detection> predict_v9_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 640,
+    const std::string& device = "", int nc = 80,
+    models::Yolo9Scale scale = models::Yolo9Scale::C,
+    NMSConfig conf = {});
+
+// Predict with a YOLO10 (Tsinghua MIG, end-to-end / NMS-free) model.
+// Weights must be in our `.pt` form — produced by
+// `convert_yolov10_pt(yolov10n.pt → yolo10.pt)` (one2many head dropped,
+// one2one renamed to cv2/cv3, RepVGGDW fusion + fp16→fp32). The
+// resolver auto-runs the conversion.
+std::vector<Detection> predict_v10_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 640,
+    const std::string& device = "", int nc = 80,
+    models::Yolo10Scale scale = models::kYolo10n,
+    NMSConfig conf = {});
 
 // Predict with a YOLO5 (anchorless v5u) model. Same return shape as
 // Predictor::predict_to_file but uses Yolo5Detect under the hood.

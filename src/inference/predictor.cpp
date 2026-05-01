@@ -12,7 +12,13 @@
 #include "yolocpp/models/yolo12.hpp"
 #include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
+#include "yolocpp/models/yolo3.hpp"
+#include "yolocpp/models/yolo4.hpp"
 #include "yolocpp/models/yolo5.hpp"
+#include "yolocpp/models/yolo6.hpp"
+#include "yolocpp/models/yolo7.hpp"
+#include "yolocpp/models/yolo9.hpp"
+#include "yolocpp/models/yolo10.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
 
 namespace yolocpp::inference {
@@ -133,6 +139,337 @@ std::vector<Detection> Predictor::predict_to_file(
   if (!cv::imwrite(out_path, img))
     throw std::runtime_error("could not write image: " + out_path);
   return dets;
+}
+
+std::vector<Detection> predict_v3_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz, const std::string& device,
+    int nc, NMSConfig nmscfg) {
+  auto dev = resolve_device(device);
+  models::Yolo3 model(models::kYolo3, nc);
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model->load_from_state_dict(sd.entries);
+  std::cout << "[v3-pred] loaded " << copied << " tensors from "
+            << weights << "\n";
+  model->to(dev); model->eval();
+
+  cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (src.empty()) throw std::runtime_error("could not read " + in_path);
+  auto lb = letterbox(src, imgsz);
+  auto x  = image_to_tensor(lb.img).unsqueeze(0).to(dev);
+
+  torch::Tensor pred;
+  {
+    torch::NoGradGuard ng;
+    pred = model->forward_eval(x);
+  }
+  auto outs = nms(pred, nmscfg);
+  if (outs[0].size(0) == 0) {
+    cv::imwrite(out_path, src);
+    return {};
+  }
+  auto det = outs[0].to(torch::kCPU);
+  auto boxes = det.slice(1, 0, 4).contiguous();
+  scale_boxes(boxes, lb);
+  det.slice(1, 0, 4) = boxes;
+
+  const auto& names = coco_names();
+  std::vector<Detection> result;
+  result.reserve(det.size(0));
+  auto a = det.accessor<float, 2>();
+  for (int i = 0; i < det.size(0); ++i) {
+    Detection d;
+    d.x1 = a[i][0]; d.y1 = a[i][1]; d.x2 = a[i][2]; d.y2 = a[i][3];
+    d.conf = a[i][4]; d.cls = (int)a[i][5];
+    result.push_back(d);
+    cv::Scalar color((d.cls * 41) % 256, (d.cls * 73) % 256, (d.cls * 11) % 256);
+    cv::rectangle(src, {(int)d.x1, (int)d.y1}, {(int)d.x2, (int)d.y2}, color, 2);
+    std::string label = (d.cls >= 0 && d.cls < (int)names.size()
+                             ? names[d.cls] : std::to_string(d.cls));
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f", label.c_str(), d.conf);
+    cv::putText(src, buf, {(int)d.x1 + 2, std::max(14, (int)d.y1) - 2},
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+  }
+  cv::imwrite(out_path, src);
+  return result;
+}
+
+std::vector<Detection> predict_v4_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz, const std::string& device,
+    int nc, NMSConfig nmscfg) {
+  auto dev = resolve_device(device);
+  models::Yolo4 model(nc);
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model->load_from_state_dict(sd.entries);
+  std::cout << "[v4-pred] loaded " << copied << " tensors from "
+            << weights << "\n";
+  model->to(dev); model->eval();
+
+  cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (src.empty()) throw std::runtime_error("could not read " + in_path);
+  auto lb = letterbox(src, imgsz);
+  auto x  = image_to_tensor(lb.img).unsqueeze(0).to(dev);
+
+  torch::Tensor pred;
+  {
+    torch::NoGradGuard ng;
+    pred = model->forward_eval(x);
+  }
+  auto outs = nms(pred, nmscfg);
+  if (outs[0].size(0) == 0) {
+    cv::imwrite(out_path, src);
+    return {};
+  }
+  auto det = outs[0].to(torch::kCPU);
+  auto boxes = det.slice(1, 0, 4).contiguous();
+  scale_boxes(boxes, lb);
+  det.slice(1, 0, 4) = boxes;
+
+  const auto& names = coco_names();
+  std::vector<Detection> result;
+  result.reserve(det.size(0));
+  auto a = det.accessor<float, 2>();
+  for (int i = 0; i < det.size(0); ++i) {
+    Detection d;
+    d.x1 = a[i][0]; d.y1 = a[i][1]; d.x2 = a[i][2]; d.y2 = a[i][3];
+    d.conf = a[i][4]; d.cls = (int)a[i][5];
+    result.push_back(d);
+    cv::Scalar color((d.cls * 41) % 256, (d.cls * 73) % 256, (d.cls * 11) % 256);
+    cv::rectangle(src, {(int)d.x1, (int)d.y1}, {(int)d.x2, (int)d.y2}, color, 2);
+    std::string label = (d.cls >= 0 && d.cls < (int)names.size()
+                             ? names[d.cls] : std::to_string(d.cls));
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f", label.c_str(), d.conf);
+    cv::putText(src, buf, {(int)d.x1 + 2, std::max(14, (int)d.y1) - 2},
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+  }
+  cv::imwrite(out_path, src);
+  return result;
+}
+
+std::vector<Detection> predict_v10_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz, const std::string& device,
+    int nc, models::Yolo10Scale scale, NMSConfig nmscfg) {
+  auto dev = resolve_device(device);
+  models::Yolo10 model(scale, nc);
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model->load_from_state_dict(sd.entries);
+  std::cout << "[v10-pred] loaded " << copied << " tensors from "
+            << weights << "\n";
+  model->to(dev); model->eval();
+
+  cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (src.empty()) throw std::runtime_error("could not read " + in_path);
+  auto lb = letterbox(src, imgsz);
+  auto x  = image_to_tensor(lb.img).unsqueeze(0).to(dev);
+
+  torch::Tensor pred;
+  {
+    torch::NoGradGuard ng;
+    pred = model->forward_eval(x);
+  }
+  // v10 is trained to be NMS-free, but we still pass through standard NMS
+  // at default IoU=0.45 — on already-disambiguated one2one outputs it
+  // removes very few boxes.
+  auto outs = nms(pred, nmscfg);
+  if (outs[0].size(0) == 0) {
+    cv::imwrite(out_path, src);
+    return {};
+  }
+  auto det = outs[0].to(torch::kCPU);
+  auto boxes = det.slice(1, 0, 4).contiguous();
+  scale_boxes(boxes, lb);
+  det.slice(1, 0, 4) = boxes;
+
+  const auto& names = coco_names();
+  std::vector<Detection> result;
+  result.reserve(det.size(0));
+  auto a = det.accessor<float, 2>();
+  for (int i = 0; i < det.size(0); ++i) {
+    Detection d;
+    d.x1 = a[i][0]; d.y1 = a[i][1]; d.x2 = a[i][2]; d.y2 = a[i][3];
+    d.conf = a[i][4]; d.cls = (int)a[i][5];
+    result.push_back(d);
+    cv::Scalar color((d.cls * 41) % 256, (d.cls * 73) % 256, (d.cls * 11) % 256);
+    cv::rectangle(src, {(int)d.x1, (int)d.y1}, {(int)d.x2, (int)d.y2}, color, 2);
+    std::string label = (d.cls >= 0 && d.cls < (int)names.size()
+                             ? names[d.cls] : std::to_string(d.cls));
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f", label.c_str(), d.conf);
+    cv::putText(src, buf, {(int)d.x1 + 2, std::max(14, (int)d.y1) - 2},
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+  }
+  cv::imwrite(out_path, src);
+  return result;
+}
+
+std::vector<Detection> predict_v9_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz, const std::string& device,
+    int nc, models::Yolo9Scale scale, NMSConfig nmscfg) {
+  auto dev = resolve_device(device);
+  models::Yolo9 model(scale, nc);
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model->load_from_state_dict(sd.entries);
+  std::cout << "[v9-pred] loaded " << copied << " tensors from "
+            << weights << "\n";
+  model->to(dev); model->eval();
+
+  cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (src.empty()) throw std::runtime_error("could not read " + in_path);
+  auto lb = letterbox(src, imgsz);
+  auto x  = image_to_tensor(lb.img).unsqueeze(0).to(dev);
+
+  torch::Tensor pred;
+  {
+    torch::NoGradGuard ng;
+    pred = model->forward_eval(x);
+  }
+  auto outs = nms(pred, nmscfg);
+  if (outs[0].size(0) == 0) {
+    cv::imwrite(out_path, src);
+    return {};
+  }
+  auto det = outs[0].to(torch::kCPU);
+  auto boxes = det.slice(1, 0, 4).contiguous();
+  scale_boxes(boxes, lb);
+  det.slice(1, 0, 4) = boxes;
+
+  const auto& names = coco_names();
+  std::vector<Detection> result;
+  result.reserve(det.size(0));
+  auto a = det.accessor<float, 2>();
+  for (int i = 0; i < det.size(0); ++i) {
+    Detection d;
+    d.x1 = a[i][0]; d.y1 = a[i][1]; d.x2 = a[i][2]; d.y2 = a[i][3];
+    d.conf = a[i][4]; d.cls = (int)a[i][5];
+    result.push_back(d);
+    cv::Scalar color((d.cls * 41) % 256, (d.cls * 73) % 256, (d.cls * 11) % 256);
+    cv::rectangle(src, {(int)d.x1, (int)d.y1}, {(int)d.x2, (int)d.y2}, color, 2);
+    std::string label = (d.cls >= 0 && d.cls < (int)names.size()
+                             ? names[d.cls] : std::to_string(d.cls));
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f", label.c_str(), d.conf);
+    cv::putText(src, buf, {(int)d.x1 + 2, std::max(14, (int)d.y1) - 2},
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+  }
+  cv::imwrite(out_path, src);
+  return result;
+}
+
+std::vector<Detection> predict_v7_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz, const std::string& device,
+    int nc, models::Yolo7Scale scale, NMSConfig nmscfg) {
+  auto dev = resolve_device(device);
+  models::Yolo7 model(nc, scale);
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model->load_from_state_dict(sd.entries);
+  std::cout << "[v7-pred] loaded " << copied << " tensors from "
+            << weights << "\n";
+  model->to(dev); model->eval();
+
+  cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (src.empty()) throw std::runtime_error("could not read " + in_path);
+  auto lb = letterbox(src, imgsz);
+  auto x  = image_to_tensor(lb.img).unsqueeze(0).to(dev);
+
+  torch::Tensor pred;
+  {
+    torch::NoGradGuard ng;
+    pred = model->forward_eval(x);
+  }
+  auto outs = nms(pred, nmscfg);
+  if (outs[0].size(0) == 0) {
+    cv::imwrite(out_path, src);
+    return {};
+  }
+  auto det = outs[0].to(torch::kCPU);
+  auto boxes = det.slice(1, 0, 4).contiguous();
+  scale_boxes(boxes, lb);
+  det.slice(1, 0, 4) = boxes;
+
+  const auto& names = coco_names();
+  std::vector<Detection> result;
+  result.reserve(det.size(0));
+  auto a = det.accessor<float, 2>();
+  for (int i = 0; i < det.size(0); ++i) {
+    Detection d;
+    d.x1 = a[i][0]; d.y1 = a[i][1]; d.x2 = a[i][2]; d.y2 = a[i][3];
+    d.conf = a[i][4]; d.cls = (int)a[i][5];
+    result.push_back(d);
+    cv::Scalar color((d.cls * 41) % 256, (d.cls * 73) % 256, (d.cls * 11) % 256);
+    cv::rectangle(src, {(int)d.x1, (int)d.y1}, {(int)d.x2, (int)d.y2}, color, 2);
+    std::string label = (d.cls >= 0 && d.cls < (int)names.size()
+                             ? names[d.cls] : std::to_string(d.cls));
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f", label.c_str(), d.conf);
+    cv::putText(src, buf, {(int)d.x1 + 2, std::max(14, (int)d.y1) - 2},
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+  }
+  cv::imwrite(out_path, src);
+  return result;
+}
+
+std::vector<Detection> predict_v6_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz, const std::string& device,
+    int nc, models::Yolo6Scale scale, bool p6, NMSConfig nmscfg) {
+  auto dev = resolve_device(device);
+  // P6 variants use DFL eval projection at m6/l6 (reg_max=16) but no DFL
+  // at n6/s6 (reg_max=0 in upstream config; we keep reg_max=16 default
+  // since the head ctor still allocates the projection — just won't use
+  // it when reg_preds outputs 4 ch directly).
+  models::Yolo6 model(nc, scale, /*reg_max=*/16, /*p6=*/p6);
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model->load_from_state_dict(sd.entries);
+  std::cout << "[v6-pred] loaded " << copied << " tensors from "
+            << weights << "\n";
+  model->to(dev); model->eval();
+
+  cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (src.empty()) throw std::runtime_error("could not read " + in_path);
+  auto lb = letterbox(src, imgsz);
+  auto x  = image_to_tensor(lb.img).unsqueeze(0).to(dev);
+
+  torch::Tensor pred;
+  {
+    torch::NoGradGuard ng;
+    pred = model->forward_eval(x);
+  }
+  auto outs = nms(pred, nmscfg);
+  if (outs[0].size(0) == 0) {
+    cv::imwrite(out_path, src);
+    return {};
+  }
+  auto det = outs[0].to(torch::kCPU);
+  auto boxes = det.slice(1, 0, 4).contiguous();
+  scale_boxes(boxes, lb);
+  det.slice(1, 0, 4) = boxes;
+
+  const auto& names = coco_names();
+  std::vector<Detection> result;
+  result.reserve(det.size(0));
+  auto a = det.accessor<float, 2>();
+  for (int i = 0; i < det.size(0); ++i) {
+    Detection d;
+    d.x1 = a[i][0]; d.y1 = a[i][1]; d.x2 = a[i][2]; d.y2 = a[i][3];
+    d.conf = a[i][4]; d.cls = (int)a[i][5];
+    result.push_back(d);
+    cv::Scalar color((d.cls * 41) % 256, (d.cls * 73) % 256, (d.cls * 11) % 256);
+    cv::rectangle(src, {(int)d.x1, (int)d.y1}, {(int)d.x2, (int)d.y2}, color, 2);
+    std::string label = (d.cls >= 0 && d.cls < (int)names.size()
+                             ? names[d.cls] : std::to_string(d.cls));
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f", label.c_str(), d.conf);
+    cv::putText(src, buf, {(int)d.x1 + 2, std::max(14, (int)d.y1) - 2},
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+  }
+  cv::imwrite(out_path, src);
+  return result;
 }
 
 std::vector<Detection> predict_v5_to_file(

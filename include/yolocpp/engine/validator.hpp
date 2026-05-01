@@ -12,8 +12,14 @@
 #include "yolocpp/models/yolo12.hpp"
 #include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
+#include "yolocpp/models/yolo3.hpp"
+#include "yolocpp/models/yolo4.hpp"
 #include "yolocpp/models/yolo5.hpp"
+#include "yolocpp/models/yolo6.hpp"
+#include "yolocpp/models/yolo7.hpp"
 #include "yolocpp/models/yolo8.hpp"
+#include "yolocpp/models/yolo9.hpp"
+#include "yolocpp/models/yolo10.hpp"
 
 namespace yolocpp::engine {
 

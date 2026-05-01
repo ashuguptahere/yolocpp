@@ -119,6 +119,111 @@ struct LossTraits<models::Yolo26Detect> {
   }
 };
 
+// Specialised for Yolo4 → V7DetectionLoss with v4-specific anchors +
+// scale_xy bias-fix [1.2, 1.1, 1.05] and exp() wh decode (Darknet-style).
+template <>
+struct LossTraits<models::Yolo4> {
+  using LossT   = losses::V7DetectionLoss;
+  using OutputT = losses::LossOutput;
+  static LossT make(int nc) {
+    losses::V7LossConfig c;
+    c.nc = nc; c.na = 3;
+    // v4 anchors at imgsz=608 (yolov4.cfg). P3 → P4 → P5 order.
+    c.anchors = {
+      {{12.f, 16.f}, {19.f, 36.f}, {40.f, 28.f}},        // P3
+      {{36.f, 75.f}, {76.f, 55.f}, {72.f, 146.f}},       // P4
+      {{142.f, 110.f}, {192.f, 243.f}, {459.f, 401.f}},  // P5
+    };
+    c.strides  = {8, 16, 32};
+    c.scale_xy = {1.2f, 1.1f, 1.05f};
+    c.wh_sigmoid = false;   // v4 uses exp() wh (Darknet form)
+    c.balance = {4.0f, 1.0f, 0.4f};
+    return LossT(c);
+  }
+  static OutputT compute(const LossT& l,
+                         const std::vector<torch::Tensor>& feats,
+                         const torch::Tensor& tgt,
+                         const std::vector<double>& strides,
+                         int imgsz, double /*progress*/) {
+    return l(feats, tgt, strides, imgsz);
+  }
+};
+
+// Specialised for Yolo10 → Yolo10LossAdapter (auto-routes between
+// V8DetectionLoss for single-head and V10DualLoss for dual-head training
+// based on `forward_train`'s output count: 3 = one2one only, 6 =
+// {one2many P3..P5, one2one P3..P5} for paper §3.1 consistent assignment).
+template <>
+struct LossTraits<models::Yolo10> {
+  using LossT   = losses::Yolo10LossAdapter;
+  using OutputT = losses::LossOutput;
+  static LossT make(int nc) {
+    losses::LossConfig c; c.nc = nc; c.reg_max = 16;
+    return LossT(c);
+  }
+  static OutputT compute(const LossT& l,
+                         const std::vector<torch::Tensor>& feats,
+                         const torch::Tensor& tgt,
+                         const std::vector<double>& strides,
+                         int imgsz, double /*progress*/) {
+    return l(feats, tgt, strides, imgsz);
+  }
+};
+
+// Specialised for Yolo7 → V7DetectionLoss with WongKinYiu's anchors and
+// uniform scale_xy=2.0 + (sigmoid*2)^2 wh decode.
+template <>
+struct LossTraits<models::Yolo7> {
+  using LossT   = losses::V7DetectionLoss;
+  using OutputT = losses::LossOutput;
+  static LossT make(int nc) {
+    losses::V7LossConfig c;
+    c.nc = nc; c.na = 3;
+    // v7-base anchors at imgsz=640 (yolov7.yaml). P3 → P4 → P5.
+    c.anchors = {
+      {{12.f, 16.f},   {19.f, 36.f},   {40.f, 28.f}},    // P3
+      {{36.f, 75.f},   {76.f, 55.f},   {72.f, 146.f}},   // P4
+      {{142.f, 110.f}, {192.f, 243.f}, {459.f, 401.f}},  // P5
+    };
+    c.strides  = {8, 16, 32};
+    c.scale_xy = {2.0f, 2.0f, 2.0f};
+    c.wh_sigmoid = true;
+    c.balance = {4.0f, 1.0f, 0.4f};
+    return LossT(c);
+  }
+  static OutputT compute(const LossT& l,
+                         const std::vector<torch::Tensor>& feats,
+                         const torch::Tensor& tgt,
+                         const std::vector<double>& strides,
+                         int imgsz, double /*progress*/) {
+    return l(feats, tgt, strides, imgsz);
+  }
+};
+
+// Specialised for Yolo6 → V6DetectionLoss (VFL + SIoU + TAL).
+// Targets the DFL-headed v6 variants (m/l/m6/l6 — reg_max=16). For
+// n/s/n6/s6 the head's `reg_preds_dist` branch (training-time KD
+// target upstream) carries the 68-ch DFL distribution and is what
+// `forward_train_per_scale_n` returns, so the loss path works for
+// those variants too — just skip-to-deploy converts the model into
+// the direct-4-ch `reg_preds` branch.
+template <>
+struct LossTraits<models::Yolo6> {
+  using LossT   = losses::V6DetectionLoss;
+  using OutputT = losses::LossOutput;
+  static LossT make(int nc) {
+    losses::V6LossConfig c; c.nc = nc; c.reg_max = 16;
+    return LossT(c);
+  }
+  static OutputT compute(const LossT& l,
+                         const std::vector<torch::Tensor>& feats,
+                         const torch::Tensor& tgt,
+                         const std::vector<double>& strides,
+                         int imgsz, double /*progress*/) {
+    return l(feats, tgt, strides, imgsz);
+  }
+};
+
 // Cosine-with-linear-warmup LR schedule. Returns lr scale ∈ [0, 1].
 double lr_scale(int epoch_step, int warmup_steps, int total_steps,
                 double lrf) {
@@ -647,7 +752,13 @@ void TrainerT<M>::run() {
 
 // Explicit instantiations.
 template class TrainerT<models::Yolo8Detect>;
+template class TrainerT<models::Yolo3>;
+template class TrainerT<models::Yolo4>;
 template class TrainerT<models::Yolo5Detect>;
+template class TrainerT<models::Yolo6>;
+template class TrainerT<models::Yolo7>;
+template class TrainerT<models::Yolo9>;
+template class TrainerT<models::Yolo10>;
 template class TrainerT<models::Yolo11Detect>;
 template class TrainerT<models::Yolo12Detect>;
 template class TrainerT<models::Yolo13Detect>;

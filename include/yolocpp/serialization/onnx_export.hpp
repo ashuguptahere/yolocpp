@@ -15,6 +15,13 @@
 
 #include <string>
 
+#include "yolocpp/models/yolo10.hpp"
+#include "yolocpp/models/yolo3.hpp"
+#include "yolocpp/models/yolo4.hpp"
+#include "yolocpp/models/yolo5.hpp"
+#include "yolocpp/models/yolo6.hpp"
+#include "yolocpp/models/yolo7.hpp"
+#include "yolocpp/models/yolo9.hpp"
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo12.hpp"
@@ -80,6 +87,83 @@ void export_yolo12_onnx(models::Yolo12Detect& model,
 void export_yolo13_onnx(models::Yolo13Detect& model,
                          const std::string&    path,
                          const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO3 (Ultralytics yolov3u — anchor-free DFL) model.
+// Same output contract: [N, 4 + nc, A]. Walker emits Conv + Bottleneck +
+// Upsample + Concat per the v3 yaml (29 layers); reuses emit_detect for
+// the legacy=true Detect head (reg_max=16).
+void export_yolo3_onnx(models::Yolo3& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO5 (Ultralytics anchor-free `*u.pt`) model. Same
+// output contract as export_yolo8_onnx — [N, 4 + nc, A] xyxy + sigmoided
+// cls. Architecture differs from v8 in two structural pieces handled
+// inside the emitter: a 6×6 stride-2 Conv stem at layer 0 and C3 blocks
+// (cv1 + N×Bottleneck → cat with cv2 → cv3) instead of v8's C2f. The
+// Detect head (legacy=true, anchor-free DFL) is identical to v8/v9 and
+// reuses `emit_detect` directly.
+void export_yolo5_onnx(models::Yolo5Detect& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO4 (AlexeyAB Darknet) model. Output:
+// [N, 4 + nc, A] xyxy + obj*cls (sigmoided) at the v4 scale_xy bias-fix
+// (1.2/1.1/1.05 for P3/P4/P5) with anchors calibrated to the model's
+// 608² training resolution (rescaled at runtime to actual imgsz).
+// Walker emits ConvMish + ConvLeaky + CSPStage + SPPv4 + the explicit
+// PANet top-down/bottom-up paths per the v4 deploy graph.
+void export_yolo4_onnx(models::Yolo4& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO6 (Meituan — EfficientRep + RepBiFPANNeck +
+// EffiDeHead) model. Same output contract: [N, 4 + nc, A] xyxy +
+// sigmoid'd cls. Targets v6n/s (P5, RepBlock-based backbone, CSPSPPF,
+// EffiDeHead with direct 4-ch reg_preds branch). Other v6 variants
+// (m/l with BepC3 + SimSPPF + DFL eval; MBLA scales; P6 variants)
+// share the same module set but use a different combination — they
+// will surface a "not yet wired" error from the CLI dispatch.
+void export_yolo6_onnx(models::Yolo6& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO7 (WongKinYiu — ELAN + IDetect anchor head) model.
+// Same output contract: [N, 4 + nc, A]. Walker emits ConvSiLU/LeakyReLU
+// (per scale) + MP/SP + ReOrg + DownC + SPPCSPC + Yolo7RepConv +
+// Yolo7Shortcut, then applies the IDetect 1×1 m[i] convs and decodes
+// in WongKinYiu's "new coords" form: xy = (sigmoid(t)*2 - 0.5 +
+// grid)*stride; wh = (sigmoid(t)*2)^2 * anchor; score = obj * cls.
+// Anchors are read from the model's `anchor_grid` buffer (calibrated
+// to the training resolution, rescaled to actual imgsz at runtime).
+// 3-level head for base/tiny/x; 4-level for w6/e6/d6/e6e (1280²).
+void export_yolo7_onnx(models::Yolo7& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO9 (Wang/Yeh/Liao — GELAN backbone) model.
+// Same output contract: [N, 4 + nc, A]. Walker emits the GELAN module
+// set (RepNCSPELAN4 + ADown + AConv + ELAN1 + SPPELAN) plus CBLinear /
+// CBFuse for the v9e two-pass backbone; reuses emit_detect for the
+// legacy=true Detect head (reg_max=16).
+void export_yolo9_onnx(models::Yolo9& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO10 (Tsinghua MIG — NMS-free dual-head) model.
+// Same output contract: [N, 4 + nc, A] xyxy + sigmoided cls. The
+// graph emits the per-scale yaml walk (Conv / C2f / SCDown / C2fCIB /
+// SPPF / PSA / Upsample / Concat) and reuses emit_detect_v11 for the
+// one2one head (v11-style cv3 with DWConvBlock×2 + Conv2d). The
+// one2many head is dropped at conversion time — not present in the
+// deploy state-dict — so the graph is single-headed. Downstream
+// "NMS-free" topk is left to the host runtime: v10's one2one head
+// produces predictions that are already 1-per-object, so applying
+// NMS at the standard IoU threshold is effectively a no-op (and is
+// what our Predictor / TRT pipeline already does).
+void export_yolo10_onnx(models::Yolo10& model,
+                        const std::string&    path,
+                        const OnnxExportConfig& cfg = {});
 
 // ─── Classify exporters ───────────────────────────────────────────────────
 // Output: single tensor [N, nc] of pre-softmax class logits.

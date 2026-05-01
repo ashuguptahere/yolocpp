@@ -1,0 +1,80 @@
+#pragma once
+//
+// Anchor-based v3-style detection loss — used by YOLO4 and YOLO7.
+//
+// Per-anchor outputs at each scale: [B, na*(5+nc), H, W] where
+//   na   = anchors per scale (3 for base/tiny/x; v7 P6 variants also 3)
+//   5+nc = (tx, ty, tw, th, obj, cls...)
+//
+// Decoder (training-side, matches predict-time):
+//   xy_pix = (sigmoid(t_xy) * scale_xy - 0.5*(scale_xy - 1) + grid) * stride
+//   wh_pix = (sigmoid(t_wh) * 2)^2 * anchor_w_in_pixels       (v7 form)
+//   wh_pix = exp(t_wh) * anchor_w_in_pixels                    (v4 cfg form)
+//
+// `scale_xy` is per-scale (v4: 1.2/1.1/1.05 for P3/P4/P5; v7: 2.0
+// uniform). The wh decode is also model-specific — v7 uses the
+// (sigmoid*2)^2 form; v4 uses exp(). The config carries a flag.
+//
+// Loss components:
+//   box: 1 - CIoU(decoded_pred, gt) on positive (anchor, cell, gt) triplets
+//   obj: BCE on objectness logits over ALL (b, anchor, h, w) cells,
+//        with target = (1-gr) + gr*IoU.detach() at positives, 0 elsewhere.
+//        Multi-scale balance weights: [4.0, 1.0, 0.4] for P3/P4/P5.
+//   cls: BCE on cls logits only at positives, target = one-hot of GT class.
+//
+// Anchor matching: per upstream v3/v4/v7 — for each GT, find anchors at
+// each scale with `max(gt_wh/anc_wh, anc_wh/gt_wh).max() < anchor_t=4`,
+// then optionally expand to neighboring cells (offset_t=0.5).
+//
+
+#include <torch/torch.h>
+
+#include <utility>
+#include <vector>
+
+#include "yolocpp/losses/yolo8_loss.hpp"   // LossOutput
+
+namespace yolocpp::losses {
+
+struct V7LossConfig {
+  int nc = 80;
+  int na = 3;
+  // anchors[level][anchor_idx] = (w, h) in pixels at the calibration imgsz.
+  std::vector<std::vector<std::pair<float, float>>> anchors;
+  std::vector<double> strides;     // per-level stride
+  std::vector<float>  scale_xy;    // per-level (v4: [1.2,1.1,1.05], v7: [2,2,2])
+  // wh decode form: true → (sigmoid*2)^2 (v7); false → exp() (v4 Darknet).
+  bool wh_sigmoid = true;
+
+  // Loss gains (from v7 yaml hyp.scratch.p5.yaml).
+  float box_gain   = 0.05f;
+  float cls_gain   = 0.3f;
+  float obj_gain   = 0.7f;
+  float anchor_t   = 4.0f;
+  float gr         = 1.0f;        // obj target = (1-gr) + gr * IoU.detach()
+  std::vector<float> balance = {4.0f, 1.0f, 0.4f};   // per-level obj weight
+  // Center-prior offset (cells with center within `offset_t` of cell
+  // boundary also become positives). 0 = disabled, 0.5 = standard.
+  float offset_t   = 0.5f;
+};
+
+class V7DetectionLoss {
+ public:
+  explicit V7DetectionLoss(V7LossConfig cfg);
+
+  // feats : per-level [B, na*(5+nc), H_i, W_i] in stride-ascending order
+  //         (P3, P4, P5). Caller (Yolo4 forward_train) reverses if needed.
+  // targets: [M, 6] — (batch_idx, cls, cx, cy, w, h) in input-image pixel
+  //         coords (matches our YoloDataset target convention).
+  LossOutput operator()(const std::vector<torch::Tensor>& feats,
+                        const torch::Tensor& targets,
+                        const std::vector<double>& strides,
+                        int imgsz) const;
+
+  const V7LossConfig& config() const { return cfg_; }
+
+ private:
+  V7LossConfig cfg_;
+};
+
+}  // namespace yolocpp::losses

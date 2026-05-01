@@ -1,78 +1,60 @@
 #pragma once
 //
-// YOLO3 architecture (canonical Darknet-53 backbone + 3-scale FPN head).
+// YOLO3 — Redmon & Farhadi, "YOLOv3: An Incremental Improvement" (2018).
+// We ship Ultralytics' anchor-free `yolov3u.pt` form: Darknet-53 backbone
+// + v8-style anchor-free DFL Detect head. Predict piggybacks on the
+// existing v8 pipeline.
 //
-// Status: architecture only. Weight loading from Ultralytics' yolo3.pt is
-// deferred — the legacy v3 weights use a flat key naming that doesn't map
-// onto our nested ModuleList layout, and the original Darknet weights are
-// in a different format altogether. Random-forward shape verification only.
+// Architecture is a flat yaml-walker (ModuleList "model") matching
+// Ultralytics' yolov3.yaml indices 0..28. Reuses v8's `Conv`,
+// `Bottleneck`, and `DetectImpl(legacy=true)` directly, so upstream key
+// names map 1:1.
 //
-// Reference: pjreddie's Darknet, with the 3-scale head from
-// "YOLO3: An Incremental Improvement" (Redmon & Farhadi, 2018).
+// `serialization::convert_yolov3_pt(yolov3u.pt → yolo3.pt)` casts fp16
+// → fp32 and drops `num_batches_tracked`. No fusion needed.
 //
 
 #include <torch/torch.h>
 
-#include "yolocpp/models/yolo8.hpp"  // reuse Conv from yolo8.hpp
+#include <string>
+#include <vector>
+
+#include "yolocpp/models/yolo8.hpp"
 
 namespace yolocpp::models {
 
-// ─── DarknetResidual (1×1 → 3×3 with skip) ──────────────────────────────
-struct DarknetResidualImpl : torch::nn::Module {
-  Conv cv1{nullptr};   // c → c/2 (1×1)
-  Conv cv2{nullptr};   // c/2 → c (3×3)
-  DarknetResidualImpl(int c);
-  torch::Tensor forward(torch::Tensor x);
-};
-TORCH_MODULE(DarknetResidual);
+// v3 is a single-architecture family — there's no n/s/m/l/x scaling.
+// `Yolo3Scale` is a placeholder struct so v3 conforms to the v8/v11
+// trainer convention `M(scale, nc)` (the EMA in TrainerT<M> uses
+// `M(model_->scale, model_->nc)` to construct a fresh copy).
+struct Yolo3Scale { int dummy = 0; };
+constexpr Yolo3Scale kYolo3{};
 
-// ─── DarknetBlock (downsample 3×3 stride-2 + N residuals) ───────────────
-struct DarknetBlockImpl : torch::nn::Module {
-  Conv down{nullptr};
-  torch::nn::ModuleList m{nullptr};
-  DarknetBlockImpl(int c_in, int c_out, int n);
-  torch::Tensor forward(torch::Tensor x);
-};
-TORCH_MODULE(DarknetBlock);
-
-// ─── Yolo3 model ──────────────────────────────────────────────────────
-//
-// Backbone (Darknet-53):
-//   stem:  Conv 32, 3×3
-//   block1: down→64,  1 residual
-//   block2: down→128, 2 residuals
-//   block3: down→256, 8 residuals  (P3 output)
-//   block4: down→512, 8 residuals  (P4 output)
-//   block5: down→1024, 4 residuals (P5 output)
-//
-// Head: 3-scale FPN with 3 anchors per scale at 80 classes →
-//       per-scale output channels = 3 × (5 + 80) = 255.
 struct Yolo3Impl : torch::nn::Module {
-  int nc;
-  // Backbone
-  Conv             stem{nullptr};
-  DarknetBlock     b1{nullptr}, b2{nullptr}, b3{nullptr}, b4{nullptr}, b5{nullptr};
-  // Neck (FPN convs)
-  Conv             p5_pre1{nullptr}, p5_pre2{nullptr}, p5_pre3{nullptr},
-                   p5_pre4{nullptr}, p5_pre5{nullptr};
-  Conv             p5_out_pre{nullptr};
-  torch::nn::Conv2d p5_out{nullptr};
-  Conv             p4_red{nullptr};
-  Conv             p4_pre1{nullptr}, p4_pre2{nullptr}, p4_pre3{nullptr},
-                   p4_pre4{nullptr}, p4_pre5{nullptr};
-  Conv             p4_out_pre{nullptr};
-  torch::nn::Conv2d p4_out{nullptr};
-  Conv             p3_red{nullptr};
-  Conv             p3_pre1{nullptr}, p3_pre2{nullptr}, p3_pre3{nullptr},
-                   p3_pre4{nullptr}, p3_pre5{nullptr};
-  Conv             p3_out_pre{nullptr};
-  torch::nn::Conv2d p3_out{nullptr};
+  // Field layout matches the v8/v11/v9 trainer convention M(scale, nc).
+  // v3 has no real scale axis, so `scale` is a placeholder that satisfies
+  // the templated `TrainerT<Yolo3>` EMA construction.
+  Yolo3Scale            scale;
+  int                   nc;
+  torch::nn::ModuleList model{nullptr};
+  std::vector<double>   stride;
 
-  explicit Yolo3Impl(int nc = 80);
+  // reg_max = 16 (DFL bin count) — yolov3u uses v8's anchor-free DFL
+  // Detect head (legacy=true), so V8DetectionLoss is the right loss
+  // class. The default LossTraits<M> picks it up automatically.
+  static constexpr int  reg_max = 16;
 
-  // Returns 3 raw output tensors at strides 32 / 16 / 8 (P5, P4, P3).
-  // Each shape: [B, 3 * (5 + nc), H_i, W_i]
-  std::vector<torch::Tensor> forward(torch::Tensor x);
+  Yolo3Impl(Yolo3Scale scale = kYolo3, int nc = 80);
+
+  // Returns [B, 4 + nc, A] xyxy + sigmoid'd cls — drop-in for our NMS.
+  torch::Tensor forward_eval(torch::Tensor x);
+
+  // Multi-scale raw feature maps for the loss (each [B, 4*reg_max+nc, H_i, W_i]).
+  // Strides are populated lazily on first call (mirrors forward_eval).
+  std::vector<torch::Tensor> forward_train(torch::Tensor x);
+
+  int load_from_state_dict(
+      const std::vector<std::pair<std::string, at::Tensor>>& entries);
 };
 TORCH_MODULE(Yolo3);
 

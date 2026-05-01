@@ -57,6 +57,11 @@ void build_trt_engine(const std::string& onnx_path,
   if (cfg.fp16 && builder->platformHasFastFp16()) {
     bcfg->setFlag(nvinfer1::BuilderFlag::kFP16);
   }
+  if (!cfg.tf32) {
+    // TRT enables TF32 by default in FP32 builds; clearing it forces true
+    // FP32 math through the tensor cores. Required for v10 s/m/b/l/x.
+    bcfg->clearFlag(nvinfer1::BuilderFlag::kTF32);
+  }
   bcfg->setBuilderOptimizationLevel(cfg.builder_opt_level);
 
   // Optimization profile for our dynamic batch dimension.

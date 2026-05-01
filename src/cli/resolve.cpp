@@ -1,7 +1,14 @@
 #include "yolocpp/cli/resolve.hpp"
 
 #include "yolocpp/cli/data_yaml.hpp"
+#include "yolocpp/serialization/darknet_weights.hpp"
+#include "yolocpp/serialization/yolov6_weights.hpp"
+#include "yolocpp/serialization/yolov7_weights.hpp"
+#include "yolocpp/serialization/yolov9_weights.hpp"
+#include "yolocpp/serialization/yolov10_weights.hpp"
+#include "yolocpp/serialization/yolov3_weights.hpp"
 
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -89,6 +96,267 @@ std::string resolve_weights(const std::string& spec) {
   // 2) If it's a bare basename, try common locations.
   fs::path p(spec);
   std::string base = p.filename().string();
+
+  // 2a) Special-case yolo4.pt — convert from a Darknet `.weights` binary
+  // if one is sitting next to it (or in the cache). This keeps the rest
+  // of the predict path uniform: every model loads from a `.pt`.
+  auto try_v4_convert = [&](const fs::path& pt_target) -> bool {
+    static const std::vector<std::string> candidates = {
+        "yolov4.weights", "yolo4.weights"};
+    for (const auto& wname : candidates) {
+      std::vector<fs::path> roots = {
+          fs::current_path() / "data" / wname,
+          fs::current_path() / wname,
+          home_cache() / "weights" / wname,
+      };
+      for (const auto& w : roots) {
+        if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
+        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        fs::create_directories(pt_target.parent_path());
+        try {
+          serialization::convert_yolov4_weights(w.string(), pt_target.string());
+          return true;
+        } catch (const std::exception& e) {
+          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          return false;
+        }
+      }
+    }
+    return false;
+  };
+  // 2b) Special-case Meituan YOLOv6 — convert upstream `.pt` to ours.
+  // Supports yolo6{n,s,m,l}.pt + yolo6{s,m,l,x}_mbla.pt + yolo6{n,s,m,l}6.pt.
+  // The same converter handles all twelve (RepConv fusion + `.block.` strip
+  // with lookahead so RepBlock's / MBLABlock's ModuleList paths are preserved
+  // + new rename rule for ERBlock_6 in P6 variants). MBLA scales use
+  // ConvBNSiLU everywhere → no RepVGG branches to fuse. P6 variants use
+  // the same RepVGG/BepC3 dispatch as standard but with one more stage.
+  for (const std::string letter : {"n", "s", "m", "l",
+                                    "s_mbla", "m_mbla", "l_mbla", "x_mbla",
+                                    "n6", "s6", "m6", "l6"}) {
+    std::string ours    = "yolo6"  + letter + ".pt";
+    std::string upstream = "yolov6" + letter + ".pt";
+    if (base != ours && base != upstream) continue;
+    fs::path target = home_cache() / "weights" / ours;
+    if (fs::exists(target)) return target.string();
+    auto try_v6_convert = [&](const fs::path& pt_target) -> bool {
+      std::vector<fs::path> roots = {
+          fs::current_path() / "data" / upstream,
+          fs::current_path() / upstream,
+          home_cache() / "weights" / upstream,
+      };
+      for (const auto& w : roots) {
+        if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
+        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        fs::create_directories(pt_target.parent_path());
+        try {
+          serialization::convert_yolov6_pt(w.string(), pt_target.string());
+          return true;
+        } catch (const std::exception& e) {
+          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          return false;
+        }
+      }
+      return false;
+    };
+    if (try_v6_convert(target)) return target.string();
+    fs::path wsrc = home_cache() / "weights" / upstream;
+    const std::string url =
+        "https://github.com/meituan/YOLOv6/releases/download/0.4.0/" + upstream;
+    if (run_curl(url, wsrc) && try_v6_convert(target)) {
+      return target.string();
+    }
+    break;
+  }
+
+  // 2c) Special-case YOLOv7 — convert from WongKinYiu's upstream `.pt`.
+  // Supports yolo7.pt (base), yolo7-tiny.pt, yolo7x.pt. The same converter
+  // handles all three (tiny has no RepConv blocks; the existing fusion
+  // logic finds 3 RepConv pairs for base / x and 0 for tiny).
+  for (auto pair : std::vector<std::pair<std::string, std::string>>{
+           {"yolo7.pt",       "yolov7.pt"},
+           {"yolo7-tiny.pt",  "yolov7-tiny.pt"},
+           {"yolo7x.pt",      "yolov7x.pt"},
+           {"yolo7-w6.pt",    "yolov7-w6.pt"},
+           {"yolo7-e6.pt",    "yolov7-e6.pt"},
+           {"yolo7-d6.pt",    "yolov7-d6.pt"},
+           {"yolo7-e6e.pt",   "yolov7-e6e.pt"}}) {
+    if (base != pair.first && base != pair.second) continue;
+    fs::path target = home_cache() / "weights" / pair.first;
+    if (fs::exists(target)) return target.string();
+    auto upstream = pair.second;
+    auto try_v7_convert = [&](const fs::path& pt_target) -> bool {
+      std::vector<fs::path> roots = {
+          fs::current_path() / "data" / upstream,
+          fs::current_path() / upstream,
+          home_cache() / "weights" / upstream,
+      };
+      for (const auto& w : roots) {
+        if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
+        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        fs::create_directories(pt_target.parent_path());
+        try {
+          serialization::convert_yolov7_pt(w.string(), pt_target.string());
+          return true;
+        } catch (const std::exception& e) {
+          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          return false;
+        }
+      }
+      return false;
+    };
+    if (try_v7_convert(target)) return target.string();
+    fs::path wsrc = home_cache() / "weights" / upstream;
+    const std::string url =
+        "https://github.com/WongKinYiu/yolov7/releases/download/v0.1/" + upstream;
+    if (run_curl(url, wsrc) && try_v7_convert(target)) {
+      return target.string();
+    }
+    break;
+  }
+
+  // 2d) Special-case Ultralytics YOLOv9 scales — convert upstream `.pt`
+  // to ours. Supports yolo9{t,s,m,c,e}.pt.
+  for (const std::string letter : {"t", "s", "m", "c", "e"}) {
+    std::string ours    = "yolo9"  + letter + ".pt";
+    std::string upstream = "yolov9" + letter + ".pt";
+    // Also accept the bare "yolo9.pt" → defaults to c.
+    bool match = (base == ours || base == upstream)
+                  || (letter == "c" && base == "yolo9.pt");
+    if (!match) continue;
+    fs::path target = home_cache() / "weights" / ours;
+    if (fs::exists(target)) return target.string();
+    auto try_v9_convert = [&](const fs::path& pt_target) -> bool {
+      std::vector<fs::path> roots = {
+          fs::current_path() / "data" / upstream,
+          fs::current_path() / upstream,
+          home_cache() / "weights" / upstream,
+      };
+      for (const auto& w : roots) {
+        if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
+        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        fs::create_directories(pt_target.parent_path());
+        try {
+          serialization::convert_yolov9_pt(w.string(), pt_target.string());
+          return true;
+        } catch (const std::exception& e) {
+          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          return false;
+        }
+      }
+      return false;
+    };
+    if (try_v9_convert(target)) return target.string();
+    fs::path wsrc = home_cache() / "weights" / upstream;
+    const std::string url =
+        "https://github.com/ultralytics/assets/releases/download/v8.3.0/" + upstream;
+    if (run_curl(url, wsrc) && try_v9_convert(target)) {
+      return target.string();
+    }
+    break;
+  }
+
+  // 2e) Special-case yolo10*.pt — convert from Ultralytics' yolov10{n,s,m,b,l,x}.pt
+  // (one2many head dropped, RepVGGDW fusion, fp16→fp32). All 6 scales wired.
+  // Letter detection: filename suffix before `.pt` (e.g. yolo10s.pt → "s").
+  // The base "yolo10.pt" (no letter) is treated as the n scale for backwards
+  // compat with the original single-scale naming.
+  {
+    auto v10_letter_from_base = [](const std::string& b) -> std::string {
+      // Forms accepted: yolo10.pt, yolo10<L>.pt, yolov10<L>.pt where L ∈ {n,s,m,b,l,x}.
+      if (b == "yolo10.pt") return "n";
+      static const std::array<std::string, 6> letters = {"n", "s", "m", "b", "l", "x"};
+      for (const auto& L : letters) {
+        if (b == "yolo10" + L + ".pt")  return L;
+        if (b == "yolov10" + L + ".pt") return L;
+      }
+      return "";
+    };
+    std::string letter = v10_letter_from_base(base);
+    if (!letter.empty()) {
+      // Target is yolo10<L>.pt in cache (or yolo10.pt for the historical n alias).
+      std::string tgt_base =
+          (base == "yolo10.pt") ? "yolo10.pt" : ("yolo10" + letter + ".pt");
+      fs::path target = home_cache() / "weights" / tgt_base;
+      if (fs::exists(target)) return target.string();
+      std::string upstream_base = "yolov10" + letter + ".pt";
+      auto try_v10_convert = [&](const fs::path& pt_target) -> bool {
+        std::vector<fs::path> roots = {
+            fs::current_path() / "data" / upstream_base,
+            fs::current_path() / upstream_base,
+            home_cache() / "weights" / upstream_base,
+        };
+        for (const auto& w : roots) {
+          if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
+          std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+          fs::create_directories(pt_target.parent_path());
+          try {
+            serialization::convert_yolov10_pt(w.string(), pt_target.string());
+            return true;
+          } catch (const std::exception& e) {
+            std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+            return false;
+          }
+        }
+        return false;
+      };
+      if (try_v10_convert(target)) return target.string();
+      fs::path wsrc = home_cache() / "weights" / upstream_base;
+      const std::string url =
+          "https://github.com/ultralytics/assets/releases/download/v8.3.0/" +
+          upstream_base;
+      if (run_curl(url, wsrc) && try_v10_convert(target)) {
+        return target.string();
+      }
+    }
+  }
+
+  // 2f) yolo3.pt — convert from Ultralytics' yolov3u.pt (anchor-free
+  // v3 with v8-style head). No fusion needed — fp16→fp32 cast only.
+  if (base == "yolo3.pt" || base == "yolov3u.pt" || base == "yolov3.pt") {
+    fs::path target = home_cache() / "weights" / "yolo3.pt";
+    if (fs::exists(target)) return target.string();
+    auto try_v3_convert = [&](const fs::path& pt_target) -> bool {
+      std::vector<fs::path> roots = {
+          fs::current_path() / "data" / "yolov3u.pt",
+          fs::current_path() / "yolov3u.pt",
+          home_cache() / "weights" / "yolov3u.pt",
+      };
+      for (const auto& w : roots) {
+        if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
+        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        fs::create_directories(pt_target.parent_path());
+        try {
+          serialization::convert_yolov3_pt(w.string(), pt_target.string());
+          return true;
+        } catch (const std::exception& e) {
+          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          return false;
+        }
+      }
+      return false;
+    };
+    if (try_v3_convert(target)) return target.string();
+    fs::path wsrc = home_cache() / "weights" / "yolov3u.pt";
+    const std::string url =
+        "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov3u.pt";
+    if (run_curl(url, wsrc) && try_v3_convert(target)) {
+      return target.string();
+    }
+  }
+
+  if (base == "yolo4.pt" || base == "yolov4.pt") {
+    fs::path target = home_cache() / "weights" / "yolo4.pt";
+    if (fs::exists(target)) return target.string();
+    if (try_v4_convert(target)) return target.string();
+    // No local .weights — try downloading from AlexeyAB and converting.
+    fs::path wsrc = home_cache() / "weights" / "yolov4.weights";
+    const std::string url =
+        "https://github.com/AlexeyAB/darknet/releases/download/yolov4/yolov4.weights";
+    if (run_curl(url, wsrc) && try_v4_convert(target)) {
+      return target.string();
+    }
+  }
   if (base != spec) {
     // user gave a relative or absolute path; honour it (already missed step 1)
   }
@@ -184,11 +452,33 @@ std::string resolve_dataset(const std::string& spec) {
 std::string scale_from_filename(const std::string& path) {
   fs::path p(path);
   std::string base = p.filename().string();
+  // v7-tiny / v6-tiny etc. — "-tiny" → "tiny".
+  if (base.find("-tiny") != std::string::npos) return "tiny";
+  // v7-w6 / e6 / d6 / e6e — high-res P6 variants.
+  if (base.find("-w6")  != std::string::npos) return "w6";
+  if (base.find("-e6e") != std::string::npos) return "e6e";
+  if (base.find("-e6")  != std::string::npos) return "e6";
+  if (base.find("-d6")  != std::string::npos) return "d6";
+  // v6 MBLA variants: yolo6{s,m,l,x}_mbla.pt → "s_mbla" etc.
+  for (const std::string& letter : {"s", "m", "l", "x"}) {
+    if (base.find(letter + "_mbla") != std::string::npos) {
+      return letter + "_mbla";
+    }
+  }
+  // v6 P6 variants: yolo6{n,s,m,l}6.pt or yolov6{n,s,m,l}6.pt → "n6" etc.
+  for (const std::string& letter : {"n", "s", "m", "l"}) {
+    std::string ours    = "yolo6"  + letter + "6.pt";
+    std::string upstream = "yolov6" + letter + "6.pt";
+    if (base == ours || base == upstream) return letter + "6";
+  }
   // Match canonical "yolo<digits><scale>[u]?(-task)?.pt" — and also accept the
-  // legacy upstream "yolov<digits>..." spelling for v3..v10 weights.
+  // legacy upstream "yolov<digits>..." spelling for v3..v10 weights. Scales:
+  //   v5/v8/v9/v11/v12/v13/v26: {n, s, m, l, x}
+  //   v9 also has {t, c}; v9c is an alias for "c", v9t for "t" (handled below).
+  //   v10 adds {b} between m and l.
   std::smatch m;
   static const std::regex re(
-      R"(yolov?[0-9]+([nsmlx])u?(?:-(?:cls|seg|pose|obb))?\.pt$)");
+      R"(yolov?[0-9]+([nsmblx])u?(?:-(?:cls|seg|pose|obb))?\.pt$)");
   if (std::regex_search(base, m, re)) return m[1].str();
 
   // Trained checkpoint (best.pt / last.pt) → look at sibling args.yaml's

@@ -15,6 +15,11 @@ struct TrtBuildConfig {
   std::size_t workspace_bytes = 1ull << 30;     // 1 GiB
   // Optional FP16 precision (reduces engine size & latency on RTX 5090).
   bool fp16 = true;
+  // TF32 tensor-core math for FP32 builds. Defaults on (TRT default).
+  // Disable for v10 s/m/b/l/x: the deeper RepVGGDW (7×7 dwconv with bias)
+  // stack accumulates enough TF32 mantissa loss to saturate the cls
+  // outputs near-zero; v10n is shallow enough not to trigger it.
+  bool tf32 = true;
   // Builder optimization level (0..5; higher = longer build, smaller plan).
   int  builder_opt_level = 3;
   // Static shape used for the optimization profile (single profile).

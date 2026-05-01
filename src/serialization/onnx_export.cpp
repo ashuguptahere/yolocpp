@@ -3693,4 +3693,2382 @@ void export_yolo26_classify_onnx(models::Yolo26Classify& model,
   write_model_proto(g, cfg, "yolo26_cls", path);
 }
 
+// ─── YOLO10 emitters ──────────────────────────────────────────────────────
+
+// SCDown — Conv 1×1 (Conv+BN+SiLU) followed by DWConv k×k stride s with
+// act=false (just Conv+BN, no activation).
+static std::string emit_scdown(GraphBuilder& g, const std::string& in,
+                               const std::string& prefix,
+                               models::SCDownImpl* m) {
+  auto y = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  return emit_dwconv_module(g, y, prefix + ".cv2", m->cv2.get());
+}
+
+// RepVGGDW (deploy form) — single 7×7 dwconv with bias + SiLU. Stored as
+// `<prefix>.conv.{weight,bias}` (no BN). Emit as a Conv node with bias
+// directly, then SiLU.
+static std::string emit_repvggdw(GraphBuilder& g, const std::string& in,
+                                 const std::string& prefix,
+                                 models::RepVGGDWImpl* m) {
+  auto* c = m->conv.get();
+  auto wname = g.add_init(prefix + ".conv.weight", c->weight);
+  auto bname = g.add_init(prefix + ".conv.bias",   c->bias);
+  int k  = (int)c->options.kernel_size()->at(0);
+  int p  = std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0);
+  int s  = c->options.stride()->at(0);
+  int gr = (int)c->options.groups();
+  auto y = g.node("Conv", {in, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", gr),
+                   attr_ints("kernel_shape", {k, k}),
+                   attr_ints("pads", {p, p, p, p}),
+                   attr_ints("strides", {s, s})},
+                  prefix + ".conv.out");
+  auto sig = g.node("Sigmoid", {y}, {}, prefix + ".sig");
+  return g.node("Mul", {y, sig}, {}, prefix + ".silu");
+}
+
+// CIB — 5-element Sequential (named "0".."4"):
+//   0: DWConv 3×3 (group=c1)
+//   1: Conv 1×1 (c1 → 2*c_)
+//   2: DWConv 3×3 OR RepVGGDW (when lk=true) on 2*c_ channels
+//   3: Conv 1×1 (2*c_ → c2)
+//   4: DWConv 3×3 (group=c2)
+// Optional shortcut adds the input to the output when c1 == c2.
+static std::string emit_cib(GraphBuilder& g, const std::string& in,
+                            const std::string& prefix,
+                            models::CIBImpl* m) {
+  // Each child is registered in a ModuleList named "cv1" with indices 0..4.
+  // Conv-typed children export through emit_conv_module; the lk=true form
+  // has a RepVGGDW at index 2 instead of a Conv.
+  auto y = emit_conv_module(g, in, prefix + ".cv1.0",
+                            m->cv1[0]->as<models::ConvImpl>());
+  y = emit_conv_module(g, y, prefix + ".cv1.1",
+                       m->cv1[1]->as<models::ConvImpl>());
+  if (m->lk) {
+    y = emit_repvggdw(g, y, prefix + ".cv1.2",
+                      m->cv1[2]->as<models::RepVGGDWImpl>());
+  } else {
+    y = emit_conv_module(g, y, prefix + ".cv1.2",
+                         m->cv1[2]->as<models::ConvImpl>());
+  }
+  y = emit_conv_module(g, y, prefix + ".cv1.3",
+                       m->cv1[3]->as<models::ConvImpl>());
+  y = emit_conv_module(g, y, prefix + ".cv1.4",
+                       m->cv1[4]->as<models::ConvImpl>());
+  if (m->add) {
+    return g.node("Add", {in, y}, {}, prefix + ".add");
+  }
+  return y;
+}
+
+// C2fCIB — like emit_c2f but inner blocks are CIB. The C2fCIBImpl
+// constructor passes e=1.0 to inner CIBs, so each CIB processes
+// `c_inner` channels and outputs `c_inner` channels (consistency with
+// the C2f shape contract: cv2 input width = (2 + n) * c_inner).
+static std::string emit_c2fcib(GraphBuilder& g, const std::string& in,
+                               const std::string& prefix,
+                               models::C2fCIBImpl* m) {
+  auto y = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  int total_c = 2 * m->c_inner;
+  emit_split2(g, y, prefix + ".split", total_c);
+  std::string a = prefix + ".split.a";
+  std::string b = prefix + ".split.b";
+  std::vector<std::string> outs = {a, b};
+  std::string last = b;
+  for (size_t i = 0; i < m->m->size(); ++i) {
+    auto* sub = m->m[i]->as<models::CIBImpl>();
+    last = emit_cib(g, last, prefix + ".m." + std::to_string(i), sub);
+    outs.push_back(last);
+  }
+  auto cat = g.node("Concat", outs, {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv2", m->cv2.get());
+}
+
+// PSA (v10 form) — cv1 → split → b += attn(b) → b += ffn(b) → cv2(cat(a,b)).
+// Single attn + single ffn (no inner block list, unlike v11's C2PSA).
+// FFN = Sequential(Conv(c, 2c, 1), Conv(2c, c, 1, act=false)) — same as v11.
+static std::string emit_psa_v10(GraphBuilder& g, const std::string& in,
+                                int H, int W,
+                                const std::string& prefix,
+                                models::PSAImpl* m) {
+  auto y = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  int total_c = 2 * m->c_;
+  emit_split2(g, y, prefix + ".split", total_c);
+  std::string a = prefix + ".split.a";
+  std::string b = prefix + ".split.b";
+
+  // Attention residual.
+  auto attn_out = emit_psa_attention(g, b, m->c_, H, W,
+                                     prefix + ".attn", m->attn.get());
+  auto b1 = g.node("Add", {b, attn_out}, {}, prefix + ".attn.skip");
+
+  // FFN residual.
+  auto* ffn0 = m->ffn->ptr(0)->as<models::ConvImpl>();
+  auto* ffn1 = m->ffn->ptr(1)->as<models::ConvImpl>();
+  auto y0 = emit_conv_module(g, b1, prefix + ".ffn.0", ffn0);
+  auto y1 = emit_conv_module(g, y0, prefix + ".ffn.1", ffn1);
+  auto b2 = g.node("Add", {b1, y1}, {}, prefix + ".ffn.skip");
+
+  auto cat = g.node("Concat", {a, b2},
+                    {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv2", m->cv2.get());
+}
+
+void export_yolo10_onnx(models::Yolo10& model,
+                        const std::string&    path,
+                        const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, /*FLOAT=*/1,
+              {-1, 3, cfg.imgsz, cfg.imgsz});
+
+  // v10 yaml connectivity (24 layers; SCDown at 5/7/20, PSA at 10).
+  // Per-scale, layer 6/8/13/19 may be C2f or C2fCIB; we read the actual
+  // module type at runtime from `model->model[i]->name()` to dispatch.
+  struct Step {
+    std::vector<int> from;
+  };
+  static const std::vector<Step> yaml = {
+      {{-1}}, {{-1}}, {{-1}},                         // 0  1  2
+      {{-1}}, {{-1}},                                 // 3  4
+      {{-1}}, {{-1}},                                 // 5  6
+      {{-1}}, {{-1}}, {{-1}},                         // 7  8  9
+      {{-1}},                                          // 10 (PSA)
+      {{-1}}, {{-1, 6}},  {{-1}},                     // 11 12 13
+      {{-1}}, {{-1, 4}},  {{-1}},                     // 14 15 16
+      {{-1}}, {{-1, 13}}, {{-1}},                     // 17 18 19
+      {{-1}}, {{-1, 10}}, {{-1}},                     // 20 21 22
+      {{16, 19, 22}},                                  // 23
+  };
+
+  std::vector<std::string> outs(yaml.size());
+  std::vector<std::pair<int, int>> outs_hw(yaml.size());
+  std::string prev = cfg.input_name;
+  int H_cur = cfg.imgsz, W_cur = cfg.imgsz;
+  (void)H_cur; (void)W_cur;
+
+  // Helper to dispatch a non-Concat / non-Detect / non-Upsample layer
+  // on its module type.
+  auto emit_layer = [&](size_t i, const std::string& in_name,
+                        std::pair<int,int> in_hw) -> std::pair<std::string, std::pair<int,int>> {
+    auto prefix = "model." + std::to_string(i);
+    auto holder = model->model[i];
+    // Probe known module types in priority order.
+    if (auto* m = holder->as<models::ConvImpl>()) {
+      auto out = emit_conv_module(g, in_name, prefix, m);
+      int st = m->conv->options.stride()->at(0);
+      return {out, {in_hw.first / st, in_hw.second / st}};
+    }
+    if (auto* m = holder->as<models::C2fImpl>()) {
+      return {emit_c2f(g, in_name, prefix, m), in_hw};
+    }
+    if (auto* m = holder->as<models::C2fCIBImpl>()) {
+      return {emit_c2fcib(g, in_name, prefix, m), in_hw};
+    }
+    if (auto* m = holder->as<models::SCDownImpl>()) {
+      auto out = emit_scdown(g, in_name, prefix, m);
+      int st = m->cv2->conv->options.stride()->at(0);
+      return {out, {in_hw.first / st, in_hw.second / st}};
+    }
+    if (auto* m = holder->as<models::SPPFImpl>()) {
+      return {emit_sppf(g, in_name, prefix, m), in_hw};
+    }
+    if (auto* m = holder->as<models::PSAImpl>()) {
+      return {emit_psa_v10(g, in_name, in_hw.first, in_hw.second, prefix, m),
+              in_hw};
+    }
+    if (auto* m = holder->as<torch::nn::UpsampleImpl>()) {
+      (void)m;
+      return {emit_upsample_2x(g, in_name, prefix),
+              {in_hw.first * 2, in_hw.second * 2}};
+    }
+    throw std::runtime_error("export_yolo10: unknown module at layer " +
+                             std::to_string(i));
+  };
+
+  auto idx_or_prev = [&](int f) { return (f == -1) ? prev : outs[f]; };
+  auto hw_at = [&](int f, size_t i) -> std::pair<int, int> {
+    if (f == -1) return (i == 0) ? std::pair<int, int>{cfg.imgsz, cfg.imgsz}
+                                  : outs_hw[i - 1];
+    return outs_hw[f];
+  };
+
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    auto prefix = "model." + std::to_string(i);
+
+    // Layer 23 — Detect.
+    if (i + 1 == yaml.size()) {
+      auto* d = model->model[i]->as<models::DetectImpl>();
+      std::vector<std::string> det_in;
+      std::vector<int>         det_ch;
+      for (size_t k = 0; k < s.from.size(); ++k) {
+        det_in.push_back(outs[s.from[k]]);
+        det_ch.push_back(d->ch[k]);
+      }
+      // v10 uses Detect(legacy=false), same cv3 form as v11 (DWConvBlock×2
+      // + Conv2d), so emit_detect_v11 produces the right graph.
+      outs[i] = emit_detect_v11(g, det_in, det_ch, model->stride, d,
+                                cfg.imgsz, prefix, cfg.output_name);
+      outs_hw[i] = {0, 0};
+      prev = outs[i];
+      continue;
+    }
+
+    // Concat (multi-input) — collect inputs and emit Concat axis=1.
+    if (s.from.size() > 1) {
+      std::vector<std::string> ins;
+      for (int f : s.from) ins.push_back(idx_or_prev(f));
+      outs[i] = g.node("Concat", ins, {attr_int("axis", 1)}, prefix + ".cat");
+      outs_hw[i] = hw_at(s.from[0], i);
+    } else {
+      auto in_hw = hw_at(s.from[0], i);
+      auto [name, new_hw] = emit_layer(i, idx_or_prev(s.from[0]), in_hw);
+      outs[i] = name;
+      outs_hw[i] = new_hw;
+    }
+    prev = outs[i];
+  }
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+
+  Pb model_pb;
+  model_pb.write_int64_field(1, /*ir_version=*/8);
+  model_pb.write_string_field(2, cfg.producer_name);
+  model_pb.write_string_field(3, cfg.producer_version);
+  model_pb.write_string_field(4, "");
+  model_pb.write_int64_field(5, 1);
+  model_pb.write_string_field(6, "");
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo10"));
+  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+
+  std::ofstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot write " + path);
+  f.write(model_pb.bytes().data(),
+          (std::streamsize)model_pb.bytes().size());
+}
+
+// ─── YOLO3 emitter (#34) ────────────────────────────────────────────────
+//
+// yolov3u: Darknet-53 backbone + v8-style anchor-free DFL Detect head
+// (legacy=true). Module set is just `Conv` + `Bottleneck` + `Upsample` +
+// `Concat` — all reuse existing emitters. Detect head uses `emit_detect`
+// directly. yaml has 29 entries (0..28); some `from` indices are -2.
+void export_yolo3_onnx(models::Yolo3& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, /*FLOAT=*/1,
+              {-1, 3, cfg.imgsz, cfg.imgsz});
+
+  // Inline the v3 yaml (29 entries) — Conv args[2]=k,s; Bottleneck
+  // args[1]=shortcut(0/1); Concat from-list multi-input.
+  struct Step {
+    std::vector<int> from;
+    int              n_repeat;
+    std::string      kind;
+  };
+  static const std::vector<Step> yaml = {
+      // Backbone (Darknet-53)
+      {{-1}, 1, "Conv"}, {{-1}, 1, "Conv"}, {{-1}, 1, "Bottleneck"},      // 0..2
+      {{-1}, 1, "Conv"}, {{-1}, 2, "Bottleneck"},                          // 3..4
+      {{-1}, 1, "Conv"}, {{-1}, 8, "Bottleneck"},                          // 5..6 P3
+      {{-1}, 1, "Conv"}, {{-1}, 8, "Bottleneck"},                          // 7..8 P4
+      {{-1}, 1, "Conv"}, {{-1}, 4, "Bottleneck"},                          // 9..10 P5
+      // Head — P5 branch
+      {{-1}, 1, "Bottleneck"}, {{-1}, 1, "Conv"}, {{-1}, 1, "Conv"},
+      {{-1}, 1, "Conv"}, {{-1}, 1, "Conv"},                                // 11..15  P5
+      // Head — P4 branch (from=-2 → layer 14)
+      {{-2}, 1, "Conv"}, {{-1}, 1, "Up"}, {{-1, 8}, 1, "Cat"},             // 16..18
+      {{-1}, 1, "Bottleneck"}, {{-1}, 1, "Bottleneck"},
+      {{-1}, 1, "Conv"}, {{-1}, 1, "Conv"},                                // 19..22 P4
+      // Head — P3 branch (from=-2 → layer 21)
+      {{-2}, 1, "Conv"}, {{-1}, 1, "Up"}, {{-1, 6}, 1, "Cat"},             // 23..25
+      {{-1}, 1, "Bottleneck"}, {{-1}, 2, "Bottleneck"},                    // 26..27 P3
+      {{27, 22, 15}, 1, "Detect"},                                          // 28
+  };
+
+  std::vector<std::string> outs(yaml.size());
+  std::vector<std::pair<int, int>> hw(yaml.size(), {0, 0});
+  std::string prev = cfg.input_name;
+  std::pair<int, int> prev_hw = {cfg.imgsz, cfg.imgsz};
+
+  auto resolve_idx = [](int f, int i) { return f < 0 ? i + f : f; };
+
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    auto prefix = "model." + std::to_string(i);
+
+    if (s.kind == "Cat") {
+      std::vector<std::string> ins;
+      for (int f : s.from) {
+        int idx = resolve_idx(f, (int)i);
+        ins.push_back(idx == -1 ? prev : outs[idx]);
+      }
+      outs[i] = g.node("Concat", ins, {attr_int("axis", 1)}, prefix + ".cat");
+      hw[i] = hw[resolve_idx(s.from[0], (int)i)];
+    } else if (s.kind == "Detect") {
+      auto* d = model->model[i]->as<models::DetectImpl>();
+      std::vector<std::string> det_in;
+      std::vector<int> det_ch;
+      for (size_t k = 0; k < s.from.size(); ++k) {
+        det_in.push_back(outs[s.from[k]]);
+        det_ch.push_back(d->ch[k]);
+      }
+      // legacy=true Detect head → emit_detect (v8 form).
+      outs[i] = emit_detect(g, det_in, det_ch, model->stride, d,
+                            cfg.imgsz, prefix, cfg.output_name);
+    } else {
+      // Single-input layer (Conv / Bottleneck / Up / Sequential of Bottlenecks)
+      int f = s.from[0];
+      int src_idx = resolve_idx(f, (int)i);
+      auto in_name = (src_idx == -1) ? prev : outs[src_idx];
+      auto in_hw   = (src_idx == -1)
+                         ? std::pair<int,int>{cfg.imgsz, cfg.imgsz}
+                         : hw[src_idx];
+
+      if (s.kind == "Conv") {
+        auto* m = model->model[i]->as<models::ConvImpl>();
+        outs[i] = emit_conv_module(g, in_name, prefix, m);
+        int st = m->conv->options.stride()->at(0);
+        hw[i]  = {in_hw.first / st, in_hw.second / st};
+      } else if (s.kind == "Bottleneck") {
+        // n=1 → bare BottleneckImpl; n>1 → Sequential of BottleneckImpl.
+        if (s.n_repeat == 1) {
+          auto* b = model->model[i]->as<models::BottleneckImpl>();
+          outs[i] = emit_bottleneck(g, in_name, prefix, b, 0, 0);
+        } else {
+          auto* seq = model->model[i]->as<torch::nn::SequentialImpl>();
+          auto cur = in_name;
+          for (size_t k = 0; k < seq->size(); ++k) {
+            auto* bk = seq->ptr(k)->as<models::BottleneckImpl>();
+            cur = emit_bottleneck(g, cur,
+                                   prefix + "." + std::to_string(k), bk, 0, 0);
+          }
+          outs[i] = cur;
+        }
+        hw[i] = in_hw;
+      } else if (s.kind == "Up") {
+        outs[i] = emit_upsample_2x(g, in_name, prefix);
+        hw[i]   = {in_hw.first * 2, in_hw.second * 2};
+      } else {
+        throw std::runtime_error("export_yolo3: unknown layer kind '" + s.kind + "'");
+      }
+    }
+    prev    = outs[i];
+    prev_hw = hw[i];
+  }
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+
+  Pb model_pb;
+  model_pb.write_int64_field(1, 8);
+  model_pb.write_string_field(2, cfg.producer_name);
+  model_pb.write_string_field(3, cfg.producer_version);
+  model_pb.write_string_field(4, "");
+  model_pb.write_int64_field(5, 1);
+  model_pb.write_string_field(6, "");
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo3"));
+  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+
+  std::ofstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot write " + path);
+  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+}
+
+// ─── YOLO5 emitter ──────────────────────────────────────────────────────
+//
+// yolo5{n,s,m,l,x}u (Ultralytics anchor-free v5 form). Architecture differs
+// from v8 in two structural pieces:
+//   - Layer 0: Conv k=6 s=2 p=2 stem (vs v8's 3×3).
+//   - Backbone uses C3 blocks (cv1 + N×Bottleneck → cat with cv2 → cv3)
+//     instead of v8's C2f. Bottlenecks inside C3 use k=(1,3) (1×1 then
+//     3×3) instead of v8's k=(3,3) — already handled by the existing
+//     `emit_bottleneck` (it reads each conv's kernel_size at runtime).
+// Detect head, SPPF, Upsample, Concat all reuse the v8 path.
+static std::string emit_c3(GraphBuilder& g, const std::string& in,
+                           const std::string& prefix, models::C3Impl* m) {
+  // y1 = cv1(x) → run through each Bottleneck in m → y1
+  // y2 = cv2(x)
+  // out = cv3(cat([y1, y2], dim=1))
+  auto y1 = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  for (size_t i = 0; i < m->m->size(); ++i) {
+    auto* bot = m->m[i]->as<models::BottleneckImpl>();
+    y1 = emit_bottleneck(g, y1, prefix + ".m." + std::to_string(i),
+                         bot, m->c_inner, m->c_inner);
+  }
+  auto y2 = emit_conv_module(g, in, prefix + ".cv2", m->cv2.get());
+  auto cat = g.node("Concat", {y1, y2}, {attr_int("axis", 1)},
+                    prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv3", m->cv3.get());
+}
+
+void export_yolo5_onnx(models::Yolo5Detect& model,
+                       const std::string&      path,
+                       const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, /*FLOAT=*/1,
+              {-1, 3, cfg.imgsz, cfg.imgsz});
+
+  // Walk the v5 yaml (mirrors `v5_yaml()` in src/models/yolo5.cpp).
+  // Only the `from` indices and per-layer kind matter here — channel/
+  // depth args are read off the live registered modules.
+  struct Step {
+    std::vector<int> from;
+    std::string      kind;
+  };
+  static const std::vector<Step> yaml = {
+      {{-1}, "Conv"},                // 0  Conv6 stem (k=6, s=2)
+      {{-1}, "Conv"},                // 1  P2/4
+      {{-1}, "C3"},                  // 2
+      {{-1}, "Conv"},                // 3  P3/8
+      {{-1}, "C3"},                  // 4
+      {{-1}, "Conv"},                // 5  P4/16
+      {{-1}, "C3"},                  // 6
+      {{-1}, "Conv"},                // 7  P5/32
+      {{-1}, "C3"},                  // 8
+      {{-1}, "SPPF"},                // 9
+      {{-1}, "Conv"},                // 10
+      {{-1}, "Upsample"},            // 11
+      {{-1, 6}, "Concat"},           // 12
+      {{-1}, "C3"},                  // 13
+      {{-1}, "Conv"},                // 14
+      {{-1}, "Upsample"},            // 15
+      {{-1, 4}, "Concat"},           // 16
+      {{-1}, "C3"},                  // 17  P3 head
+      {{-1}, "Conv"},                // 18
+      {{-1, 14}, "Concat"},          // 19
+      {{-1}, "C3"},                  // 20  P4 head
+      {{-1}, "Conv"},                // 21
+      {{-1, 10}, "Concat"},          // 22
+      {{-1}, "C3"},                  // 23  P5 head
+      {{17, 20, 23}, "Detect"},      // 24
+  };
+  size_t N = (size_t)model->model->size();
+  TORCH_CHECK(N == yaml.size(),
+              "export_yolo5: layer count mismatch (expected ",
+              yaml.size(), ", got ", N, ").");
+
+  std::vector<std::string> outs(yaml.size());
+  std::string prev = cfg.input_name;
+  auto resolve_idx = [](int f, int i) { return f < 0 ? i + f : f; };
+
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    auto prefix = "model." + std::to_string(i);
+    auto holder = model->model[i];
+
+    if (s.kind == "Concat") {
+      std::vector<std::string> ins;
+      for (int f : s.from) {
+        int idx = resolve_idx(f, (int)i);
+        ins.push_back(idx == -1 ? prev : outs[idx]);
+      }
+      outs[i] = g.node("Concat", ins, {attr_int("axis", 1)}, prefix + ".cat");
+    } else if (s.kind == "Detect") {
+      auto* d = holder->as<models::DetectImpl>();
+      std::vector<std::string> det_in;
+      std::vector<int>         det_ch;
+      for (size_t k = 0; k < s.from.size(); ++k) {
+        det_in.push_back(outs[s.from[k]]);
+        det_ch.push_back(d->ch[k]);
+      }
+      outs[i] = emit_detect(g, det_in, det_ch, model->stride, d,
+                            cfg.imgsz, prefix, cfg.output_name);
+    } else {
+      int f = s.from[0];
+      int src_idx = resolve_idx(f, (int)i);
+      auto in_name = (src_idx == -1) ? prev : outs[src_idx];
+      if (auto* m = holder->as<models::ConvImpl>()) {
+        outs[i] = emit_conv_module(g, in_name, prefix, m);
+      } else if (auto* m = holder->as<models::C3Impl>()) {
+        outs[i] = emit_c3(g, in_name, prefix, m);
+      } else if (auto* m = holder->as<models::SPPFImpl>()) {
+        outs[i] = emit_sppf(g, in_name, prefix, m);
+      } else if (holder->as<torch::nn::UpsampleImpl>()) {
+        outs[i] = emit_upsample_2x(g, in_name, prefix);
+      } else {
+        throw std::runtime_error("export_yolo5: unknown module at layer " +
+                                 std::to_string(i));
+      }
+    }
+    prev = outs[i];
+  }
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+
+  Pb model_pb;
+  model_pb.write_int64_field(1, 8);
+  model_pb.write_string_field(2, cfg.producer_name);
+  model_pb.write_string_field(3, cfg.producer_version);
+  model_pb.write_string_field(4, "");
+  model_pb.write_int64_field(5, 1);
+  model_pb.write_string_field(6, "");
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo5"));
+  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+
+  std::ofstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot write " + path);
+  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+}
+
+// ─── YOLO9 emitters (#38) ──────────────────────────────────────────────
+
+// Yolo9RepConv (deploy): single Conv2d (3×3, bias=true) + SiLU.
+static std::string emit_yolo9_repconv(GraphBuilder& g, const std::string& in,
+                                      const std::string& prefix,
+                                      models::Yolo9RepConvImpl* m) {
+  auto* c = m->conv.get();
+  auto wname = g.add_init(prefix + ".conv.weight", c->weight);
+  auto bname = g.add_init(prefix + ".conv.bias",   c->bias);
+  int k  = (int)c->options.kernel_size()->at(0);
+  int p  = std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0);
+  int s  = c->options.stride()->at(0);
+  auto y = g.node("Conv", {in, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", 1),
+                   attr_ints("kernel_shape", {k, k}),
+                   attr_ints("pads", {p, p, p, p}),
+                   attr_ints("strides", {s, s})},
+                  prefix + ".conv.out");
+  auto sig = g.node("Sigmoid", {y}, {}, prefix + ".sig");
+  return g.node("Mul", {y, sig}, {}, prefix + ".silu");
+}
+
+// Yolo9RepBottleneck: optional shortcut + 2 RepConvs.
+static std::string emit_yolo9_repbottleneck(
+    GraphBuilder& g, const std::string& in, const std::string& prefix,
+    models::Yolo9RepBottleneckImpl* m) {
+  auto y = emit_yolo9_repconv(g, in, prefix + ".cv1", m->cv1.get());
+  auto* cv2 = m->cv2.get();
+  // cv2 is the v8 Conv (BN+SiLU) module, not RepConv.
+  auto y2 = emit_conv_module(g, y, prefix + ".cv2", cv2);
+  if (m->add) return g.node("Add", {in, y2}, {}, prefix + ".add");
+  return y2;
+}
+
+// RepCSP: cv1 → RepBottleneck list → cv3 cat → output. v9 form is
+// Sequential(cv1, m, cv3) where cv1 splits the channel half, m runs
+// RepBottlenecks, cv2 is the shortcut, cv3 is the merge.
+static std::string emit_repcsp(GraphBuilder& g, const std::string& in,
+                               const std::string& prefix,
+                               models::RepCSPImpl* m) {
+  auto a = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  for (size_t i = 0; i < m->m->size(); ++i) {
+    auto* sub = m->m[i]->as<models::Yolo9RepBottleneckImpl>();
+    a = emit_yolo9_repbottleneck(g, a,
+                                 prefix + ".m." + std::to_string(i), sub);
+  }
+  auto b   = emit_conv_module(g, in, prefix + ".cv2", m->cv2.get());
+  auto cat = g.node("Concat", {a, b}, {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv3", m->cv3.get());
+}
+
+// RepNCSPELAN4: cv1 → split(2) → cv2[0]=RepCSP / cv2[1]=Conv on
+// chunks[1]; cv3[0]=RepCSP / cv3[1]=Conv on y2; cat 4 outputs → cv4.
+//   y      = cv1(x)        # → c3 channels
+//   chunks = y.chunk(2,1)  # 2 halves of c3/2
+//   y2     = cv2[0](chunks[1])     # RepCSP(c3/2 → c4)
+//   y2     = cv2[1](y2)            # Conv(c4 → c4)
+//   y3     = cv3[0](y2)            # RepCSP(c4 → c4)
+//   y3     = cv3[1](y3)            # Conv(c4 → c4)
+//   return cv4(cat([chunks[0], chunks[1], y2, y3], 1))
+//
+// cv2 / cv3 are ModuleList (not Sequential) per upstream.
+static std::string emit_repncspelan4(GraphBuilder& g, const std::string& in,
+                                     const std::string& prefix,
+                                     models::RepNCSPELAN4Impl* m) {
+  auto y = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  // cv1 outputs c3 channels; chunk(2, dim=1) → halves of c3/2.
+  int c3 = (int)m->cv1->conv->weight.size(0);
+  emit_split2(g, y, prefix + ".split", c3);
+  std::string a = prefix + ".split.a";
+  std::string b = prefix + ".split.b";
+  auto* cv2_csp = m->cv2[0]->as<models::RepCSPImpl>();
+  auto* cv2_cnv = m->cv2[1]->as<models::ConvImpl>();
+  auto* cv3_csp = m->cv3[0]->as<models::RepCSPImpl>();
+  auto* cv3_cnv = m->cv3[1]->as<models::ConvImpl>();
+  auto y2 = emit_repcsp(g, b, prefix + ".cv2.0", cv2_csp);
+  y2      = emit_conv_module(g, y2, prefix + ".cv2.1", cv2_cnv);
+  auto y3 = emit_repcsp(g, y2, prefix + ".cv3.0", cv3_csp);
+  y3      = emit_conv_module(g, y3, prefix + ".cv3.1", cv3_cnv);
+  auto cat = g.node("Concat", {a, b, y2, y3},
+                    {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv4", m->cv4.get());
+}
+
+// ADown: avg_pool 2×2 stride 1 → chunk(2) → cv1(3×3 stride 2) on lane a,
+// max_pool stride 2 + cv2(1×1) on lane b → cat.
+static std::string emit_adown(GraphBuilder& g, const std::string& in,
+                              const std::string& prefix,
+                              models::ADownImpl* m) {
+  // avg_pool 2×2 stride 1 padding 0 (per upstream's `nn.AvgPool2d(2, 1, 0)`).
+  auto pooled = g.node("AveragePool", {in},
+                       {attr_ints("kernel_shape", {2, 2}),
+                        attr_ints("strides", {1, 1}),
+                        attr_ints("pads", {0, 0, 0, 0})},
+                       prefix + ".avg");
+  // Chunk into two halves along channel.
+  int c2_total = (int)m->cv1->conv->weight.size(1) * 2;  // cv1 in_ch = c2/2 each
+  emit_split2(g, pooled, prefix + ".split", c2_total);
+  auto a = prefix + ".split.a";
+  auto b = prefix + ".split.b";
+  auto y1 = emit_conv_module(g, a, prefix + ".cv1", m->cv1.get());  // 3×3 s=2
+  auto y2 = g.node("MaxPool", {b},
+                   {attr_ints("kernel_shape", {3, 3}),
+                    attr_ints("strides", {2, 2}),
+                    attr_ints("pads", {1, 1, 1, 1})},
+                   prefix + ".mp");
+  y2 = emit_conv_module(g, y2, prefix + ".cv2", m->cv2.get());
+  return g.node("Concat", {y1, y2}, {attr_int("axis", 1)}, prefix + ".cat");
+}
+
+// AConv: avg_pool 2×2 stride 1 → cv1 (3×3 stride 2).
+static std::string emit_aconv(GraphBuilder& g, const std::string& in,
+                              const std::string& prefix,
+                              models::AConvImpl* m) {
+  auto pooled = g.node("AveragePool", {in},
+                       {attr_ints("kernel_shape", {2, 2}),
+                        attr_ints("strides", {1, 1}),
+                        attr_ints("pads", {0, 0, 0, 0})},
+                       prefix + ".avg");
+  return emit_conv_module(g, pooled, prefix + ".cv1", m->cv1.get());
+}
+
+// ELAN1: simpler 4-conv ELAN. Same shape as RepNCSPELAN4 but cv2/cv3
+// are bare Convs (not [RepCSP, Conv] ModuleList).
+//   y = cv1(x).chunk(2, 1)   # halves of c3/2
+//   y2 = cv2(chunks[1])
+//   y3 = cv3(y2)             # NOTE: chained, not parallel
+//   return cv4(cat([chunks[0], chunks[1], y2, y3], 1))
+static std::string emit_elan1(GraphBuilder& g, const std::string& in,
+                              const std::string& prefix,
+                              models::ELAN1Impl* m) {
+  auto y = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  int c3 = (int)m->cv1->conv->weight.size(0);
+  emit_split2(g, y, prefix + ".split", c3);
+  auto a  = prefix + ".split.a";
+  auto b  = prefix + ".split.b";
+  auto y2 = emit_conv_module(g, b,  prefix + ".cv2", m->cv2.get());
+  auto y3 = emit_conv_module(g, y2, prefix + ".cv3", m->cv3.get());
+  auto cat = g.node("Concat", {a, b, y2, y3},
+                    {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv4", m->cv4.get());
+}
+
+// SPPELAN: cv1 → 3 chained k=5 maxpools (stride=1, pad=2) → cv5 cat all 4.
+static std::string emit_sppelan(GraphBuilder& g, const std::string& in,
+                                const std::string& prefix,
+                                models::SPPELANImpl* m) {
+  auto y0 = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  auto pool = [&](const std::string& pin, const std::string& nm) {
+    return g.node("MaxPool", {pin},
+                  {attr_ints("kernel_shape", {5, 5}),
+                   attr_ints("strides", {1, 1}),
+                   attr_ints("pads", {2, 2, 2, 2})}, nm);
+  };
+  auto y1 = pool(y0, prefix + ".m1");
+  auto y2 = pool(y1, prefix + ".m2");
+  auto y3 = pool(y2, prefix + ".m3");
+  auto cat = g.node("Concat", {y0, y1, y2, y3},
+                    {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv5", m->cv5.get());
+}
+
+void export_yolo9_onnx(models::Yolo9& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, /*FLOAT=*/1,
+              {-1, 3, cfg.imgsz, cfg.imgsz});
+
+  size_t N = (size_t)model->model->size();
+  std::vector<std::string> outs(N);
+  std::vector<std::pair<int, int>> hw(N, {0, 0});
+  std::string prev = cfg.input_name;
+  std::pair<int, int> prev_hw = {cfg.imgsz, cfg.imgsz};
+
+  // We need the yaml's `from` indices to walk dependencies. Re-derive
+  // from the v9 yaml builder. Since v9_yaml_for is in yolo9.cpp's
+  // anonymous namespace, we duplicate the connectivity skeleton here
+  // (only `from` indices and "kind" tags — not the channel args, which
+  // we read off the registered modules at runtime).
+  // Two skeletons: t/s/m/c share connectivity (23 layers); e differs
+  // (43 layers, with two-pass backbone via CBLinear/CBFuse).
+  struct Step {
+    std::vector<int> from;
+    std::string      kind;  // "Block"|"Down"|"Up"|"Conv"|"SPPELAN"|"Cat"|"Detect"|"CBLinear"|"CBFuse"|"Identity"
+  };
+  static const std::vector<Step> y_skel_tsmc = {
+      {{-1}, "Conv"},                                 // 0
+      {{-1}, "Conv"},                                 // 1
+      {{-1}, "Block"},                                // 2
+      {{-1}, "Down"},                                 // 3
+      {{-1}, "Block"},                                // 4
+      {{-1}, "Down"},                                 // 5
+      {{-1}, "Block"},                                // 6
+      {{-1}, "Down"},                                 // 7
+      {{-1}, "Block"},                                // 8
+      {{-1}, "SPPELAN"},                              // 9
+      {{-1}, "Up"},                                   // 10
+      {{-1, 6}, "Cat"},                               // 11
+      {{-1}, "Block"},                                // 12
+      {{-1}, "Up"},                                   // 13
+      {{-1, 4}, "Cat"},                               // 14
+      {{-1}, "Block"},                                // 15
+      {{-1}, "Down"},                                 // 16
+      {{-1, 12}, "Cat"},                              // 17
+      {{-1}, "Block"},                                // 18
+      {{-1}, "Down"},                                 // 19
+      {{-1, 9}, "Cat"},                               // 20
+      {{-1}, "Block"},                                // 21
+      {{15, 18, 21}, "Detect"},                       // 22
+  };
+  static const std::vector<Step> y_skel_e = {
+      // Primary backbone (mirrors v9c)
+      {{-1}, "Identity"},                             // 0
+      {{-1}, "Conv"},                                 // 1  P1/2
+      {{-1}, "Conv"},                                 // 2  P2/4
+      {{-1}, "Block"},                                // 3
+      {{-1}, "Down"},                                 // 4  P3/8
+      {{-1}, "Block"},                                // 5
+      {{-1}, "Down"},                                 // 6  P4/16
+      {{-1}, "Block"},                                // 7
+      {{-1}, "Down"},                                 // 8  P5/32
+      {{-1}, "Block"},                                // 9
+      // CBLinear taps from primary
+      {{1}, "CBLinear"},                              // 10
+      {{3}, "CBLinear"},                              // 11
+      {{5}, "CBLinear"},                              // 12
+      {{7}, "CBLinear"},                              // 13
+      {{9}, "CBLinear"},                              // 14
+      // Secondary backbone (re-ingests image via layer 0 = Identity)
+      {{0}, "Conv"},                                  // 15  P1/2
+      {{10, 11, 12, 13, 14, -1}, "CBFuse"},           // 16
+      {{-1}, "Conv"},                                 // 17  P2/4
+      {{11, 12, 13, 14, -1}, "CBFuse"},               // 18
+      {{-1}, "Block"},                                // 19
+      {{-1}, "Down"},                                 // 20  P3/8
+      {{12, 13, 14, -1}, "CBFuse"},                   // 21
+      {{-1}, "Block"},                                // 22
+      {{-1}, "Down"},                                 // 23  P4/16
+      {{13, 14, -1}, "CBFuse"},                       // 24
+      {{-1}, "Block"},                                // 25
+      {{-1}, "Down"},                                 // 26  P5/32
+      {{14, -1}, "CBFuse"},                           // 27
+      {{-1}, "Block"},                                // 28
+      {{-1}, "SPPELAN"},                              // 29
+      // Head
+      {{-1}, "Up"},                                   // 30
+      {{-1, 25}, "Cat"},                              // 31
+      {{-1}, "Block"},                                // 32
+      {{-1}, "Up"},                                   // 33
+      {{-1, 22}, "Cat"},                              // 34
+      {{-1}, "Block"},                                // 35  P3 head
+      {{-1}, "Down"},                                 // 36
+      {{-1, 32}, "Cat"},                              // 37
+      {{-1}, "Block"},                                // 38  P4 head
+      {{-1}, "Down"},                                 // 39
+      {{-1, 29}, "Cat"},                              // 40
+      {{-1}, "Block"},                                // 41  P5 head
+      {{35, 38, 41}, "Detect"},                       // 42
+  };
+  const auto& y_skeleton = (model->scale == models::Yolo9Scale::E)
+                               ? y_skel_e
+                               : y_skel_tsmc;
+  TORCH_CHECK(N == y_skeleton.size(),
+              "yolo9 export: layer count mismatch (expected ",
+              y_skeleton.size(), ", got ", N, ").");
+
+  auto resolve_idx = [](int f, int i) { return f < 0 ? i + f : f; };
+
+  for (size_t i = 0; i < y_skeleton.size(); ++i) {
+    const auto& s = y_skeleton[i];
+    auto prefix = "model." + std::to_string(i);
+    auto holder = model->model[i];
+
+    if (s.kind == "Cat") {
+      std::vector<std::string> ins;
+      for (int f : s.from) {
+        int idx = resolve_idx(f, (int)i);
+        ins.push_back(idx == -1 ? prev : outs[idx]);
+      }
+      outs[i] = g.node("Concat", ins, {attr_int("axis", 1)}, prefix + ".cat");
+      hw[i] = hw[resolve_idx(s.from[0], (int)i)];
+    } else if (s.kind == "Identity") {
+      // v9e layer 0 — pass-through of the network input. We emit no node
+      // and just route the input tensor directly to the next layer.
+      int f = s.from[0];
+      int src_idx = resolve_idx(f, (int)i);
+      outs[i] = (src_idx == -1) ? prev : outs[src_idx];
+      hw[i]   = (src_idx == -1) ? std::pair<int,int>{cfg.imgsz, cfg.imgsz}
+                                : hw[src_idx];
+    } else if (s.kind == "CBLinear") {
+      // 1×1 Conv with bias=true, output channels = sum(c2s). Downstream
+      // CBFuse will slice by branch index. We emit the full conv here.
+      auto* m = holder->as<models::CBLinearImpl>();
+      TORCH_CHECK(m, "yolo9 export: layer ", i,
+                  " kind=CBLinear but module type does not match");
+      int f = s.from[0];
+      int src_idx = resolve_idx(f, (int)i);
+      auto in_name = (src_idx == -1) ? prev : outs[src_idx];
+      auto in_hw   = (src_idx == -1)
+                         ? std::pair<int,int>{cfg.imgsz, cfg.imgsz}
+                         : hw[src_idx];
+      auto* c = m->conv.get();
+      auto wname = g.add_init(prefix + ".conv.weight", c->weight);
+      auto bname = g.add_init(prefix + ".conv.bias",   c->bias);
+      outs[i] = g.node("Conv", {in_name, wname, bname},
+                       {attr_ints("dilations", {1, 1}),
+                        attr_int("group", 1),
+                        attr_ints("kernel_shape", {1, 1}),
+                        attr_ints("pads", {0, 0, 0, 0}),
+                        attr_ints("strides", {1, 1})},
+                       prefix + ".cblin.out");
+      hw[i] = in_hw;
+    } else if (s.kind == "CBFuse") {
+      // Forward (matches CBFuseImpl::forward):
+      //   anchor = xs.back();  out = anchor;
+      //   for each non-last input cb_i (a CBLinear's full output):
+      //     start = sum(c2s[0..idx[i]-1]); len = c2s[idx[i]]
+      //     sliced = cb_i[:, start:start+len, :, :]
+      //     out = out + nearest_resize(sliced, anchor.HW)
+      auto* m = holder->as<models::CBFuseImpl>();
+      TORCH_CHECK(m, "yolo9 export: layer ", i,
+                  " kind=CBFuse but module type does not match");
+      int last_f = s.from.back();
+      int anchor_idx = resolve_idx(last_f, (int)i);
+      auto anchor_name = (anchor_idx == -1) ? prev : outs[anchor_idx];
+      auto anchor_hw   = (anchor_idx == -1)
+                             ? std::pair<int,int>{cfg.imgsz, cfg.imgsz}
+                             : hw[anchor_idx];
+      std::string acc = anchor_name;
+      for (size_t k = 0; k + 1 < s.from.size(); ++k) {
+        int src = resolve_idx(s.from[k], (int)i);
+        TORCH_CHECK(src >= 0, "CBFuse: non-anchor input must be a CBLinear");
+        const auto& c2s = m->c2s_per_input[k];
+        int branch_idx = m->idx[k];
+        int start = 0;
+        for (int q = 0; q < branch_idx; ++q) start += c2s[q];
+        int len = c2s[branch_idx];
+        auto starts_name = g.add_init_int64(prefix + ".cbf." + std::to_string(k) + ".start", {start});
+        auto ends_name   = g.add_init_int64(prefix + ".cbf." + std::to_string(k) + ".end",   {start + len});
+        auto axes_name   = g.add_init_int64(prefix + ".cbf." + std::to_string(k) + ".ax",    {1});
+        auto step_name   = g.add_init_int64(prefix + ".cbf." + std::to_string(k) + ".st",    {1});
+        auto sliced = g.node("Slice",
+                             {outs[src], starts_name, ends_name, axes_name, step_name},
+                             {}, prefix + ".cbf." + std::to_string(k) + ".sl");
+        auto src_hw = hw[src];
+        if (src_hw != anchor_hw) {
+          // Static spatial scale: anchor_hw / src_hw. Use Resize with
+          // mode=nearest to match upstream's `F.interpolate(mode='nearest')`.
+          auto roi = g.add_init_float(prefix + ".cbf." + std::to_string(k) + ".roi",
+                                      std::vector<float>{}, {0});
+          float sH = (float)anchor_hw.first  / (float)src_hw.first;
+          float sW = (float)anchor_hw.second / (float)src_hw.second;
+          auto scales = g.add_init_float(prefix + ".cbf." + std::to_string(k) + ".scales",
+                                          std::vector<float>{1.f, 1.f, sH, sW}, {4});
+          sliced = g.node("Resize", {sliced, roi, scales}, {
+            attr_string("coordinate_transformation_mode", "asymmetric"),
+            attr_string("mode", "nearest"),
+            attr_string("nearest_mode", "floor"),
+          }, prefix + ".cbf." + std::to_string(k) + ".rz");
+        }
+        acc = g.node("Add", {acc, sliced}, {},
+                     prefix + ".cbf." + std::to_string(k) + ".add");
+      }
+      outs[i] = acc;
+      hw[i]   = anchor_hw;
+    } else if (s.kind == "Detect") {
+      auto* d = holder->as<models::DetectImpl>();
+      std::vector<std::string> det_in;
+      std::vector<int> det_ch;
+      for (size_t k = 0; k < s.from.size(); ++k) {
+        det_in.push_back(outs[s.from[k]]);
+        det_ch.push_back(d->ch[k]);
+      }
+      outs[i] = emit_detect(g, det_in, det_ch, model->stride, d,
+                            cfg.imgsz, prefix, cfg.output_name);
+    } else {
+      int f = s.from[0];
+      int src_idx = resolve_idx(f, (int)i);
+      auto in_name = (src_idx == -1) ? prev : outs[src_idx];
+      auto in_hw   = (src_idx == -1)
+                         ? std::pair<int,int>{cfg.imgsz, cfg.imgsz}
+                         : hw[src_idx];
+
+      // Dispatch by runtime module type.
+      if (auto* m = holder->as<models::ConvImpl>()) {
+        outs[i] = emit_conv_module(g, in_name, prefix, m);
+        int st = m->conv->options.stride()->at(0);
+        hw[i]  = {in_hw.first / st, in_hw.second / st};
+      } else if (auto* m = holder->as<models::ELAN1Impl>()) {
+        outs[i] = emit_elan1(g, in_name, prefix, m);
+        hw[i] = in_hw;
+      } else if (auto* m = holder->as<models::RepNCSPELAN4Impl>()) {
+        outs[i] = emit_repncspelan4(g, in_name, prefix, m);
+        hw[i] = in_hw;
+      } else if (auto* m = holder->as<models::ADownImpl>()) {
+        outs[i] = emit_adown(g, in_name, prefix, m);
+        hw[i] = {in_hw.first / 2, in_hw.second / 2};
+      } else if (auto* m = holder->as<models::AConvImpl>()) {
+        outs[i] = emit_aconv(g, in_name, prefix, m);
+        hw[i] = {in_hw.first / 2, in_hw.second / 2};
+      } else if (auto* m = holder->as<models::SPPELANImpl>()) {
+        outs[i] = emit_sppelan(g, in_name, prefix, m);
+        hw[i] = in_hw;
+      } else if (holder->as<torch::nn::UpsampleImpl>()) {
+        outs[i] = emit_upsample_2x(g, in_name, prefix);
+        hw[i] = {in_hw.first * 2, in_hw.second * 2};
+      } else {
+        throw std::runtime_error("export_yolo9: unknown module at layer " +
+                                 std::to_string(i));
+      }
+    }
+    prev = outs[i];
+    prev_hw = hw[i];
+  }
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+
+  Pb model_pb;
+  model_pb.write_int64_field(1, 8);
+  model_pb.write_string_field(2, cfg.producer_name);
+  model_pb.write_string_field(3, cfg.producer_version);
+  model_pb.write_string_field(4, "");
+  model_pb.write_int64_field(5, 1);
+  model_pb.write_string_field(6, "");
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo9"));
+  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+
+  std::ofstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot write " + path);
+  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+}
+
+// ─── YOLO4 emitters (#35) ──────────────────────────────────────────────
+
+// Conv+BN+act with arbitrary activation. Reuses fuse_conv_bn for the
+// Conv part, then composes the activation as ONNX nodes inline.
+//   act = "mish"   → Softplus → Tanh → Mul (mish ≡ x * tanh(softplus(x)))
+//   act = "leaky"  → LeakyRelu (alpha=0.1)
+//   act = "none"   → identity
+static std::string emit_conv_bn_act(GraphBuilder& g, const std::string& in,
+                                    const std::string& prefix,
+                                    const at::Tensor& cw,
+                                    const at::Tensor& bw, const at::Tensor& bb,
+                                    const at::Tensor& brm, const at::Tensor& brv,
+                                    int stride, int padding, int groups,
+                                    const std::string& act, double bn_eps) {
+  auto fused = fuse_conv_bn(cw, bw, bb, brm, brv, bn_eps);
+  auto wname = g.add_init(prefix + ".weight", fused.weight);
+  auto bname = g.add_init(prefix + ".bias",   fused.bias);
+  auto y = g.node("Conv", {in, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", groups),
+                   attr_ints("kernel_shape", {fused.weight.size(2),
+                                              fused.weight.size(3)}),
+                   attr_ints("pads", {padding, padding, padding, padding}),
+                   attr_ints("strides", {stride, stride})},
+                  prefix + ".out");
+  if (act == "mish") {
+    auto sp  = g.node("Softplus", {y}, {}, prefix + ".sp");
+    auto th  = g.node("Tanh",     {sp}, {}, prefix + ".tanh");
+    return     g.node("Mul",      {y, th}, {}, prefix + ".mish");
+  }
+  if (act == "leaky") {
+    return g.node("LeakyRelu", {y}, {attr_float("alpha", 0.1f)},
+                  prefix + ".leaky");
+  }
+  return y;
+}
+
+static std::string emit_convmish(GraphBuilder& g, const std::string& in,
+                                 const std::string& prefix,
+                                 models::ConvMishImpl* m) {
+  auto* c = m->conv.get();
+  return emit_conv_bn_act(g, in, prefix, c->weight, m->bn->weight, m->bn->bias,
+                          m->bn->running_mean, m->bn->running_var,
+                          c->options.stride()->at(0),
+                          std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0),
+                          (int)c->options.groups(), "mish",
+                          m->bn->options.eps());
+}
+static std::string emit_convleaky(GraphBuilder& g, const std::string& in,
+                                  const std::string& prefix,
+                                  models::ConvLeakyImpl* m) {
+  auto* c = m->conv.get();
+  return emit_conv_bn_act(g, in, prefix, c->weight, m->bn->weight, m->bn->bias,
+                          m->bn->running_mean, m->bn->running_var,
+                          c->options.stride()->at(0),
+                          std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0),
+                          (int)c->options.groups(), "leaky",
+                          m->bn->options.eps());
+}
+
+// DarknetResidualMish: x + cv2(cv1(x)).
+static std::string emit_v4_residual(GraphBuilder& g, const std::string& in,
+                                    const std::string& prefix,
+                                    models::DarknetResidualMishImpl* m) {
+  auto y = emit_convmish(g, in, prefix + ".cv1", m->cv1.get());
+  y      = emit_convmish(g, y,  prefix + ".cv2", m->cv2.get());
+  return g.node("Add", {in, y}, {}, prefix + ".add");
+}
+
+// CSPStage: down → (cv2 shortcut, cv1 main → m[i] → cv3) → cv4(cat).
+static std::string emit_cspstage(GraphBuilder& g, const std::string& in,
+                                 const std::string& prefix,
+                                 models::CSPStageImpl* m) {
+  auto x       = emit_convmish(g, in, prefix + ".down", m->down.get());
+  auto y_main  = emit_convmish(g, x,  prefix + ".cv1",  m->cv1.get());
+  for (size_t i = 0; i < m->m->size(); ++i) {
+    auto* sub = m->m[i]->as<models::DarknetResidualMishImpl>();
+    y_main = emit_v4_residual(g, y_main,
+                              prefix + ".m." + std::to_string(i), sub);
+  }
+  y_main = emit_convmish(g, y_main, prefix + ".cv3", m->cv3.get());
+  auto y_short = emit_convmish(g, x, prefix + ".cv2", m->cv2.get());
+  auto cat = g.node("Concat", {y_main, y_short},
+                    {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_convmish(g, cat, prefix + ".cv4", m->cv4.get());
+}
+
+// SPPv4: cat(m13(x), m9(x), m5(x), x) — three parallel maxpools at
+// k=5/9/13 stride=1 (padding k/2) plus the input.
+static std::string emit_sppv4(GraphBuilder& g, const std::string& in,
+                              const std::string& prefix) {
+  auto pool = [&](const std::string& nm, int k, int p) {
+    return g.node("MaxPool", {in},
+                  {attr_ints("kernel_shape", {k, k}),
+                   attr_ints("strides", {1, 1}),
+                   attr_ints("pads", {p, p, p, p})}, nm);
+  };
+  auto p13 = pool(prefix + ".m13", 13, 6);
+  auto p9  = pool(prefix + ".m9",   9, 4);
+  auto p5  = pool(prefix + ".m5",   5, 2);
+  return g.node("Concat", {p13, p9, p5, in},
+                {attr_int("axis", 1)}, prefix + ".cat");
+}
+
+// 2x nearest upsample (no-init). Distinct from emit_upsample_2x (which
+// already exists for v8) — but we reuse that helper directly.
+
+// v4 anchor decode emitter. Per yolov4.cfg conventions:
+//   xy_pix = (sigmoid(t_xy) * scale_xy - 0.5*(scale_xy - 1) + grid) * stride
+//   wh_pix = (anchor_w_in_pixels at imgsz=608) * exp(t_wh) * (imgsz/608)
+//   score  = sigmoid(obj) * sigmoid(cls)   (obj*cls fusion)
+//   xyxy   = xywh → xyxy
+//
+// Inputs: 3 raw outputs at strides 32 / 16 / 8 (P5/P4/P3). Anchors at
+// imgsz=608: (12,16) (19,36) (40,28) for P3, (36,75) (76,55) (72,146)
+// for P4, (142,110) (192,243) (459,401) for P5.
+static std::string emit_yolov4_decode(GraphBuilder& g,
+                                      const std::vector<std::string>& raw,
+                                      const std::vector<int>& strides,
+                                      const std::vector<float>& scale_xy,
+                                      const std::vector<std::array<std::pair<float,float>, 3>>& anchors,
+                                      int imgsz, int nc,
+                                      const std::string& prefix,
+                                      const std::string& output_name) {
+  const int na = 3;
+  const int no = 5 + nc;
+  const int nl = (int)raw.size();
+  const float calib = 608.0f;
+  const float img_scale = (float)imgsz / calib;
+
+  std::vector<std::string> level_outs;     // [N, 4+nc, A_i] per level
+  for (int i = 0; i < nl; ++i) {
+    int stride = strides[i];
+    int H = imgsz / stride;
+    int W = imgsz / stride;
+    int A_i = na * H * W;
+
+    // Reshape: [B, na*no, H, W] → [B, na, no, H, W].
+    auto rshape0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".rshape0",
+                                    {0, (int64_t)na, (int64_t)no,
+                                     (int64_t)H, (int64_t)W});
+    auto t5 = g.node("Reshape", {raw[i], rshape0}, {},
+                     prefix + ".l" + std::to_string(i) + ".5d");
+
+    auto sig = g.node("Sigmoid", {t5}, {}, prefix + ".l" + std::to_string(i) + ".sig");
+
+    // Slice into xy [..., 0:2], wh [..., 2:4], obj [..., 4:5], cls [..., 5:5+nc].
+    // Last dim = no = 5+nc; channel-major after reshape [B, na, no, H, W].
+    // Slice along dim=2.
+    auto axes2 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".ax", {2});
+    auto step1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".st", {1});
+    auto sxy0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".sxy0", {0});
+    auto sxy1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".sxy1", {2});
+    auto swh0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".swh0", {2});
+    auto swh1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".swh1", {4});
+    auto sob0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".sob0", {4});
+    auto sob1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".sob1", {5});
+    auto scl0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".scl0", {5});
+    auto scl1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".scl1", {(int64_t)no});
+
+    auto xy_sig = g.node("Slice", {sig, sxy0, sxy1, axes2, step1}, {},
+                          prefix + ".l" + std::to_string(i) + ".xy");
+    auto cls_sig = g.node("Slice", {sig, scl0, scl1, axes2, step1}, {},
+                           prefix + ".l" + std::to_string(i) + ".cls");
+    auto obj_sig = g.node("Slice", {sig, sob0, sob1, axes2, step1}, {},
+                           prefix + ".l" + std::to_string(i) + ".obj");
+    // Raw t_wh (pre-sigmoid) for exp() decode.
+    auto wh_raw  = g.node("Slice", {t5, swh0, swh1, axes2, step1}, {},
+                           prefix + ".l" + std::to_string(i) + ".wh_raw");
+
+    // xy_pix = (xy_sig * scale_xy - 0.5*(scale_xy-1) + grid) * stride
+    std::vector<float> sxy_v = {scale_xy[i]};
+    auto sxy_init = g.add_init_float(prefix + ".l" + std::to_string(i) + ".sxy",
+                                     sxy_v, {1});
+    auto xy_scaled = g.node("Mul", {xy_sig, sxy_init}, {},
+                             prefix + ".l" + std::to_string(i) + ".xy_scaled");
+    std::vector<float> bias_v = {0.5f * (scale_xy[i] - 1.0f)};
+    auto bias_init = g.add_init_float(prefix + ".l" + std::to_string(i) + ".bias",
+                                      bias_v, {1});
+    auto xy_centered = g.node("Sub", {xy_scaled, bias_init}, {},
+                               prefix + ".l" + std::to_string(i) + ".xy_c");
+    // Build grid as float buffer [1, 1, 2, H, W]: channel 0 = gx, channel 1 = gy.
+    std::vector<float> grid_v(2 * H * W);
+    for (int y = 0; y < H; ++y) {
+      for (int x = 0; x < W; ++x) {
+        grid_v[0 * H * W + y * W + x] = (float)x;
+        grid_v[1 * H * W + y * W + x] = (float)y;
+      }
+    }
+    auto grid_init = g.add_init_float(
+        prefix + ".l" + std::to_string(i) + ".grid", grid_v,
+        {1, 1, 2, (int64_t)H, (int64_t)W});
+    auto xy_cell = g.node("Add", {xy_centered, grid_init}, {},
+                           prefix + ".l" + std::to_string(i) + ".xy_cell");
+    std::vector<float> stride_v = {(float)stride};
+    auto stride_init = g.add_init_float(
+        prefix + ".l" + std::to_string(i) + ".stride", stride_v, {1});
+    auto xy_pix = g.node("Mul", {xy_cell, stride_init}, {},
+                          prefix + ".l" + std::to_string(i) + ".xy_pix");
+
+    // wh_pix = exp(t_wh) * anchor (anchor calibrated to imgsz=608, scaled
+    // to actual imgsz). Build anchor buffer [1, na, 2, 1, 1].
+    std::vector<float> anc_v(na * 2);
+    for (int a = 0; a < na; ++a) {
+      anc_v[a * 2 + 0] = anchors[i][a].first  * img_scale;
+      anc_v[a * 2 + 1] = anchors[i][a].second * img_scale;
+    }
+    auto anc_init = g.add_init_float(
+        prefix + ".l" + std::to_string(i) + ".anc", anc_v,
+        {1, (int64_t)na, 2, 1, 1});
+    auto wh_exp = g.node("Exp", {wh_raw}, {},
+                          prefix + ".l" + std::to_string(i) + ".wh_exp");
+    auto wh_pix = g.node("Mul", {wh_exp, anc_init}, {},
+                          prefix + ".l" + std::to_string(i) + ".wh_pix");
+
+    // score = obj * cls, broadcast obj [..., 1] across cls channels.
+    auto score = g.node("Mul", {cls_sig, obj_sig}, {},
+                         prefix + ".l" + std::to_string(i) + ".score");
+
+    // xywh → xyxy (still in [B, na, 2, H, W] channel-major).
+    std::vector<float> half_v = {0.5f};
+    auto half_init = g.add_init_float(
+        prefix + ".l" + std::to_string(i) + ".half", half_v, {1});
+    auto wh_half = g.node("Mul", {wh_pix, half_init}, {},
+                           prefix + ".l" + std::to_string(i) + ".wh_half");
+    auto x1y1 = g.node("Sub", {xy_pix, wh_half}, {},
+                        prefix + ".l" + std::to_string(i) + ".x1y1");
+    auto x2y2 = g.node("Add", {xy_pix, wh_half}, {},
+                        prefix + ".l" + std::to_string(i) + ".x2y2");
+    auto box  = g.node("Concat", {x1y1, x2y2},
+                       {attr_int("axis", 2)},
+                       prefix + ".l" + std::to_string(i) + ".box");
+
+    // Cat box + score along channel-2 dim (the "no" axis): shape
+    //   box   = [B, na, 4, H, W]
+    //   score = [B, na, nc, H, W]
+    auto packed = g.node("Concat", {box, score},
+                          {attr_int("axis", 2)},
+                          prefix + ".l" + std::to_string(i) + ".packed");
+    // Reshape to [B, 4+nc, A_i] = collapse na*H*W into A and merge na into A.
+    // First permute [B, na, 4+nc, H, W] → [B, 4+nc, na, H, W], then flatten
+    // last 3 dims.
+    auto perm = g.node("Transpose", {packed},
+                        {attr_ints("perm", {0, 2, 1, 3, 4})},
+                        prefix + ".l" + std::to_string(i) + ".perm");
+    auto rshape1 = g.add_init_int64(
+        prefix + ".l" + std::to_string(i) + ".rshape1",
+        {0, (int64_t)(4 + nc), (int64_t)A_i});
+    auto flat = g.node("Reshape", {perm, rshape1}, {},
+                        prefix + ".l" + std::to_string(i) + ".flat");
+    level_outs.push_back(flat);
+  }
+
+  return g.node("Concat", level_outs, {attr_int("axis", 2)}, output_name);
+}
+
+void export_yolo4_onnx(models::Yolo4& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, /*FLOAT=*/1,
+              {-1, 3, cfg.imgsz, cfg.imgsz});
+
+  // Backbone
+  auto y = emit_convmish(g, cfg.input_name, "stem", model->stem.get());
+  y = emit_cspstage(g, y, "s1", model->s1.get());
+  y = emit_cspstage(g, y, "s2", model->s2.get());
+  auto p3 = emit_cspstage(g, y, "s3", model->s3.get());
+  auto p4 = emit_cspstage(g, p3, "s4", model->s4.get());
+  auto p5 = emit_cspstage(g, p4, "s5", model->s5.get());
+
+  // SPP tower
+  auto x5 = emit_convleaky(g, p5, "spp_pre1", model->spp_pre1.get());
+  x5      = emit_convleaky(g, x5, "spp_pre2", model->spp_pre2.get());
+  x5      = emit_convleaky(g, x5, "spp_pre3", model->spp_pre3.get());
+  x5      = emit_sppv4(g,    x5, "spp");
+  x5      = emit_convleaky(g, x5, "spp_post1", model->spp_post1.get());
+  x5      = emit_convleaky(g, x5, "spp_post2", model->spp_post2.get());
+  x5      = emit_convleaky(g, x5, "spp_post3", model->spp_post3.get());
+
+  // Top-down P5 → P4
+  auto u4 = emit_upsample_2x(g,
+              emit_convleaky(g, x5, "p4_td_red", model->p4_td_red.get()),
+              "p4_td_red.up");
+  auto x4 = g.node("Concat",
+              {emit_convleaky(g, p4, "p4_lateral", model->p4_lateral.get()), u4},
+              {attr_int("axis", 1)}, "p4_lateral.cat");
+  x4 = emit_convleaky(g, x4, "p4_td1", model->p4_td1.get());
+  x4 = emit_convleaky(g, x4, "p4_td2", model->p4_td2.get());
+  x4 = emit_convleaky(g, x4, "p4_td3", model->p4_td3.get());
+  x4 = emit_convleaky(g, x4, "p4_td4", model->p4_td4.get());
+  x4 = emit_convleaky(g, x4, "p4_td5", model->p4_td5.get());
+
+  // Top-down P4 → P3
+  auto u3 = emit_upsample_2x(g,
+              emit_convleaky(g, x4, "p3_td_red", model->p3_td_red.get()),
+              "p3_td_red.up");
+  auto x3 = g.node("Concat",
+              {emit_convleaky(g, p3, "p3_lateral", model->p3_lateral.get()), u3},
+              {attr_int("axis", 1)}, "p3_lateral.cat");
+  x3 = emit_convleaky(g, x3, "p3_td1", model->p3_td1.get());
+  x3 = emit_convleaky(g, x3, "p3_td2", model->p3_td2.get());
+  x3 = emit_convleaky(g, x3, "p3_td3", model->p3_td3.get());
+  x3 = emit_convleaky(g, x3, "p3_td4", model->p3_td4.get());
+  x3 = emit_convleaky(g, x3, "p3_td5", model->p3_td5.get());
+
+  // P3 head output (raw [B, na*(5+nc), H, W])
+  auto out3_pre = emit_convleaky(g, x3, "p3_out_pre", model->p3_out_pre.get());
+  auto out3 = [&]() {
+    auto* c = model->p3_out.get();
+    auto wname = g.add_init("p3_out.weight", c->weight);
+    auto bname = g.add_init("p3_out.bias",   c->bias);
+    return g.node("Conv", {out3_pre, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", 1),
+                   attr_ints("kernel_shape", {1, 1}),
+                   attr_ints("pads", {0, 0, 0, 0}),
+                   attr_ints("strides", {1, 1})}, "p3_out.out");
+  }();
+
+  // Bottom-up P3 → P4
+  auto d4 = emit_convleaky(g, x3, "p4_bu_down", model->p4_bu_down.get());
+  auto y4 = g.node("Concat", {d4, x4}, {attr_int("axis", 1)}, "p4_bu.cat");
+  y4 = emit_convleaky(g, y4, "p4_bu1", model->p4_bu1.get());
+  y4 = emit_convleaky(g, y4, "p4_bu2", model->p4_bu2.get());
+  y4 = emit_convleaky(g, y4, "p4_bu3", model->p4_bu3.get());
+  y4 = emit_convleaky(g, y4, "p4_bu4", model->p4_bu4.get());
+  y4 = emit_convleaky(g, y4, "p4_bu5", model->p4_bu5.get());
+  auto out4_pre = emit_convleaky(g, y4, "p4_out_pre", model->p4_out_pre.get());
+  auto out4 = [&]() {
+    auto* c = model->p4_out.get();
+    auto wname = g.add_init("p4_out.weight", c->weight);
+    auto bname = g.add_init("p4_out.bias",   c->bias);
+    return g.node("Conv", {out4_pre, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", 1),
+                   attr_ints("kernel_shape", {1, 1}),
+                   attr_ints("pads", {0, 0, 0, 0}),
+                   attr_ints("strides", {1, 1})}, "p4_out.out");
+  }();
+
+  // Bottom-up P4 → P5
+  auto d5 = emit_convleaky(g, y4, "p5_bu_down", model->p5_bu_down.get());
+  auto y5 = g.node("Concat", {d5, x5}, {attr_int("axis", 1)}, "p5_bu.cat");
+  y5 = emit_convleaky(g, y5, "p5_bu1", model->p5_bu1.get());
+  y5 = emit_convleaky(g, y5, "p5_bu2", model->p5_bu2.get());
+  y5 = emit_convleaky(g, y5, "p5_bu3", model->p5_bu3.get());
+  y5 = emit_convleaky(g, y5, "p5_bu4", model->p5_bu4.get());
+  y5 = emit_convleaky(g, y5, "p5_bu5", model->p5_bu5.get());
+  auto out5_pre = emit_convleaky(g, y5, "p5_out_pre", model->p5_out_pre.get());
+  auto out5 = [&]() {
+    auto* c = model->p5_out.get();
+    auto wname = g.add_init("p5_out.weight", c->weight);
+    auto bname = g.add_init("p5_out.bias",   c->bias);
+    return g.node("Conv", {out5_pre, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", 1),
+                   attr_ints("kernel_shape", {1, 1}),
+                   attr_ints("pads", {0, 0, 0, 0}),
+                   attr_ints("strides", {1, 1})}, "p5_out.out");
+  }();
+
+  // Anchor decode — order is {P5, P4, P3} per Yolo4Impl::forward.
+  std::vector<std::string> raw = {out5, out4, out3};
+  std::vector<int>         strides = {32, 16, 8};
+  std::vector<float>       scale_xy = {1.05f, 1.10f, 1.20f};
+  std::vector<std::array<std::pair<float,float>, 3>> anchors = {
+    {{ {142.f, 110.f}, {192.f, 243.f}, {459.f, 401.f} }},   // P5
+    {{ { 36.f,  75.f}, { 76.f,  55.f}, { 72.f, 146.f} }},   // P4
+    {{ { 12.f,  16.f}, { 19.f,  36.f}, { 40.f,  28.f} }},   // P3
+  };
+  emit_yolov4_decode(g, raw, strides, scale_xy, anchors,
+                     cfg.imgsz, model->nc, "decode", cfg.output_name);
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+
+  Pb model_pb;
+  model_pb.write_int64_field(1, 8);
+  model_pb.write_string_field(2, cfg.producer_name);
+  model_pb.write_string_field(3, cfg.producer_version);
+  model_pb.write_string_field(4, "");
+  model_pb.write_int64_field(5, 1);
+  model_pb.write_string_field(6, "");
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo4"));
+  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+
+  std::ofstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot write " + path);
+  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+}
+
+// ─── YOLO6 emitters (#36) ──────────────────────────────────────────────
+
+// ConvBNReLU emit. Activation = ReLU by default; SiLU when use_silu=true
+// (set per-instance via V6ActScope at construction time).
+static std::string emit_v6_convbn(GraphBuilder& g, const std::string& in,
+                                  const std::string& prefix,
+                                  models::ConvBNReLUImpl* m) {
+  auto* c = m->conv.get();
+  auto fused = fuse_conv_bn(c->weight, m->bn->weight, m->bn->bias,
+                            m->bn->running_mean, m->bn->running_var,
+                            m->bn->options.eps());
+  auto wname = g.add_init(prefix + ".conv.weight", fused.weight);
+  auto bname = g.add_init(prefix + ".conv.bias",   fused.bias);
+  int k  = (int)c->options.kernel_size()->at(0);
+  int p  = std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0);
+  int s  = c->options.stride()->at(0);
+  int gr = (int)c->options.groups();
+  auto y = g.node("Conv", {in, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", gr),
+                   attr_ints("kernel_shape", {k, k}),
+                   attr_ints("pads", {p, p, p, p}),
+                   attr_ints("strides", {s, s})}, prefix + ".conv.out");
+  if (m->use_silu) {
+    auto sg = g.node("Sigmoid", {y}, {}, prefix + ".sig");
+    return g.node("Mul", {y, sg}, {}, prefix + ".silu");
+  }
+  return g.node("Relu", {y}, {}, prefix + ".relu");
+}
+
+// RepConv (deploy form) — single Conv2d (3×3, bias=true) + ReLU.
+static std::string emit_v6_repconv(GraphBuilder& g, const std::string& in,
+                                   const std::string& prefix,
+                                   models::RepConvImpl* m) {
+  auto* c = m->conv.get();
+  auto wname = g.add_init(prefix + ".conv.weight", c->weight);
+  auto bname = g.add_init(prefix + ".conv.bias",   c->bias);
+  int k = (int)c->options.kernel_size()->at(0);
+  int p = std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0);
+  int s = c->options.stride()->at(0);
+  auto y = g.node("Conv", {in, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", 1),
+                   attr_ints("kernel_shape", {k, k}),
+                   attr_ints("pads", {p, p, p, p}),
+                   attr_ints("strides", {s, s})}, prefix + ".conv.out");
+  return g.node("Relu", {y}, {}, prefix + ".relu");
+}
+
+// RepBlock: conv1 (RepConv) + N-1 stacked RepConvs in `block` ModuleList.
+static std::string emit_v6_repblock(GraphBuilder& g, const std::string& in,
+                                    const std::string& prefix,
+                                    models::RepBlockImpl* m) {
+  auto y = emit_v6_repconv(g, in, prefix + ".conv1", m->conv1.get());
+  for (size_t i = 0; i < m->block->size(); ++i) {
+    auto* sub = m->block[i]->as<models::RepConvImpl>();
+    y = emit_v6_repconv(g, y,
+                        prefix + ".block." + std::to_string(i), sub);
+  }
+  return y;
+}
+
+// BottleRep: conv1(c_in→c_out, 3×3) + conv2(c_out→c_out, 3×3), with
+// optional alpha-gated shortcut when c_in==c_out:
+//   y = conv2(conv1(x));  out = add ? y + alpha*x : y.
+// `alpha` is a learnable scalar (Parameter shape [1]).
+// `conv1`/`conv2` are RepConv when use_repconv (m/m6 / n/s) or
+// ConvBNReLU otherwise (l/l6 with conv_silu mode).
+static std::string emit_v6_bottlerep(GraphBuilder& g, const std::string& in,
+                                     const std::string& prefix,
+                                     models::BottleRepImpl* m) {
+  auto y = m->use_repconv
+               ? emit_v6_repconv(g, in, prefix + ".conv1", m->rep_conv1.get())
+               : emit_v6_convbn (g, in, prefix + ".conv1", m->cbr_conv1.get());
+  y = m->use_repconv
+          ? emit_v6_repconv(g, y, prefix + ".conv2", m->rep_conv2.get())
+          : emit_v6_convbn (g, y, prefix + ".conv2", m->cbr_conv2.get());
+  if (!m->add) return y;
+  auto a_init = g.add_init(prefix + ".alpha", m->alpha);
+  auto scaled = g.node("Mul", {a_init, in}, {}, prefix + ".alpha_x");
+  return g.node("Add", {y, scaled}, {}, prefix + ".add");
+}
+
+// RepBlockBR: conv1 (BottleRep) + (n-1) BottleReps in `block` ModuleList.
+static std::string emit_v6_repblockbr(GraphBuilder& g, const std::string& in,
+                                      const std::string& prefix,
+                                      models::RepBlockBRImpl* m) {
+  auto y = emit_v6_bottlerep(g, in, prefix + ".conv1", m->conv1.get());
+  for (size_t i = 0; i < m->block->size(); ++i) {
+    auto* sub = m->block[i]->as<models::BottleRepImpl>();
+    y = emit_v6_bottlerep(g, y, prefix + ".block." + std::to_string(i), sub);
+  }
+  return y;
+}
+
+// BottleRep3: three-conv variant used inside MBLABlock. Same alpha-gated
+// shortcut form as BottleRep but with three ConvBNReLU's:
+//   y = conv3(conv2(conv1(x)));  out = add ? y + alpha*x : y.
+static std::string emit_v6_bottlerep3(GraphBuilder& g, const std::string& in,
+                                      const std::string& prefix,
+                                      models::BottleRep3Impl* m) {
+  auto y = emit_v6_convbn(g, in, prefix + ".conv1", m->conv1.get());
+  y      = emit_v6_convbn(g, y,  prefix + ".conv2", m->conv2.get());
+  y      = emit_v6_convbn(g, y,  prefix + ".conv3", m->conv3.get());
+  if (!m->add) return y;
+  auto a_init = g.add_init(prefix + ".alpha", m->alpha);
+  auto scaled = g.node("Mul", {a_init, in}, {}, prefix + ".alpha_x");
+  return g.node("Add", {y, scaled}, {}, prefix + ".add");
+}
+
+// MBLABlock: cv2(cat([chunk0, chunk1, m[0][0](chunk1), ..., m[0][k1](...),
+//                     chunk2, m[1][0](chunk2), ..., m[1][k2](...)], dim=1)).
+// cv1 outputs branch_num*c_inner channels split into branch_num chunks.
+// `m` is a ModuleList of (branch_num-1) Sequentials, each holding
+// `n_list[j+1]` BottleRep3 modules. The accumulator captures every
+// intermediate output of each Sequential.
+static std::string emit_v6_mblablock(GraphBuilder& g, const std::string& in,
+                                     const std::string& prefix,
+                                     models::MBLABlockImpl* mb) {
+  auto y = emit_v6_convbn(g, in, prefix + ".cv1", mb->cv1.get());
+  // Split y into branch_num chunks of c_inner channels each via Slice.
+  const int c_inner    = mb->c_inner;
+  const int branch_num = mb->branch_num;
+  std::vector<std::string> chunks;
+  for (int i = 0; i < branch_num; ++i) {
+    auto sN = g.add_init_int64(prefix + ".chunk." + std::to_string(i) + ".s",
+                               {(int64_t)(i * c_inner)});
+    auto eN = g.add_init_int64(prefix + ".chunk." + std::to_string(i) + ".e",
+                               {(int64_t)((i + 1) * c_inner)});
+    auto aN = g.add_init_int64(prefix + ".chunk." + std::to_string(i) + ".a", {1});
+    auto stN = g.add_init_int64(prefix + ".chunk." + std::to_string(i) + ".st", {1});
+    chunks.push_back(g.node("Slice", {y, sN, eN, aN, stN}, {},
+                            prefix + ".chunk." + std::to_string(i)));
+  }
+  std::vector<std::string> all_y;
+  all_y.push_back(chunks[0]);
+  for (int j = 0; j < branch_num - 1; ++j) {
+    auto* seq = mb->m[j]->as<torch::nn::SequentialImpl>();
+    auto cur  = chunks[j + 1];
+    all_y.push_back(cur);
+    for (size_t k = 0; k < seq->size(); ++k) {
+      auto* sub = seq->ptr(k)->as<models::BottleRep3Impl>();
+      cur = emit_v6_bottlerep3(g, cur,
+                                prefix + ".m." + std::to_string(j) + "." +
+                                std::to_string(k), sub);
+      all_y.push_back(cur);
+    }
+  }
+  auto cat = g.node("Concat", all_y, {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_v6_convbn(g, cat, prefix + ".cv2", mb->cv2.get());
+}
+
+// BepC3: cv3(cat([m(cv1(x)), cv2(x)], dim=1)).
+//   m = RepBlockBR with BottleRep inner blocks.
+static std::string emit_v6_bepc3(GraphBuilder& g, const std::string& in,
+                                 const std::string& prefix,
+                                 models::BepC3Impl* m) {
+  auto a = emit_v6_convbn   (g, in, prefix + ".cv1", m->cv1.get());
+  a      = emit_v6_repblockbr(g, a, prefix + ".m",   m->m.get());
+  auto b = emit_v6_convbn   (g, in, prefix + ".cv2", m->cv2.get());
+  auto cat = g.node("Concat", {a, b}, {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_v6_convbn(g, cat, prefix + ".cv3", m->cv3.get());
+}
+
+// SimSPPF: cv1 + 3 chained 5×5 maxpools + cv2(cat([x, y1, y2, y3], 1))
+// where x = cv1(in). Used by v6m / v6l (and m6 / l6) instead of CSPSPPF.
+// Upstream stores it under child `sppf` (SPPFModule).
+static std::string emit_v6_simsppf(GraphBuilder& g, const std::string& in,
+                                   const std::string& prefix,
+                                   models::SimSPPFImpl* m) {
+  auto* sf = m->sppf.get();
+  auto y = emit_v6_convbn(g, in, prefix + ".sppf.cv1", sf->cv1.get());
+  int k = (int)sf->m->options.kernel_size()->at(0);
+  int p = k / 2;
+  auto m1 = g.node("MaxPool", {y},
+                   {attr_ints("kernel_shape", {k, k}),
+                    attr_ints("pads", {p, p, p, p}),
+                    attr_ints("strides", {1, 1})},
+                   prefix + ".sppf.m1");
+  auto m2 = g.node("MaxPool", {m1},
+                   {attr_ints("kernel_shape", {k, k}),
+                    attr_ints("pads", {p, p, p, p}),
+                    attr_ints("strides", {1, 1})},
+                   prefix + ".sppf.m2");
+  auto m3 = g.node("MaxPool", {m2},
+                   {attr_ints("kernel_shape", {k, k}),
+                    attr_ints("pads", {p, p, p, p}),
+                    attr_ints("strides", {1, 1})},
+                   prefix + ".sppf.m3");
+  auto cat = g.node("Concat", {y, m1, m2, m3},
+                    {attr_int("axis", 1)}, prefix + ".sppf.cat");
+  return emit_v6_convbn(g, cat, prefix + ".sppf.cv2", sf->cv2.get());
+}
+
+// CSPSPPF: cv1..cv7 + 5/9/13 chained maxpools + CSP shortcut/main split.
+//   y = cv4(cv3(cv1(x)))
+//   y1=m(y); y2=m(y1); y3=m(y2)
+//   main  = cv6(cv5(cat([y, y1, y2, y3], 1)))
+//   short = cv2(x)
+//   return cv7(cat([short, main], 1))
+static std::string emit_v6_cspsppf(GraphBuilder& g, const std::string& in,
+                                   const std::string& prefix,
+                                   models::CSPSPPFImpl* m) {
+  auto y  = emit_v6_convbn(g, in, prefix + ".cv1", m->cv1.get());
+  y       = emit_v6_convbn(g, y,  prefix + ".cv3", m->cv3.get());
+  y       = emit_v6_convbn(g, y,  prefix + ".cv4", m->cv4.get());
+  // m is MaxPool2d(k=5, s=1, p=2).
+  auto pool = [&](const std::string& src, const std::string& nm) {
+    return g.node("MaxPool", {src},
+                  {attr_ints("kernel_shape", {5, 5}),
+                   attr_ints("strides", {1, 1}),
+                   attr_ints("pads", {2, 2, 2, 2})}, nm);
+  };
+  auto y1 = pool(y,  prefix + ".m1");
+  auto y2 = pool(y1, prefix + ".m2");
+  auto y3 = pool(y2, prefix + ".m3");
+  auto cat1 = g.node("Concat", {y, y1, y2, y3},
+                     {attr_int("axis", 1)}, prefix + ".cat1");
+  auto main = emit_v6_convbn(g, cat1, prefix + ".cv5", m->cv5.get());
+  main      = emit_v6_convbn(g, main, prefix + ".cv6", m->cv6.get());
+  auto sh   = emit_v6_convbn(g, in,   prefix + ".cv2", m->cv2.get());
+  // Upstream order: cv7(cat([cv2(x), main_path])) — shortcut FIRST.
+  auto cat2 = g.node("Concat", {sh, main},
+                     {attr_int("axis", 1)}, prefix + ".cat2");
+  return emit_v6_convbn(g, cat2, prefix + ".cv7", m->cv7.get());
+}
+
+// Transpose (ConvTranspose2d k=2 s=2).
+static std::string emit_v6_transpose(GraphBuilder& g, const std::string& in,
+                                     const std::string& prefix,
+                                     models::TransposeImpl* m) {
+  auto* c = m->upsample_transpose.get();
+  // ConvTranspose weight has shape [in, out/g, kH, kW] in PyTorch.
+  auto wname = g.add_init(prefix + ".upsample_transpose.weight", c->weight);
+  auto bname = g.add_init(prefix + ".upsample_transpose.bias",   c->bias);
+  int k  = (int)c->options.kernel_size()->at(0);
+  int s  = c->options.stride()->at(0);
+  return g.node("ConvTranspose", {in, wname, bname},
+                {attr_ints("dilations", {1, 1}),
+                 attr_int("group", 1),
+                 attr_ints("kernel_shape", {k, k}),
+                 attr_ints("pads", {0, 0, 0, 0}),
+                 attr_ints("strides", {s, s})},
+                prefix + ".upsample_transpose.out");
+}
+
+// BiFusionBlock: routes (x_high, x_lat, x_lower_reduced).
+//   a = upsample(x_lower_reduced)   (ConvTranspose 2×2 stride 2)
+//   b = cv1(x_high)
+//   c = downsample(cv2(x_lat))
+//   out = cv3(cat([a, b, c], 1))
+static std::string emit_v6_bifusion(GraphBuilder& g,
+                                    const std::string& in_high,
+                                    const std::string& in_lat,
+                                    const std::string& in_lower,
+                                    const std::string& prefix,
+                                    models::BiFusionBlockImpl* m) {
+  auto a = emit_v6_transpose(g, in_lower, prefix + ".upsample",   m->upsample.get());
+  auto b = emit_v6_convbn(g,    in_high,  prefix + ".cv1",        m->cv1.get());
+  auto c = emit_v6_convbn(g,    in_lat,   prefix + ".cv2",        m->cv2.get());
+  c      = emit_v6_convbn(g,    c,        prefix + ".downsample", m->downsample.get());
+  auto cat = g.node("Concat", {a, b, c}, {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_v6_convbn(g, cat, prefix + ".cv3", m->cv3.get());
+}
+
+// EffiDeHead — anchor-free decoupled head. n/s use direct 4-ch
+// reg_preds at eval (no DFL projection); m/l use 68-ch reg_preds with
+// DFL projection. This emitter targets the n/s path; m/l would need
+// the DFL softmax + arange-mul + reduce subgraph.
+static std::string emit_v6_effidehead(GraphBuilder& g,
+                                      const std::vector<std::string>& feats,
+                                      const std::vector<int>& strides,
+                                      models::EffiDeHeadImpl* d, int imgsz,
+                                      const std::string& prefix,
+                                      const std::string& output_name) {
+  const int nc      = d->nc;
+  const int N       = (int)feats.size();
+  const int reg_max = d->reg_max;
+  const int bins    = reg_max + 1;
+  const bool dfl    = d->dfl_eval;
+  // For DFL, build a shared `proj = arange(0, bins)` initializer once —
+  // applied per-level after softmax over the bin axis.
+  std::string proj_name;
+  if (dfl) {
+    std::vector<float> proj(bins);
+    for (int i = 0; i < bins; ++i) proj[i] = (float)i;
+    proj_name = g.add_init_float(prefix + ".proj", proj, {1, 1, bins, 1, 1});
+  }
+
+  std::vector<std::string> level_outs;
+  for (int i = 0; i < N; ++i) {
+    int H = imgsz / strides[i];
+    int W = imgsz / strides[i];
+    int A_i = H * W;
+
+    auto x = emit_v6_convbn(g, feats[i],
+                            prefix + ".stems." + std::to_string(i),
+                            d->stems[i]->as<models::ConvBNReLUImpl>());
+    // cls branch
+    auto cls_feat = emit_v6_convbn(g, x,
+                                   prefix + ".cls_convs." + std::to_string(i),
+                                   d->cls_convs[i]->as<models::ConvBNReLUImpl>());
+    auto* cls_p = d->cls_preds[i]->as<torch::nn::Conv2dImpl>();
+    auto cwn = g.add_init(prefix + ".cls_preds." + std::to_string(i) + ".weight",
+                          cls_p->weight);
+    auto cbn = g.add_init(prefix + ".cls_preds." + std::to_string(i) + ".bias",
+                          cls_p->bias);
+    auto cls = g.node("Conv", {cls_feat, cwn, cbn},
+                      {attr_ints("dilations", {1, 1}),
+                       attr_int("group", 1),
+                       attr_ints("kernel_shape", {1, 1}),
+                       attr_ints("pads", {0, 0, 0, 0}),
+                       attr_ints("strides", {1, 1})},
+                      prefix + ".cls_preds." + std::to_string(i) + ".out");
+    auto cls_sig = g.node("Sigmoid", {cls}, {},
+                           prefix + ".cls_preds." + std::to_string(i) + ".sig");
+    // reg branch (direct 4-ch ltrb in cell units for n/s path)
+    auto reg_feat = emit_v6_convbn(g, x,
+                                   prefix + ".reg_convs." + std::to_string(i),
+                                   d->reg_convs[i]->as<models::ConvBNReLUImpl>());
+    auto* reg_p = d->reg_preds[i]->as<torch::nn::Conv2dImpl>();
+    auto rwn = g.add_init(prefix + ".reg_preds." + std::to_string(i) + ".weight",
+                          reg_p->weight);
+    auto rbn = g.add_init(prefix + ".reg_preds." + std::to_string(i) + ".bias",
+                          reg_p->bias);
+    auto reg_raw = g.node("Conv", {reg_feat, rwn, rbn},
+                      {attr_ints("dilations", {1, 1}),
+                       attr_int("group", 1),
+                       attr_ints("kernel_shape", {1, 1}),
+                       attr_ints("pads", {0, 0, 0, 0}),
+                       attr_ints("strides", {1, 1})},
+                      prefix + ".reg_preds." + std::to_string(i) + ".out");
+    std::string reg;
+    if (dfl) {
+      // Project the 4*bins-channel raw output through DFL:
+      //   raw [B, 4*bins, H, W]
+      //   → reshape [B, 4, bins, H, W]
+      //   → softmax over bins axis
+      //   → multiply by proj=arange(bins) and sum over bins → [B, 4, H, W]
+      auto rshape_dfl = g.add_init_int64(
+          prefix + ".level." + std::to_string(i) + ".rshape_dfl",
+          {0, 4, (int64_t)bins, (int64_t)H, (int64_t)W});
+      auto reshaped = g.node("Reshape", {reg_raw, rshape_dfl}, {},
+                             prefix + ".level." + std::to_string(i) + ".dfl_rs");
+      auto sm = g.node("Softmax", {reshaped},
+                        {attr_int("axis", 2)},
+                        prefix + ".level." + std::to_string(i) + ".dfl_sm");
+      auto mul = g.node("Mul", {sm, proj_name}, {},
+                         prefix + ".level." + std::to_string(i) + ".dfl_mul");
+      auto axes_bin = g.add_init_int64(
+          prefix + ".level." + std::to_string(i) + ".dfl_ax", {2});
+      reg = g.node("ReduceSum", {mul, axes_bin},
+                    {attr_int("keepdims", 0)},
+                    prefix + ".level." + std::to_string(i) + ".dfl_proj");
+    } else {
+      reg = reg_raw;
+    }
+    // dist2bbox in pixel coords:
+    //   ltrb is in cell units. Anchor center = (x+0.5, y+0.5) in cell units.
+    //   x1 = (anc_x - l) * stride;  y1 = (anc_y - t) * stride
+    //   x2 = (anc_x + r) * stride;  y2 = (anc_y + b) * stride
+    // Build per-cell anchor grid and stride buffer.
+    std::vector<float> anc_v(2 * H * W);
+    for (int y = 0; y < H; ++y) {
+      for (int x = 0; x < W; ++x) {
+        anc_v[0 * H * W + y * W + x] = (float)x + 0.5f;
+        anc_v[1 * H * W + y * W + x] = (float)y + 0.5f;
+      }
+    }
+    auto anc_init = g.add_init_float(
+        prefix + ".level." + std::to_string(i) + ".anc",
+        anc_v, {1, 2, (int64_t)H, (int64_t)W});
+    auto axes_ch = g.add_init_int64(prefix + ".level." + std::to_string(i) + ".ax", {1});
+    auto step_1  = g.add_init_int64(prefix + ".level." + std::to_string(i) + ".st", {1});
+    auto sl0 = g.add_init_int64(prefix + ".level." + std::to_string(i) + ".sl0", {0});
+    auto sl1 = g.add_init_int64(prefix + ".level." + std::to_string(i) + ".sl1", {2});
+    auto sr0 = g.add_init_int64(prefix + ".level." + std::to_string(i) + ".sr0", {2});
+    auto sr1 = g.add_init_int64(prefix + ".level." + std::to_string(i) + ".sr1", {4});
+    auto lt = g.node("Slice", {reg, sl0, sl1, axes_ch, step_1}, {},
+                     prefix + ".level." + std::to_string(i) + ".lt");
+    auto rb = g.node("Slice", {reg, sr0, sr1, axes_ch, step_1}, {},
+                     prefix + ".level." + std::to_string(i) + ".rb");
+    auto x1y1 = g.node("Sub", {anc_init, lt}, {},
+                       prefix + ".level." + std::to_string(i) + ".x1y1");
+    auto x2y2 = g.node("Add", {anc_init, rb}, {},
+                       prefix + ".level." + std::to_string(i) + ".x2y2");
+    auto box_cell = g.node("Concat", {x1y1, x2y2},
+                           {attr_int("axis", 1)},
+                           prefix + ".level." + std::to_string(i) + ".box_cell");
+    std::vector<float> stride_v = {(float)strides[i]};
+    auto stride_init = g.add_init_float(
+        prefix + ".level." + std::to_string(i) + ".stride", stride_v, {1});
+    auto box_pix = g.node("Mul", {box_cell, stride_init}, {},
+                           prefix + ".level." + std::to_string(i) + ".box_pix");
+
+    auto packed = g.node("Concat", {box_pix, cls_sig},
+                          {attr_int("axis", 1)},
+                          prefix + ".level." + std::to_string(i) + ".packed");
+    auto rshape1 = g.add_init_int64(
+        prefix + ".level." + std::to_string(i) + ".rshape1",
+        {0, (int64_t)(4 + nc), (int64_t)A_i});
+    auto flat = g.node("Reshape", {packed, rshape1}, {},
+                        prefix + ".level." + std::to_string(i) + ".flat");
+    level_outs.push_back(flat);
+  }
+  return g.node("Concat", level_outs, {attr_int("axis", 2)}, output_name);
+}
+
+void export_yolo6_onnx(models::Yolo6& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg) {
+  model->eval();
+  // Guard rails — only the v6n/s P5 path is wired.
+  GraphBuilder g;
+  g.set_input(cfg.input_name, /*FLOAT=*/1,
+              {-1, 3, cfg.imgsz, cfg.imgsz});
+
+  // ─── P6 path (n6 / s6 / m6 / l6) ──────────────────────────────────────
+  // 6 backbone stages (stem + ERBlock_2..6) + 4-level neck with extra
+  // reduce_layer2 / Bifusion2 / downsample0 / Rep_n6 / 4-level head.
+  if (model->is_p6) {
+    auto* bbp = model->backbone_p6.get();
+    auto* nkp = model->neck_p6.get();
+    auto stem = [&](const std::string& in, const std::string& prefix,
+                    models::RepConv& rc, models::ConvBNReLU& cbr) {
+      if (rc) return emit_v6_repconv(g, in, prefix, rc.get());
+      return  emit_v6_convbn(g,  in, prefix, cbr.get());
+    };
+    auto bb_block = [&](const std::string& in, const std::string& prefix,
+                        models::RepBlock& rb, models::BepC3& bep) {
+      if (rb)  return emit_v6_repblock(g, in, prefix, rb.get());
+      return         emit_v6_bepc3   (g, in, prefix, bep.get());
+    };
+    auto y  = stem(cfg.input_name, "backbone.stem", bbp->stem_rep, bbp->stem_cbr);
+    y       = stem(y, "backbone.ERBlock_2_down", bbp->ERBlock_2_down_rep, bbp->ERBlock_2_down_cbr);
+    auto p2 = bb_block(y, "backbone.ERBlock_2_block",
+                       bbp->ERBlock_2_block_rb, bbp->ERBlock_2_block_bep);
+    auto p3_in = stem(p2, "backbone.ERBlock_3_down",
+                      bbp->ERBlock_3_down_rep, bbp->ERBlock_3_down_cbr);
+    auto p3 = bb_block(p3_in, "backbone.ERBlock_3_block",
+                       bbp->ERBlock_3_block_rb, bbp->ERBlock_3_block_bep);
+    auto p4_in = stem(p3, "backbone.ERBlock_4_down",
+                      bbp->ERBlock_4_down_rep, bbp->ERBlock_4_down_cbr);
+    auto p4 = bb_block(p4_in, "backbone.ERBlock_4_block",
+                       bbp->ERBlock_4_block_rb, bbp->ERBlock_4_block_bep);
+    auto p5_in = stem(p4, "backbone.ERBlock_5_down",
+                      bbp->ERBlock_5_down_rep, bbp->ERBlock_5_down_cbr);
+    auto p5 = bb_block(p5_in, "backbone.ERBlock_5_block",
+                       bbp->ERBlock_5_block_rb, bbp->ERBlock_5_block_bep);
+    auto p6_in = stem(p5, "backbone.ERBlock_6_down",
+                      bbp->ERBlock_6_down_rep, bbp->ERBlock_6_down_cbr);
+    auto p6_block = bb_block(p6_in, "backbone.ERBlock_6_block",
+                             bbp->ERBlock_6_block_rb, bbp->ERBlock_6_block_bep);
+    // SPPF dispatch — CSPSPPF (n6/s6) or SimSPPF (m6/l6). Registered name
+    // in both cases is `ERBlock_6_cspsppf` for converter symmetry.
+    auto p6 = bbp->ERBlock_6_cspsppf
+                  ? emit_v6_cspsppf(g, p6_block, "backbone.ERBlock_6_cspsppf",
+                                    bbp->ERBlock_6_cspsppf.get())
+                  : emit_v6_simsppf(g, p6_block, "backbone.ERBlock_6_cspsppf",
+                                    bbp->ERBlock_6_simsppf.get());
+
+    // Neck — RepBiFPANNeck6 / CSPRepBiFPANNeck_P6 (4-level top-down then
+    // 4-level bottom-up, matching upstream's CSPRepBiFPANNeck_P6.forward).
+    auto nk_block = [&](const std::string& in, const std::string& prefix,
+                        models::RepBlock& rb, models::BepC3& bep) {
+      if (rb)  return emit_v6_repblock(g, in, prefix, rb.get());
+      return         emit_v6_bepc3   (g, in, prefix, bep.get());
+    };
+    auto fpn0 = emit_v6_convbn(g, p6, "neck.reduce_layer0", nkp->reduce_layer0.get());
+    auto fused5 = emit_v6_bifusion(g, p5, p4, fpn0, "neck.Bifusion0", nkp->Bifusion0.get());
+    auto out_p5_td = nk_block(fused5, "neck.Rep_p5", nkp->Rep_p5_rb, nkp->Rep_p5_bep);
+
+    auto fpn1 = emit_v6_convbn(g, out_p5_td, "neck.reduce_layer1", nkp->reduce_layer1.get());
+    auto fused4 = emit_v6_bifusion(g, p4, p3, fpn1, "neck.Bifusion1", nkp->Bifusion1.get());
+    auto out_p4_td = nk_block(fused4, "neck.Rep_p4", nkp->Rep_p4_rb, nkp->Rep_p4_bep);
+
+    auto fpn2 = emit_v6_convbn(g, out_p4_td, "neck.reduce_layer2", nkp->reduce_layer2.get());
+    auto fused3 = emit_v6_bifusion(g, p3, p2, fpn2, "neck.Bifusion2", nkp->Bifusion2.get());
+    auto out_p3 = nk_block(fused3, "neck.Rep_p3", nkp->Rep_p3_rb, nkp->Rep_p3_bep);
+
+    auto d2 = emit_v6_convbn(g, out_p3, "neck.downsample2", nkp->downsample2.get());
+    auto cat_p4 = g.node("Concat", {d2, fpn2}, {attr_int("axis", 1)}, "neck.cat_p4");
+    auto out_p4 = nk_block(cat_p4, "neck.Rep_n4", nkp->Rep_n4_rb, nkp->Rep_n4_bep);
+    auto d1 = emit_v6_convbn(g, out_p4, "neck.downsample1", nkp->downsample1.get());
+    auto cat_p5 = g.node("Concat", {d1, fpn1}, {attr_int("axis", 1)}, "neck.cat_p5");
+    auto out_p5 = nk_block(cat_p5, "neck.Rep_n5", nkp->Rep_n5_rb, nkp->Rep_n5_bep);
+    auto d0 = emit_v6_convbn(g, out_p5, "neck.downsample0", nkp->downsample0.get());
+    auto cat_p6 = g.node("Concat", {d0, fpn0}, {attr_int("axis", 1)}, "neck.cat_p6");
+    auto out_p6 = nk_block(cat_p6, "neck.Rep_n6", nkp->Rep_n6_rb, nkp->Rep_n6_bep);
+
+    emit_v6_effidehead(g, {out_p3, out_p4, out_p5, out_p6}, {8, 16, 32, 64},
+                       model->detect.get(), cfg.imgsz, "detect",
+                       cfg.output_name);
+
+    int nc = model->nc;
+    g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+
+    Pb model_pb;
+    model_pb.write_int64_field(1, 8);
+    model_pb.write_string_field(2, cfg.producer_name);
+    model_pb.write_string_field(3, cfg.producer_version);
+    model_pb.write_string_field(4, "");
+    model_pb.write_int64_field(5, 1);
+    model_pb.write_string_field(6, "");
+    model_pb.write_bytes_field(7, g.build_graph_bytes("yolo6"));
+    model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+
+    std::ofstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("cannot write " + path);
+    f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+    return;
+  }
+
+  auto* bb = model->backbone.get();
+  auto* nk = model->neck.get();
+
+  // Stem dispatch — RepConv (n/s/m) or ConvBNReLU (l/_mbla).
+  auto stem = [&](const std::string& in, const std::string& prefix,
+                  models::RepConv& rc, models::ConvBNReLU& cbr) {
+    if (rc) return emit_v6_repconv(g, in, prefix, rc.get());
+    return  emit_v6_convbn(g,  in, prefix, cbr.get());
+  };
+  // Backbone block dispatch — RepBlock (n/s), BepC3 (m/l) or MBLABlock
+  // (any *_mbla scale).
+  auto bb_block = [&](const std::string& in, const std::string& prefix,
+                      models::RepBlock& rb, models::BepC3& bep,
+                      models::MBLABlock& mbla) {
+    if (rb)   return emit_v6_repblock (g, in, prefix, rb.get());
+    if (bep)  return emit_v6_bepc3    (g, in, prefix, bep.get());
+    return           emit_v6_mblablock(g, in, prefix, mbla.get());
+  };
+
+  auto y  = stem(cfg.input_name, "backbone.stem", bb->stem_rep, bb->stem_cbr);
+  y       = stem(y, "backbone.ERBlock_2_down", bb->ERBlock_2_down_rep, bb->ERBlock_2_down_cbr);
+  auto p2 = bb_block(y, "backbone.ERBlock_2_block",
+                     bb->ERBlock_2_block_rb, bb->ERBlock_2_block_bep,
+                     bb->ERBlock_2_block_mbla);
+  auto p3_in = stem(p2, "backbone.ERBlock_3_down",
+                    bb->ERBlock_3_down_rep, bb->ERBlock_3_down_cbr);
+  auto p3 = bb_block(p3_in, "backbone.ERBlock_3_block",
+                     bb->ERBlock_3_block_rb, bb->ERBlock_3_block_bep,
+                     bb->ERBlock_3_block_mbla);
+  auto p4_in = stem(p3, "backbone.ERBlock_4_down",
+                    bb->ERBlock_4_down_rep, bb->ERBlock_4_down_cbr);
+  auto p4 = bb_block(p4_in, "backbone.ERBlock_4_block",
+                     bb->ERBlock_4_block_rb, bb->ERBlock_4_block_bep,
+                     bb->ERBlock_4_block_mbla);
+  auto p5_in = stem(p4, "backbone.ERBlock_5_down",
+                    bb->ERBlock_5_down_rep, bb->ERBlock_5_down_cbr);
+  auto p5_block = bb_block(p5_in, "backbone.ERBlock_5_block",
+                            bb->ERBlock_5_block_rb, bb->ERBlock_5_block_bep,
+                            bb->ERBlock_5_block_mbla);
+  // SPPF dispatch — CSPSPPF (n/s) or SimSPPF (m/l). Registered name in
+  // both cases is `ERBlock_5_cspsppf` (kept for converter symmetry).
+  auto p5 = bb->ERBlock_5_cspsppf
+                ? emit_v6_cspsppf(g, p5_block, "backbone.ERBlock_5_cspsppf",
+                                  bb->ERBlock_5_cspsppf.get())
+                : emit_v6_simsppf(g, p5_block, "backbone.ERBlock_5_cspsppf",
+                                  bb->ERBlock_5_simsppf.get());
+
+  // Neck — RepBiFPANNeck (n/s) / CSPRepBiFPANNeck (m/l) / MBLA neck (*_mbla).
+  auto nk_block = [&](const std::string& in, const std::string& prefix,
+                      models::RepBlock& rb, models::BepC3& bep,
+                      models::MBLABlock& mbla) {
+    if (rb)   return emit_v6_repblock (g, in, prefix, rb.get());
+    if (bep)  return emit_v6_bepc3    (g, in, prefix, bep.get());
+    return           emit_v6_mblablock(g, in, prefix, mbla.get());
+  };
+  auto fpn0 = emit_v6_convbn(g, p5, "neck.reduce_layer0", nk->reduce_layer0.get());
+  auto fused4 = emit_v6_bifusion(g, p4, p3, fpn0, "neck.Bifusion0",
+                                 nk->Bifusion0.get());
+  auto out_p4_td = nk_block(fused4, "neck.Rep_p4",
+                            nk->Rep_p4_rb, nk->Rep_p4_bep, nk->Rep_p4_mbla);
+
+  auto fpn1 = emit_v6_convbn(g, out_p4_td, "neck.reduce_layer1",
+                             nk->reduce_layer1.get());
+  auto fused3 = emit_v6_bifusion(g, p3, p2, fpn1, "neck.Bifusion1",
+                                 nk->Bifusion1.get());
+  auto out_p3 = nk_block(fused3, "neck.Rep_p3",
+                         nk->Rep_p3_rb, nk->Rep_p3_bep, nk->Rep_p3_mbla);
+
+  auto d2 = emit_v6_convbn(g, out_p3, "neck.downsample2", nk->downsample2.get());
+  auto cat_p4 = g.node("Concat", {d2, fpn1},
+                        {attr_int("axis", 1)}, "neck.cat_p4");
+  auto out_p4 = nk_block(cat_p4, "neck.Rep_n3",
+                         nk->Rep_n3_rb, nk->Rep_n3_bep, nk->Rep_n3_mbla);
+  auto d1 = emit_v6_convbn(g, out_p4, "neck.downsample1",
+                           nk->downsample1.get());
+  auto cat_p5 = g.node("Concat", {d1, fpn0},
+                        {attr_int("axis", 1)}, "neck.cat_p5");
+  auto out_p5 = nk_block(cat_p5, "neck.Rep_n4",
+                         nk->Rep_n4_rb, nk->Rep_n4_bep, nk->Rep_n4_mbla);
+
+  emit_v6_effidehead(g, {out_p3, out_p4, out_p5}, {8, 16, 32},
+                     model->detect.get(), cfg.imgsz, "detect",
+                     cfg.output_name);
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+
+  Pb model_pb;
+  model_pb.write_int64_field(1, 8);
+  model_pb.write_string_field(2, cfg.producer_name);
+  model_pb.write_string_field(3, cfg.producer_version);
+  model_pb.write_string_field(4, "");
+  model_pb.write_int64_field(5, 1);
+  model_pb.write_string_field(6, "");
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo6"));
+  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+
+  std::ofstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot write " + path);
+  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+}
+
+// ─── YOLO7 emitters (#37) ──────────────────────────────────────────────
+
+// SPPCSPC emit: cv1..cv7 + 5/9/13 maxpools.
+//
+// Following the SPPCSPCImpl forward:
+//   x1 = cv4(cv3(cv1(x)))
+//   y1 = m5(x1); y2 = m9(x1); y3 = m13(x1)
+//   x1 = cv6(cv5(cat([x1, y1, y2, y3], 1)))
+//   x2 = cv2(x)
+//   return cv7(cat([x1, x2], 1))
+static std::string emit_sppcspc(GraphBuilder& g, const std::string& in,
+                                const std::string& prefix,
+                                models::SPPCSPCImpl* m) {
+  // Reuse the existing emit_conv_block logic via emit_convsilu —
+  // ConvSiLUImpl shares the Conv+BN+SiLU shape with v8's ConvImpl.
+  auto emit_v7conv = [&](const std::string& src, const std::string& pf,
+                         models::ConvSiLUImpl* cv) {
+    auto* c = cv->conv.get();
+    return emit_conv_bn_act(g, src, pf, c->weight, cv->bn->weight, cv->bn->bias,
+                            cv->bn->running_mean, cv->bn->running_var,
+                            c->options.stride()->at(0),
+                            std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0),
+                            (int)c->options.groups(),
+                            cv->use_leaky ? "leaky" : "mish_silu",
+                            cv->bn->options.eps());
+  };
+  // ConvSiLU activation: SiLU when use_leaky=false; v7-tiny uses leaky.
+  // emit_conv_bn_act doesn't have a "silu" mode — extend inline:
+  //   silu(x) = x * sigmoid(x)
+  // For now, route through the existing emit_conv_module's sibling form
+  // by special-casing here. Cleaner: extend emit_conv_bn_act with a
+  // "silu" act string. Do that:
+
+  // Quick dispatch helper.
+  (void)emit_v7conv;
+  auto sconv = [&](const std::string& src, const std::string& pf,
+                   models::ConvSiLUImpl* cv) -> std::string {
+    auto* c = cv->conv.get();
+    auto fused = fuse_conv_bn(c->weight, cv->bn->weight, cv->bn->bias,
+                              cv->bn->running_mean, cv->bn->running_var,
+                              cv->bn->options.eps());
+    auto wname = g.add_init(pf + ".weight", fused.weight);
+    auto bname = g.add_init(pf + ".bias",   fused.bias);
+    int k = (int)c->options.kernel_size()->at(0);
+    int p = std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0);
+    int s = c->options.stride()->at(0);
+    int gr = (int)c->options.groups();
+    auto y = g.node("Conv", {src, wname, bname},
+                    {attr_ints("dilations", {1, 1}),
+                     attr_int("group", gr),
+                     attr_ints("kernel_shape", {k, k}),
+                     attr_ints("pads", {p, p, p, p}),
+                     attr_ints("strides", {s, s})}, pf + ".out");
+    if (cv->use_leaky) {
+      return g.node("LeakyRelu", {y}, {attr_float("alpha", 0.1f)},
+                    pf + ".leaky");
+    }
+    auto sg = g.node("Sigmoid", {y}, {}, pf + ".sig");
+    return g.node("Mul", {y, sg}, {}, pf + ".silu");
+  };
+
+  auto x1 = sconv(in, prefix + ".cv1", m->cv1.get());
+  x1      = sconv(x1, prefix + ".cv3", m->cv3.get());
+  x1      = sconv(x1, prefix + ".cv4", m->cv4.get());
+  auto pool = [&](const std::string& src, int k, int p, const std::string& nm) {
+    return g.node("MaxPool", {src},
+                  {attr_ints("kernel_shape", {k, k}),
+                   attr_ints("strides", {1, 1}),
+                   attr_ints("pads", {p, p, p, p})}, nm);
+  };
+  auto y1 = pool(x1, 5,  2, prefix + ".m5");
+  auto y2 = pool(x1, 9,  4, prefix + ".m9");
+  auto y3 = pool(x1, 13, 6, prefix + ".m13");
+  auto cat1 = g.node("Concat", {x1, y1, y2, y3},
+                     {attr_int("axis", 1)}, prefix + ".cat1");
+  auto x1m = sconv(cat1, prefix + ".cv5", m->cv5.get());
+  x1m      = sconv(x1m,  prefix + ".cv6", m->cv6.get());
+  auto x2  = sconv(in,   prefix + ".cv2", m->cv2.get());
+  auto cat2 = g.node("Concat", {x1m, x2},
+                     {attr_int("axis", 1)}, prefix + ".cat2");
+  return sconv(cat2, prefix + ".cv7", m->cv7.get());
+}
+
+// ConvSiLU dispatch (with leaky toggle for v7-tiny).
+static std::string emit_convsilu(GraphBuilder& g, const std::string& in,
+                                 const std::string& prefix,
+                                 models::ConvSiLUImpl* m) {
+  auto* c = m->conv.get();
+  auto fused = fuse_conv_bn(c->weight, m->bn->weight, m->bn->bias,
+                            m->bn->running_mean, m->bn->running_var,
+                            m->bn->options.eps());
+  auto wname = g.add_init(prefix + ".weight", fused.weight);
+  auto bname = g.add_init(prefix + ".bias",   fused.bias);
+  int k = (int)c->options.kernel_size()->at(0);
+  int p = std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0);
+  int s = c->options.stride()->at(0);
+  int gr = (int)c->options.groups();
+  auto y = g.node("Conv", {in, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", gr),
+                   attr_ints("kernel_shape", {k, k}),
+                   attr_ints("pads", {p, p, p, p}),
+                   attr_ints("strides", {s, s})}, prefix + ".out");
+  if (m->use_leaky) {
+    return g.node("LeakyRelu", {y}, {attr_float("alpha", 0.1f)},
+                  prefix + ".leaky");
+  }
+  auto sg = g.node("Sigmoid", {y}, {}, prefix + ".sig");
+  return g.node("Mul", {y, sg}, {}, prefix + ".silu");
+}
+
+// Yolo7RepConv (deploy form) — single Conv2d (3×3, bias=true) + SiLU.
+static std::string emit_yolo7_repconv(GraphBuilder& g, const std::string& in,
+                                      const std::string& prefix,
+                                      models::Yolo7RepConvImpl* m) {
+  auto* c = m->conv.get();
+  auto wname = g.add_init(prefix + ".conv.weight", c->weight);
+  auto bname = g.add_init(prefix + ".conv.bias",   c->bias);
+  int k = (int)c->options.kernel_size()->at(0);
+  int p = std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0);
+  int s = c->options.stride()->at(0);
+  auto y = g.node("Conv", {in, wname, bname},
+                  {attr_ints("dilations", {1, 1}),
+                   attr_int("group", 1),
+                   attr_ints("kernel_shape", {k, k}),
+                   attr_ints("pads", {p, p, p, p}),
+                   attr_ints("strides", {s, s})}, prefix + ".out");
+  auto sg = g.node("Sigmoid", {y}, {}, prefix + ".sig");
+  return g.node("Mul", {y, sg}, {}, prefix + ".silu");
+}
+
+// DownC: cv1 (1×1) → cv2 (3×3 stride k); mp (stride k) → cv3 (1×1); cat.
+static std::string emit_downc(GraphBuilder& g, const std::string& in,
+                              const std::string& prefix,
+                              models::DownCImpl* m) {
+  auto a  = emit_convsilu(g, in, prefix + ".cv1", m->cv1.get());
+  a       = emit_convsilu(g, a,  prefix + ".cv2", m->cv2.get());
+  // mp is MaxPool2d(k, stride=k) in the model.
+  int mp_k = (int)m->mp->options.kernel_size()->at(0);
+  int mp_s = (int)m->mp->options.stride()->at(0);
+  auto b  = g.node("MaxPool", {in},
+                   {attr_ints("kernel_shape", {mp_k, mp_k}),
+                    attr_ints("strides", {mp_s, mp_s}),
+                    attr_ints("pads", {0, 0, 0, 0})}, prefix + ".mp");
+  b       = emit_convsilu(g, b, prefix + ".cv3", m->cv3.get());
+  return g.node("Concat", {a, b}, {attr_int("axis", 1)}, prefix + ".cat");
+}
+
+// ReOrg: 4× spatial-to-depth (pixel_unshuffle k=2). ONNX has SpaceToDepth.
+static std::string emit_reorg(GraphBuilder& g, const std::string& in,
+                              const std::string& prefix) {
+  return g.node("SpaceToDepth", {in},
+                {attr_int("blocksize", 2)}, prefix + ".reorg");
+}
+
+// Anchor decode for v7 — generalised form. scale_xy uniform 2.0, wh
+// decode = (sigmoid*2)^2 * anchor (per-pixel anchors from anchor_grid
+// buffer). Different from v4's exp() form.
+static std::string emit_yolov7_decode(GraphBuilder& g,
+                                      const std::vector<std::string>& raw,
+                                      const std::vector<int>& strides,
+                                      const torch::Tensor& anchor_grid,
+                                      int imgsz, int nc, int na,
+                                      const std::string& prefix,
+                                      const std::string& output_name) {
+  const int no = 5 + nc;
+  const int nl = (int)raw.size();
+  std::vector<std::string> level_outs;
+  for (int i = 0; i < nl; ++i) {
+    int stride = strides[i];
+    int H = imgsz / stride;
+    int W = imgsz / stride;
+    int A_i = na * H * W;
+
+    auto rshape0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".rshape0",
+                                    {0, (int64_t)na, (int64_t)no,
+                                     (int64_t)H, (int64_t)W});
+    auto t5  = g.node("Reshape", {raw[i], rshape0}, {},
+                      prefix + ".l" + std::to_string(i) + ".5d");
+    auto sig = g.node("Sigmoid", {t5}, {},
+                       prefix + ".l" + std::to_string(i) + ".sig");
+
+    auto axes2 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".ax", {2});
+    auto step1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".st", {1});
+    auto sxy0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".sxy0", {0});
+    auto sxy1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".sxy1", {2});
+    auto swh0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".swh0", {2});
+    auto swh1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".swh1", {4});
+    auto sob0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".sob0", {4});
+    auto sob1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".sob1", {5});
+    auto scl0 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".scl0", {5});
+    auto scl1 = g.add_init_int64(prefix + ".l" + std::to_string(i) + ".scl1", {(int64_t)no});
+
+    auto xy_sig  = g.node("Slice", {sig, sxy0, sxy1, axes2, step1}, {},
+                          prefix + ".l" + std::to_string(i) + ".xy");
+    auto wh_sig  = g.node("Slice", {sig, swh0, swh1, axes2, step1}, {},
+                          prefix + ".l" + std::to_string(i) + ".wh");
+    auto cls_sig = g.node("Slice", {sig, scl0, scl1, axes2, step1}, {},
+                          prefix + ".l" + std::to_string(i) + ".cls");
+    auto obj_sig = g.node("Slice", {sig, sob0, sob1, axes2, step1}, {},
+                          prefix + ".l" + std::to_string(i) + ".obj");
+
+    // xy_pix = (xy_sig * 2 - 0.5 + grid) * stride
+    std::vector<float> two_v   = {2.0f};
+    std::vector<float> half_v  = {0.5f};
+    auto two_init  = g.add_init_float(prefix + ".l" + std::to_string(i) + ".two",
+                                      two_v, {1});
+    auto half_init = g.add_init_float(prefix + ".l" + std::to_string(i) + ".half",
+                                      half_v, {1});
+    auto xy_2     = g.node("Mul", {xy_sig, two_init}, {},
+                            prefix + ".l" + std::to_string(i) + ".xy2");
+    auto xy_c     = g.node("Sub", {xy_2, half_init}, {},
+                            prefix + ".l" + std::to_string(i) + ".xy_c");
+    std::vector<float> grid_v(2 * H * W);
+    for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+      grid_v[0 * H * W + y * W + x] = (float)x;
+      grid_v[1 * H * W + y * W + x] = (float)y;
+    }
+    auto grid_init = g.add_init_float(
+        prefix + ".l" + std::to_string(i) + ".grid", grid_v,
+        {1, 1, 2, (int64_t)H, (int64_t)W});
+    auto xy_cell = g.node("Add", {xy_c, grid_init}, {},
+                          prefix + ".l" + std::to_string(i) + ".xy_cell");
+    std::vector<float> stride_v = {(float)stride};
+    auto stride_init = g.add_init_float(
+        prefix + ".l" + std::to_string(i) + ".stride", stride_v, {1});
+    auto xy_pix = g.node("Mul", {xy_cell, stride_init}, {},
+                          prefix + ".l" + std::to_string(i) + ".xy_pix");
+
+    // wh_pix = (wh_sig * 2)^2 * anchor (anchor_grid[i] in pixels at
+    // training imgsz; we read the buffer as-is — caller is responsible
+    // for matching imgsz to the training resolution).
+    auto wh_2 = g.node("Mul", {wh_sig, two_init}, {},
+                        prefix + ".l" + std::to_string(i) + ".wh2");
+    auto wh_sq = g.node("Mul", {wh_2, wh_2}, {},
+                         prefix + ".l" + std::to_string(i) + ".wh_sq");
+    // Anchor buffer for this level: anchor_grid[i] shape [1, na, 1, 1, 2]
+    // — reshape to [1, na, 2, 1, 1] for channel-major layout.
+    auto anc_l = anchor_grid.index({i}).contiguous();   // [1, na, 1, 1, 2]
+    auto anc_view = anc_l.view({na, 2});
+    std::vector<float> anc_v(na * 2);
+    auto a_acc = anc_view.accessor<float, 2>();
+    for (int a = 0; a < na; ++a) {
+      anc_v[a * 2 + 0] = a_acc[a][0];
+      anc_v[a * 2 + 1] = a_acc[a][1];
+    }
+    auto anc_init = g.add_init_float(
+        prefix + ".l" + std::to_string(i) + ".anc", anc_v,
+        {1, (int64_t)na, 2, 1, 1});
+    auto wh_pix = g.node("Mul", {wh_sq, anc_init}, {},
+                          prefix + ".l" + std::to_string(i) + ".wh_pix");
+
+    auto score = g.node("Mul", {cls_sig, obj_sig}, {},
+                         prefix + ".l" + std::to_string(i) + ".score");
+
+    // xywh → xyxy
+    auto wh_half = g.node("Mul", {wh_pix, half_init}, {},
+                           prefix + ".l" + std::to_string(i) + ".wh_half");
+    auto x1y1 = g.node("Sub", {xy_pix, wh_half}, {},
+                        prefix + ".l" + std::to_string(i) + ".x1y1");
+    auto x2y2 = g.node("Add", {xy_pix, wh_half}, {},
+                        prefix + ".l" + std::to_string(i) + ".x2y2");
+    auto box  = g.node("Concat", {x1y1, x2y2},
+                       {attr_int("axis", 2)},
+                       prefix + ".l" + std::to_string(i) + ".box");
+
+    auto packed = g.node("Concat", {box, score},
+                          {attr_int("axis", 2)},
+                          prefix + ".l" + std::to_string(i) + ".packed");
+    auto perm = g.node("Transpose", {packed},
+                        {attr_ints("perm", {0, 2, 1, 3, 4})},
+                        prefix + ".l" + std::to_string(i) + ".perm");
+    auto rshape1 = g.add_init_int64(
+        prefix + ".l" + std::to_string(i) + ".rshape1",
+        {0, (int64_t)(4 + nc), (int64_t)A_i});
+    auto flat = g.node("Reshape", {perm, rshape1}, {},
+                        prefix + ".l" + std::to_string(i) + ".flat");
+    level_outs.push_back(flat);
+  }
+  return g.node("Concat", level_outs, {attr_int("axis", 2)}, output_name);
+}
+
+void export_yolo7_onnx(models::Yolo7& model,
+                       const std::string&    path,
+                       const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, /*FLOAT=*/1,
+              {-1, 3, cfg.imgsz, cfg.imgsz});
+
+  // Fetch the v7 yaml for this scale (public accessor exposed in
+  // include/yolocpp/models/yolo7.hpp).
+  const auto& yaml = models::yolo7_yaml_for(model->scale);
+  size_t det_idx = yaml.size() - 1;
+  size_t N = yaml.size();
+
+  auto resolve_idx = [](int f, int i) { return f < 0 ? i + f : f; };
+
+  std::vector<std::string> outs(N);
+  std::string prev = cfg.input_name;
+
+  for (size_t i = 0; i < N; ++i) {
+    const auto& s = yaml[i];
+    auto prefix = "model." + std::to_string(i);
+    auto holder = model->model[i];
+
+    // Resolve inputs.
+    auto in_for = [&](int idx) {
+      return idx == -1 ? prev : outs[idx];
+    };
+
+    if (s.kind == "Concat") {
+      std::vector<std::string> ins;
+      for (int f : s.from) ins.push_back(in_for(resolve_idx(f, (int)i)));
+      outs[i] = g.node("Concat", ins, {attr_int("axis", 1)}, prefix + ".cat");
+    } else if (s.kind == "Yolo7Shortcut") {
+      // Element-wise sum of the two from indices.
+      std::vector<std::string> ins;
+      for (int f : s.from) ins.push_back(in_for(resolve_idx(f, (int)i)));
+      TORCH_CHECK(ins.size() == 2, "Yolo7Shortcut expects 2 inputs");
+      outs[i] = g.node("Add", {ins[0], ins[1]}, {}, prefix + ".add");
+    } else if (s.kind == "IDetect") {
+      // Apply each level's m[i] 1×1 conv to get the raw outputs.
+      auto* d = holder->as<models::IDetectImpl>();
+      std::vector<std::string> raw;
+      for (size_t k = 0; k < s.from.size(); ++k) {
+        int f = s.from[k];
+        auto in_name = in_for(resolve_idx(f, (int)i));
+        auto* c = d->m[k]->as<torch::nn::Conv2dImpl>();
+        auto wname = g.add_init(prefix + ".m." + std::to_string(k) + ".weight",
+                                c->weight);
+        auto bname = g.add_init(prefix + ".m." + std::to_string(k) + ".bias",
+                                c->bias);
+        auto out = g.node("Conv", {in_name, wname, bname},
+                          {attr_ints("dilations", {1, 1}),
+                           attr_int("group", 1),
+                           attr_ints("kernel_shape", {1, 1}),
+                           attr_ints("pads", {0, 0, 0, 0}),
+                           attr_ints("strides", {1, 1})},
+                          prefix + ".m." + std::to_string(k) + ".out");
+        raw.push_back(out);
+      }
+      // Strides per level — read from the model.
+      std::vector<int> strides;
+      for (auto s_d : model->stride) strides.push_back((int)s_d);
+      emit_yolov7_decode(g, raw, strides, d->anchor_grid,
+                         cfg.imgsz, model->nc, d->na,
+                         "decode", cfg.output_name);
+      outs[i] = cfg.output_name;
+    } else {
+      // Single-input layer.
+      int f = s.from[0];
+      auto in_name = in_for(resolve_idx(f, (int)i));
+
+      if (s.kind == "Conv") {
+        auto* m = holder->as<models::ConvSiLUImpl>();
+        outs[i] = emit_convsilu(g, in_name, prefix, m);
+      } else if (s.kind == "MP") {
+        // MaxPool2d 2×2 stride 2.
+        outs[i] = g.node("MaxPool", {in_name},
+                         {attr_ints("kernel_shape", {2, 2}),
+                          attr_ints("strides", {2, 2}),
+                          attr_ints("pads", {0, 0, 0, 0})}, prefix + ".mp");
+      } else if (s.kind == "SP") {
+        // Single MaxPool with k from args; stride=1, pad=k/2.
+        int k = s.args[0];
+        outs[i] = g.node("MaxPool", {in_name},
+                         {attr_ints("kernel_shape", {k, k}),
+                          attr_ints("strides", {1, 1}),
+                          attr_ints("pads", {k/2, k/2, k/2, k/2})},
+                         prefix + ".sp");
+      } else if (s.kind == "ReOrg") {
+        outs[i] = emit_reorg(g, in_name, prefix);
+      } else if (s.kind == "DownC") {
+        auto* m = holder->as<models::DownCImpl>();
+        outs[i] = emit_downc(g, in_name, prefix, m);
+      } else if (s.kind == "Upsample") {
+        outs[i] = emit_upsample_2x(g, in_name, prefix);
+      } else if (s.kind == "SPPCSPC") {
+        auto* m = holder->as<models::SPPCSPCImpl>();
+        outs[i] = emit_sppcspc(g, in_name, prefix, m);
+      } else if (s.kind == "Yolo7RepConv") {
+        auto* m = holder->as<models::Yolo7RepConvImpl>();
+        outs[i] = emit_yolo7_repconv(g, in_name, prefix, m);
+      } else {
+        throw std::runtime_error("export_yolo7: unknown layer kind '" + s.kind + "' at " + std::to_string(i));
+      }
+    }
+    prev = outs[i];
+  }
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+
+  Pb model_pb;
+  model_pb.write_int64_field(1, 8);
+  model_pb.write_string_field(2, cfg.producer_name);
+  model_pb.write_string_field(3, cfg.producer_version);
+  model_pb.write_string_field(4, "");
+  model_pb.write_int64_field(5, 1);
+  model_pb.write_string_field(6, "");
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo7"));
+  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+
+  std::ofstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot write " + path);
+  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+}
+
 }  // namespace yolocpp::serialization

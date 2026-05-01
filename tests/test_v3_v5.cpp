@@ -18,20 +18,21 @@
 int main() {
   using namespace yolocpp;
 
-  // ─── YOLO3: Darknet-53, ~62M params, 3-scale output 255×{13,26,52} ──
+  // ─── YOLO3 (Ultralytics yolov3u — anchor-free v8-style DFL head):
+  //     Darknet-53 backbone, ~103M params at nc=80, decoded forward
+  //     output [1, 4+nc, A] for NMS (A = 8400 at imgsz=640).
   {
-    models::Yolo3 m(/*nc=*/80);
+    models::Yolo3 m(models::kYolo3, /*nc=*/80);
     m->eval();
     long long n = 0;
     for (auto& p : m->parameters()) if (p.requires_grad()) n += p.numel();
     std::cout << "[v3] params=" << n / 1e6 << "M\n";
-    EXPECT(n > 60'000'000 && n < 65'000'000, "v3 param count outside 60–65M");
+    EXPECT(n > 95'000'000 && n < 110'000'000, "v3 param count outside 95–110M");
 
-    auto outs = m->forward(torch::randn({1, 3, 416, 416}));
-    EXPECT((int)outs.size() == 3, "v3: 3 scales");
-    EXPECT(outs[0].sizes() == torch::IntArrayRef({1, 255, 13, 13}), "v3 P5");
-    EXPECT(outs[1].sizes() == torch::IntArrayRef({1, 255, 26, 26}), "v3 P4");
-    EXPECT(outs[2].sizes() == torch::IntArrayRef({1, 255, 52, 52}), "v3 P3");
+    auto out = m->forward_eval(torch::randn({1, 3, 640, 640}));
+    EXPECT(out.dim() == 3, "v3 forward_eval rank 3");
+    EXPECT(out.size(1) == 84, "v3 channels = 4 + nc");
+    EXPECT(out.size(2) == 8400, "v3 anchors = 80² + 40² + 20² = 8400");
   }
 
   // ─── YOLO5 — verify all five scales (n/s/m/l/x) end-to-end ──────────
