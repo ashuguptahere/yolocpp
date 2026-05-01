@@ -387,11 +387,11 @@ registers a `VersionAdapter` (in
    `tests/test_registry.cpp` if the new version belongs to a
    distinguished class (e.g., full task family, anchor-based).
 
-That's it — `cmd_export` (and, as #46D/E/F land, `cmd_predict` /
-`cmd_val` / `cmd_train`) pick the adapter up automatically; no edits to
-`cli/main.cpp`. As of writing #46A/B/C have landed (export migrated +
-12-version registry seeded + walkthrough); predict/val/train are
-tracked under #46D/#46E/#46F.
+That's it — `cmd_export` and `cmd_predict_task` (and, as #46E/F land,
+`cmd_val` / `cmd_train`) pick the adapter up automatically; no edits
+to `cli/main.cpp`. As of writing #46A/B/C/D have landed (export +
+predict migrated + 12-version registry seeded + walkthrough); val and
+train are tracked under #46E / #46F.
 
 ## Architecture commitments
 

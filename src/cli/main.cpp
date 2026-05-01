@@ -454,118 +454,26 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     auto version = version_hint.empty()
                        ? yolocpp::cli::version_from_filename(weights)
                        : version_hint;
-    if (version == "v3") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto dets = yolocpp::inference::predict_v3_to_file(
-          weights, source, out, imgsz, device, nc, nm);
-      std::cout << "[predict] (v3) " << dets.size() << " detections, wrote "
-                << out << "\n";
+
+    // Registry-driven dispatch: replaces ~120 lines of per-version
+    // if-else. Each adapter's `predict_to_file` hook resolves its own
+    // scale enum + per-version imgsz quirks (v4=608, v6 P6=1280, …)
+    // and calls into `inference::predict_v<N>_to_file`. v8 has no
+    // dedicated helper — it falls back to `cmd_predict` below.
+    yolocpp::registry::register_all_versions();
+    if (const auto* adapter =
+            yolocpp::registry::Registry::instance().find(version);
+        adapter && adapter->predict_to_file) {
+      yolocpp::inference::NMSConfig nm;
+      nm.conf_thresh = conf;
+      nm.iou_thresh  = iou;
+      auto n = adapter->predict_to_file(weights, source, out, imgsz,
+                                         device, scale_s, nc, nm);
+      std::cout << "[predict] (" << version << ") " << n
+                << " detections, wrote " << out << "\n";
       return 0;
     }
-    if (version == "v4") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      int v4_imgsz = (imgsz == 640) ? 608 : imgsz;  // v4's anchors calibrate to 608
-      auto dets = yolocpp::inference::predict_v4_to_file(
-          weights, source, out, v4_imgsz, device, nc, nm);
-      std::cout << "[predict] (v4) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
-    if (version == "v6") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto v6_scale = yolocpp::models::kYolo6s;
-      bool v6_p6 = false;
-      if      (scale_s == "n") v6_scale = yolocpp::models::kYolo6n;
-      else if (scale_s == "m") v6_scale = yolocpp::models::kYolo6m;
-      else if (scale_s == "l") v6_scale = yolocpp::models::kYolo6l;
-      else if (scale_s == "s_mbla") v6_scale = yolocpp::models::kYolo6s_mbla;
-      else if (scale_s == "m_mbla") v6_scale = yolocpp::models::kYolo6m_mbla;
-      else if (scale_s == "l_mbla") v6_scale = yolocpp::models::kYolo6l_mbla;
-      else if (scale_s == "x_mbla") v6_scale = yolocpp::models::kYolo6x_mbla;
-      else if (scale_s == "n6") { v6_scale = yolocpp::models::kYolo6n; v6_p6 = true; }
-      else if (scale_s == "s6") { v6_scale = yolocpp::models::kYolo6s; v6_p6 = true; }
-      else if (scale_s == "m6") { v6_scale = yolocpp::models::kYolo6m; v6_p6 = true; }
-      else if (scale_s == "l6") { v6_scale = yolocpp::models::kYolo6l; v6_p6 = true; }
-      // P6 variants train at 1280²; default unless caller overrides.
-      int v6_imgsz = (v6_p6 && imgsz == 640) ? 1280 : imgsz;
-      auto dets = yolocpp::inference::predict_v6_to_file(
-          weights, source, out, v6_imgsz, device, nc, v6_scale, v6_p6, nm);
-      std::cout << "[predict] (v6) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
-    if (version == "v7") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto v7_scale = yolocpp::models::yolo7_scale_from_letter(scale_s);
-      auto dets = yolocpp::inference::predict_v7_to_file(
-          weights, source, out, imgsz, device, nc, v7_scale, nm);
-      std::cout << "[predict] (v7) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
-    if (version == "v9") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto v9_scale = yolocpp::models::yolo9_scale_from_letter(scale_s);
-      auto dets = yolocpp::inference::predict_v9_to_file(
-          weights, source, out, imgsz, device, nc, v9_scale, nm);
-      std::cout << "[predict] (v9) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
-    if (version == "v10") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto v10_scale = yolocpp::models::yolo10_scale_from_letter(scale_s);
-      auto dets = yolocpp::inference::predict_v10_to_file(
-          weights, source, out, imgsz, device, nc, v10_scale, nm);
-      std::cout << "[predict] (v10) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
-    if (version == "v5") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto v5_scale = yolocpp::models::yolo5_scale_from_letter(scale_s);
-      auto dets = yolocpp::inference::predict_v5_to_file(
-          weights, source, out, imgsz, device, nc, v5_scale, nm);
-      std::cout << "[predict] (v5) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
-    if (version == "v11") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto v11_scale = yolocpp::models::yolo11_scale_from_letter(scale_s);
-      auto dets = yolocpp::inference::predict_v11_to_file(
-          weights, source, out, imgsz, device, nc, v11_scale, nm);
-      std::cout << "[predict] (v11) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
-    if (version == "v26") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto v26_scale = yolocpp::models::yolo26_scale_from_letter(scale_s);
-      auto dets = yolocpp::inference::predict_v26_to_file(
-          weights, source, out, imgsz, device, nc, v26_scale, nm);
-      std::cout << "[predict] (v26) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
-    if (version == "v12") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto v12_scale = yolocpp::models::yolo12_scale_from_letter(scale_s);
-      auto dets = yolocpp::inference::predict_v12_to_file(
-          weights, source, out, imgsz, device, nc, v12_scale, nm);
-      std::cout << "[predict] (v12) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
-    if (version == "v13") {
-      yolocpp::inference::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
-      auto v13_scale = yolocpp::models::yolo13_scale_from_letter(scale_s);
-      auto dets = yolocpp::inference::predict_v13_to_file(
-          weights, source, out, imgsz, device, nc, v13_scale, nm);
-      std::cout << "[predict] (v13) " << dets.size() << " detections, wrote "
-                << out << "\n";
-      return 0;
-    }
+
     static const std::vector<std::string> kKnown = {
         "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
         "v11", "v12", "v13", "v26", "rtdetr"};
@@ -574,9 +482,9 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
                 << "' — supported set: yolo3..yolo13, yolo26\n";
       return 2;
     }
-    // No more stubs at this point — v3/v9e/v10s+/v6m+/v7 variants emit
-    // a clear error from their dispatch above (or fall through to v8 if
-    // version_from_filename returns "v8"-compatible).
+    // v8 (and any anchor-free model whose state-dict shape is v8-shape)
+    // has no dedicated `predict_v<N>_to_file` — fall back to the
+    // unified Predictor.
     return cmd_predict(weights, source, out, imgsz, device, scale_s, nc, conf, iou);
   }
   // For task variants we route on version_hint (or filename inference) too —

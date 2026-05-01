@@ -37,6 +37,9 @@
 namespace yolocpp::serialization {
 struct OnnxExportConfig;
 }
+namespace yolocpp::inference {
+struct NMSConfig;
+}
 
 namespace yolocpp::registry {
 
@@ -80,6 +83,21 @@ struct VersionAdapter {
   // True if TRT engine builds for this version need TF32 explicitly
   // disabled (v10 RepVGGDW saturation).
   bool trt_disable_tf32 = false;
+
+  // Predict to a file. Returns the number of detections written.
+  // Versions that fall back to the unified `inference::Predictor` (v8
+  // and any anchor-free model whose state-dict shape is v8-compatible)
+  // leave this empty — the CLI dispatcher routes those to
+  // `cmd_predict` instead. See registry::Registry::find().
+  std::function<std::size_t(const std::string& weights,
+                            const std::string& source,
+                            const std::string& out,
+                            int imgsz,
+                            const std::string& device,
+                            const std::string& scale,
+                            int nc,
+                            const yolocpp::inference::NMSConfig& nm)>
+      predict_to_file;
 };
 
 class Registry {

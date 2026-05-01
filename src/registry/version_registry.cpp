@@ -35,6 +35,9 @@
 #include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
+#include "yolocpp/inference/nms.hpp"
+#include "yolocpp/inference/predictor.hpp"
+#include "yolocpp/inference/task_predictors.hpp"
 #include "yolocpp/serialization/onnx_export.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
 
@@ -141,6 +144,13 @@ VersionAdapter make_v3() {
     load_and_eval(m, weights, cfg.imgsz, /*needs_warmup=*/true);
     serialization::export_yolo3_onnx(m, path, cfg);
   };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string&,
+                         int nc, const inference::NMSConfig& nm) {
+    return inference::predict_v3_to_file(weights, src, out, imgsz, device,
+                                         nc, nm).size();
+  };
   return a;
 }
 
@@ -168,6 +178,14 @@ VersionAdapter make_v4() {
     m->eval();
     serialization::export_yolo4_onnx(m, path, cfg);
   };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string&,
+                         int nc, const inference::NMSConfig& nm) {
+    int v4_imgsz = (imgsz == 640) ? 608 : imgsz;  // v4 anchor calibration
+    return inference::predict_v4_to_file(weights, src, out, v4_imgsz,
+                                         device, nc, nm).size();
+  };
   return a;
 }
 
@@ -191,6 +209,14 @@ VersionAdapter make_v5() {
     m->load_from_state_dict(sd.entries);
     m->eval();
     serialization::export_yolo5_onnx(m, path, cfg);
+  };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string& scale,
+                         int nc, const inference::NMSConfig& nm) {
+    return inference::predict_v5_to_file(weights, src, out, imgsz, device,
+                                         nc, models::yolo5_scale_from_letter(scale),
+                                         nm).size();
   };
   return a;
 }
@@ -222,6 +248,15 @@ VersionAdapter make_v6() {
     m->eval();
     serialization::export_yolo6_onnx(m, path, cfg);
   };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string& scale,
+                         int nc, const inference::NMSConfig& nm) {
+    auto r = resolve_v6(scale);
+    int v6_imgsz = (r.p6 && imgsz == 640) ? 1280 : imgsz;
+    return inference::predict_v6_to_file(weights, src, out, v6_imgsz, device,
+                                         nc, r.scale, r.p6, nm).size();
+  };
   return a;
 }
 
@@ -248,6 +283,14 @@ VersionAdapter make_v7() {
     models::Yolo7 m(models::yolo7_scale_from_letter(scale), nc);
     load_and_eval(m, weights, cfg.imgsz, /*needs_warmup=*/true);
     serialization::export_yolo7_onnx(m, path, cfg);
+  };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string& scale,
+                         int nc, const inference::NMSConfig& nm) {
+    return inference::predict_v7_to_file(weights, src, out, imgsz, device,
+                                         nc, models::yolo7_scale_from_letter(scale),
+                                         nm).size();
   };
   return a;
 }
@@ -317,6 +360,14 @@ VersionAdapter make_v9() {
     load_and_eval(m, weights, cfg.imgsz, /*needs_warmup=*/true);
     serialization::export_yolo9_onnx(m, path, cfg);
   };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string& scale,
+                         int nc, const inference::NMSConfig& nm) {
+    return inference::predict_v9_to_file(weights, src, out, imgsz, device,
+                                         nc, models::yolo9_scale_from_letter(scale),
+                                         nm).size();
+  };
   return a;
 }
 
@@ -339,6 +390,14 @@ VersionAdapter make_v10() {
     models::Yolo10 m(models::yolo10_scale_from_letter(scale), nc);
     load_and_eval(m, weights, cfg.imgsz, /*needs_warmup=*/true);
     serialization::export_yolo10_onnx(m, path, cfg);
+  };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string& scale,
+                         int nc, const inference::NMSConfig& nm) {
+    return inference::predict_v10_to_file(weights, src, out, imgsz, device,
+                                          nc, models::yolo10_scale_from_letter(scale),
+                                          nm).size();
   };
   return a;
 }
@@ -386,6 +445,14 @@ VersionAdapter make_v11() {
       throw std::runtime_error("yolo11 export: unknown task '" + task + "'");
     }
   };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string& scale,
+                         int nc, const inference::NMSConfig& nm) {
+    return inference::predict_v11_to_file(weights, src, out, imgsz, device,
+                                          nc, models::yolo11_scale_from_letter(scale),
+                                          nm).size();
+  };
   return a;
 }
 
@@ -411,6 +478,14 @@ VersionAdapter make_v12() {
     m->load_from_state_dict(sd.entries); m->eval();
     serialization::export_yolo12_onnx(m, path, cfg);
   };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string& scale,
+                         int nc, const inference::NMSConfig& nm) {
+    return inference::predict_v12_to_file(weights, src, out, imgsz, device,
+                                          nc, models::yolo12_scale_from_letter(scale),
+                                          nm).size();
+  };
   return a;
 }
 
@@ -434,6 +509,14 @@ VersionAdapter make_v13() {
     auto sd = serialization::load_state_dict(weights);
     m->load_from_state_dict(sd.entries); m->eval();
     serialization::export_yolo13_onnx(m, path, cfg);
+  };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string& scale,
+                         int nc, const inference::NMSConfig& nm) {
+    return inference::predict_v13_to_file(weights, src, out, imgsz, device,
+                                          nc, models::yolo13_scale_from_letter(scale),
+                                          nm).size();
   };
   return a;
 }
@@ -480,6 +563,14 @@ VersionAdapter make_v26() {
     } else {
       throw std::runtime_error("yolo26 export: unknown task '" + task + "'");
     }
+  };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                         const std::string& out, int imgsz,
+                         const std::string& device, const std::string& scale,
+                         int nc, const inference::NMSConfig& nm) {
+    return inference::predict_v26_to_file(weights, src, out, imgsz, device,
+                                          nc, models::yolo26_scale_from_letter(scale),
+                                          nm).size();
   };
   return a;
 }
