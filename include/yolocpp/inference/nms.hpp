@@ -22,7 +22,7 @@ struct NMSConfig {
   int   max_det     = 300;
   int   max_nms     = 30000;  // detections to NMS at most per image
   // multi_label=true expands each anchor into one row per class whose
-  // score exceeds conf_thresh (matches Ultralytics' val pipeline). When
+  // score exceeds conf_thresh (matches the upstream val pipeline). When
   // false, only the single best class per anchor is emitted (faster, what
   // the predict CLI uses by default).
   bool  multi_label = false;

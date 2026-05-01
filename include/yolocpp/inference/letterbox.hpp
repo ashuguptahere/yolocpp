@@ -1,6 +1,6 @@
 #pragma once
 //
-// Letterbox preprocessing — Ultralytics-compatible.
+// Letterbox preprocessing — matches the upstream behaviour bit-for-bit.
 //
 // Resizes and pads an image so the long side equals `new_shape` while
 // preserving aspect ratio, then returns the new image and the (gain, pad_x,

@@ -35,7 +35,7 @@ struct Detection {
 
 class Predictor {
  public:
-  // weights: path to Ultralytics .pt file
+  // weights: path to an upstream `.pt` file (or our converted form)
   // imgsz:   letterbox target side (default 640)
   // device:  "cuda" or "cpu" (auto-detected if empty)
   // nc:      number of classes the model was trained on (must match weights)
@@ -66,12 +66,12 @@ class Predictor {
   int                  imgsz_;
 };
 
-// 80 standard COCO names (in Ultralytics order).
+// 80 standard COCO names (canonical YOLO ordering).
 const std::vector<std::string>& coco_names();
 
-// Predict with a YOLO3 (Ultralytics' anchor-free yolov3u variant —
-// Darknet-53 backbone + v8-style DFL Detect head). Weights are
-// converted from `yolov3u.pt` via `convert_yolov3_pt` (fp16 → fp32).
+// Predict with a YOLO3 (the anchor-free yolov3u variant — Darknet-53
+// backbone + v8-style DFL Detect head). Weights are converted from
+// the upstream `yolov3u.pt` via `convert_yolov3_pt` (fp16 → fp32).
 std::vector<Detection> predict_v3_to_file(
     const std::string& weights, const std::string& in_path,
     const std::string& out_path, int imgsz = 640,
@@ -167,8 +167,8 @@ std::vector<Detection> predict_v26_to_file(
     NMSConfig conf = {});
 
 // Predict with a YOLO12 (Tian et al., A2C2f-based) detection model.
-// Filename convention `yolo12<scale>.pt`. All 5 scales available from
-// Ultralytics' v8.3.0+ assets.
+// Filename convention `yolo12<scale>.pt`. All 5 scales available
+// from the upstream v8.3.0+ asset host.
 std::vector<Detection> predict_v12_to_file(
     const std::string& weights, const std::string& in_path,
     const std::string& out_path, int imgsz = 640,

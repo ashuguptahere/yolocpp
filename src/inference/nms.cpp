@@ -66,7 +66,7 @@ std::vector<torch::Tensor> nms(torch::Tensor pred, NMSConfig cfg) {
     torch::Tensor conf, cls;
     if (cfg.multi_label) {
       // For every (anchor, class) pair with score > conf, emit one row.
-      // Matches Ultralytics' val multi_label=True path.
+      // Matches the upstream val multi_label=True path.
       auto mask = scr > cfg.conf_thresh;                      // [A, nc] bool
       auto coords = torch::nonzero(mask);                     // [K, 2] (anchor, class)
       if (coords.size(0) == 0) {
@@ -103,7 +103,7 @@ std::vector<torch::Tensor> nms(torch::Tensor pred, NMSConfig cfg) {
       cls  = cls.index_select(0, ti);
     }
 
-    // Class-aware NMS via a per-class offset (Ultralytics trick).
+    // Class-aware NMS via a per-class offset (standard upstream trick).
     auto offset = cls.to(box.dtype()) * 7680.f;  // larger than any image
     auto box_off = box.clone();
     box_off.select(1, 0).add_(offset);

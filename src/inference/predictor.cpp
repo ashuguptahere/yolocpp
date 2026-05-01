@@ -53,15 +53,16 @@ Predictor::Predictor(const std::string& weights, int imgsz, std::string device,
     : model_(scale, nc),
       device_(resolve_device(std::move(device))),
       imgsz_(imgsz) {
-  // Try Ultralytics .pt format first; fall back to torch::save archives
-  // (which is what our trainer emits via `torch::save(ema_, ...)`).
+  // Try the upstream `.pt` format first; fall back to torch::save
+  // archives (which is what our trainer emits via
+  // `torch::save(ema_, ...)`).
   try {
     auto sd = serialization::load_state_dict(weights);
     int copied = model_->load_from_state_dict(sd.entries);
     std::cout << "[predictor] loaded " << copied
               << " tensors from " << weights << "\n";
   } catch (const std::exception& e) {
-    std::cerr << "[predictor] Ultralytics-format load failed (" << e.what()
+    std::cerr << "[predictor] upstream-format load failed (" << e.what()
               << "); trying torch::save format...\n";
     torch::load(model_, weights);
     std::cout << "[predictor] loaded torch::save archive: " << weights << "\n";

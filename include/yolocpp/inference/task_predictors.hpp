@@ -32,7 +32,7 @@ struct ClassifyResult {
 
 class ClassifyPredictor {
  public:
-  // imgsz: classification typically uses 224 (Ultralytics default).
+  // imgsz: classification typically uses 224 (upstream default).
   ClassifyPredictor(const std::string& weights, int imgsz = 224,
                     std::string device = "", int nc = 1000,
                     models::Yolo8Scale scale = models::kYolo8n);

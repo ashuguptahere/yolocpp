@@ -21,7 +21,7 @@ static torch::Device pick_device(std::string s) {
   return torch::Device(torch::kCPU);
 }
 
-// Ultralytics' classify path applies *no* extra normalization on top of
+// The upstream classify path applies *no* extra normalization on top of
 // the standard 0..1 range — it relies on whatever stats the model was
 // trained with (which for v8-cls is just /255). Kept as a hook in case
 // users need real ImageNet stats later.
@@ -44,7 +44,7 @@ ClassifyResult run_classify(M& model, torch::Device dev, int imgsz,
   int short_side = std::min(bgr.rows, bgr.cols);
   double scale = (double)imgsz / short_side;
   // INTER_AREA matches torchvision's antialiased BILINEAR for downsampling,
-  // which is what Ultralytics' classify_transforms uses (PIL-based pipeline
+  // which is what the upstream classify_transforms uses (PIL-based pipeline
   // with antialias=True). Plain INTER_LINEAR introduces aliasing that
   // causes top-1 disagreement on real images at imgsz=224.
   int interp = (scale < 1.0) ? cv::INTER_AREA : cv::INTER_LINEAR;
@@ -753,7 +753,7 @@ OBBPredictor::OBBPredictor(const std::string& weights, int imgsz,
   model_->eval();
 }
 
-// Probabilistic IoU (covariance-form) approx used by Ultralytics for OBB
+// Probabilistic IoU (covariance-form) approx used upstream for OBB
 // NMS. We use a simpler convex approximation: convert (cx,cy,w,h,θ) to
 // rotated polygon via cv2.RotatedRect and compute IoU via cv2 helpers.
 static double rotated_iou(float cx1, float cy1, float w1, float h1, float a1,
