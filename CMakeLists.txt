@@ -1,14 +1,28 @@
 cmake_minimum_required(VERSION 3.24)
 
+# Single source of truth for the project version: the top-level VERSION
+# file. CMake reads it here, feeds it to project(... VERSION ...), and
+# CMake then exports PROJECT_VERSION_{MAJOR,MINOR,PATCH} into
+# yolocpp/config.hpp via cmake/yolocpp_config.hpp.in. Every other
+# consumer (the CLI's `--version` flag, `yolocpp info`, docs, release
+# tooling) reads YOLOCPP_VERSION_STRING from that header — never a
+# duplicate literal. To bump the version, edit ./VERSION only.
+file(READ "${CMAKE_SOURCE_DIR}/VERSION" YOLOCPP_VERSION_RAW)
+string(STRIP "${YOLOCPP_VERSION_RAW}" YOLOCPP_VERSION)
+if(NOT YOLOCPP_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "VERSION file must contain a single MAJOR.MINOR.PATCH line, got: '${YOLOCPP_VERSION}'")
+endif()
+
 project(yolocpp
-  VERSION 0.25.0
+  VERSION ${YOLOCPP_VERSION}
   DESCRIPTION "Pure C++ computer-vision suite (LibTorch + TensorRT)"
   LANGUAGES C CXX CUDA
 )
 # Pre-1.0 versioning policy lives in CHANGELOG.md. Bump the third digit
 # (PATCH) for additive changes; bump the second (MINOR) when a new YOLO
 # version, task, or pipeline lands. Stay on 0.x.y until the user
-# declares the project 1.0-ready.
+# declares the project 1.0-ready. To bump: edit ./VERSION (one line),
+# then add a CHANGELOG entry.
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

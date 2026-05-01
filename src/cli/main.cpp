@@ -28,6 +28,8 @@
 #include <string>
 #include <vector>
 
+#include <yolocpp/config.hpp>
+
 #include "yolocpp/cli/args.hpp"
 #include "yolocpp/cli/data_yaml.hpp"
 #include "yolocpp/cli/model_info.hpp"
@@ -1723,6 +1725,16 @@ bool looks_like_kv_style(int argc, char** argv) {
 }  // anonymous namespace
 
 int main(int argc, char** argv) {
+  // --version / -v / -V short-circuit. Reads YOLOCPP_VERSION_STRING
+  // from the CMake-stamped config.hpp (which CMake derives from the
+  // top-level ./VERSION file — single source of truth).
+  if (argc == 2 && (std::string(argv[1]) == "--version" ||
+                    std::string(argv[1]) == "-v" ||
+                    std::string(argv[1]) == "-V")) {
+    std::cout << "yolocpp " << YOLOCPP_VERSION_STRING << "\n";
+    return 0;
+  }
+
   // Print Ultralytics-style help if user asks.
   if (argc <= 1 ||
       (argc == 2 && (std::string(argv[1]) == "--help" ||
