@@ -76,12 +76,30 @@ The project is **pre-1.0** until the user explicitly declares it
 - **PATCH** bumps for additive changes (new test, new helper, bug fix,
   parity gotcha caught) that don't move the public surface.
 
+**Single source of truth for the version literal:** `project(yolocpp
+VERSION X.Y.Z)` in `CMakeLists.txt`. CMake flows that into
+`build/generated/yolocpp/config.hpp` (`YOLOCPP_VERSION_STRING` macro),
+which `yolocpp info` prints at runtime. **Do not duplicate the version
+string anywhere else.** The only legitimate places a literal `X.Y.Z`
+should appear are:
+
+1. `CMakeLists.txt` — the declaration itself.
+2. `CHANGELOG.md` — `## [X.Y.Z] — YYYY-MM-DD` headings (immutable
+   history).
+3. Historical "landed in X.Y.Z" / "added 0.20.0" lines inside TODO.md
+   tables — refer to a specific past commit, also immutable.
+
+Anything else (README front-matter, prose snapshots, "current version
+is …" lines) must read through the CMake-stamped string or be cut.
+Task #47 owns this clean-up.
+
 **Every code change MUST be documented**:
 1. Add a `## [X.Y.Z] — YYYY-MM-DD` heading at the **top** of
    `CHANGELOG.md` with `### Added` / `### Changed` / `### Fixed` /
    `### Deferred` subsections as appropriate.
 2. Bump `project(yolocpp VERSION X.Y.Z)` in `CMakeLists.txt` to match.
-3. Reference the change in CLAUDE.md / README.md if user-visible.
+3. Reference the change in README.md if user-visible (without
+   re-stamping the version into prose — refer to the CHANGELOG entry).
 
 A new model version is MINOR; wiring an existing pipeline to a
 previously-unsupported model is MINOR; a parity bug fix or regression
@@ -89,6 +107,22 @@ test is PATCH; a behavior-preserving refactor is PATCH.
 
 Going to `1.0.0` happens **only** when the user says so — never
 preemptively bump.
+
+## Commit + push policy
+
+- Commit at every logical step (TODO update, CLAUDE update, README
+  update, code change, test). Keep messages **brief and concrete** —
+  one short subject line, no multi-paragraph body unless the diff is
+  genuinely cross-cutting.
+- Commits must be authored as the maintainer (the existing git
+  `user.name` / `user.email`). **Do not** add `Co-Authored-By: Claude`
+  or `Generated with Claude Code` footers — they're explicitly
+  unwanted.
+- **Never push.** The maintainer pushes by hand. Don't add `git push`
+  to scripts or run it from automation either.
+- New tasks discovered mid-implementation: file under the parent's
+  `#NA`/`#NB` suffix in TODO.md when related + dependent, otherwise
+  append to the end of the queue.
 
 ## Project goal
 
@@ -111,7 +145,7 @@ referencing legacy upstream URLs that publish as `yolov<N>...pt`. The
 single legitimate place where strings differ from the canonical form
 is `src/cli/resolve.cpp::upstream_basename`.
 
-### Per-version capability matrix (current state, 0.25.0)
+### Per-version capability matrix (current state — see CMakeLists.txt for the version stamp)
 
 ```
               arch     predict       val      train             ONNX/TRT export
@@ -153,11 +187,12 @@ gap.
 ### Reference smokes / sweeps
 
 - **End-to-end ctest** (`ctest --test-dir build`): 31 tests, all green
-  at 0.25.0. Per-version smokes are `tests/test_v<N>_e2e.cpp` /
-  `test_v<N>_train.cpp`; SKIP-gated when weights/data missing.
+  on the latest release. Per-version smokes are
+  `tests/test_v<N>_e2e.cpp` / `test_v<N>_train.cpp`; SKIP-gated when
+  weights/data missing.
 - **Full matrix sweep** (`scripts/full_matrix_sweep.sh`): walks every
-  applicable (version, variant, task, mode) cell. Last-known-good at
-  0.25.0 is `PASS=152 FAIL=0 SKIP=0` (predict 121, val 4, train 3,
+  applicable (version, variant, task, mode) cell. Last-known-good
+  reading is `PASS=152 FAIL=0 SKIP=0` (predict 121, val 4, train 3,
   export 12, benchmark 12).
 - **Predict-task sweep** (`scripts/task_predict_sweep.sh`): all 75
   (v8/v11/v26 × n/s/m/l/x × 5 tasks).
@@ -227,7 +262,7 @@ reuse:
   `V13A2C2f` get `dsc3k=True` / `residual=True, mlp_ratio=1.5` overrides
   at l/x. Gamma init = `0.01 * ones(c2)` (NOT `ones(c2)` like v12).
 
-### Output convention (0.25.0+)
+### Output convention (current)
 
 All four user-mode CLI commands write under `runs/<mode>/`:
 - `runs/train/<exp>/...` (per-train-run dir, unchanged from earlier)
