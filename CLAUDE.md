@@ -350,6 +350,39 @@ If you add new executables, give them the same `target_link_options`
 and `BUILD_RPATH`/`INSTALL_RPATH` (use the `_yolocpp_rpath` variable
 defined in the root CMakeLists).
 
+## Per-version registry — how to add a new YOLO version
+
+The CLI / public API dispatch on the version string ("v3", "v8", "v11",
+…) through `yolocpp::registry::Registry`. Each supported version
+registers a `VersionAdapter` (in
+`include/yolocpp/registry/version_adapter.hpp`) describing the metadata
++ hooks the rest of the codebase needs. To add a new YOLO version:
+
+1. **Drop the model implementation** into
+   `src/models/yolo<N>.cpp` + `include/yolocpp/models/yolo<N>.hpp`
+   following the existing convention (see yolo12 / yolo13 as recent
+   templates).
+2. **Add an emitter** in `src/serialization/onnx_export.cpp` exposing
+   `export_yolo<N>_onnx(holder, path, cfg)`. Reuse helpers
+   (`emit_conv_module`, `emit_bottleneck`, `emit_c3`, …) wherever the
+   block primitives match.
+3. **Register the version** by adding a `make_v<N>()` helper inside
+   `src/registry/version_registry.cpp` that fills out a
+   `VersionAdapter`, then add `r.register_version(make_v<N>());` to
+   `register_all_versions()`. Per-version quirks (default imgsz,
+   TF32-clear for TRT, supported task list) all live in the adapter.
+4. **Wire the source file** into `yolocpp_core` in `CMakeLists.txt`.
+5. **Add a smoke test** in `tests/test_v<N>_e2e.cpp` (SKIP-gated when
+   weights are missing) and a registry assertion in
+   `tests/test_registry.cpp` if the new version belongs to a
+   distinguished class (e.g., full task family, anchor-based).
+
+That's it — `cmd_export` (and, as #46D/E/F land, `cmd_predict` /
+`cmd_val` / `cmd_train`) pick the adapter up automatically; no edits to
+`cli/main.cpp`. As of writing #46A/B/C have landed (export migrated +
+12-version registry seeded + walkthrough); predict/val/train are
+tracked under #46D/#46E/#46F.
+
 ## Architecture commitments
 
 Directory layout under `src/` and `include/yolocpp/` mirrors

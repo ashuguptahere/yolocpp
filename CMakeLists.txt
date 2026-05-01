@@ -151,6 +151,7 @@ add_library(yolocpp_core
   src/cli/data_yaml.cpp
   src/cli/model_info.cpp
   src/cli/resolve.cpp
+  src/registry/version_registry.cpp
   src/engine/benchmark.cpp
   src/engine/ddp.cpp
   src/engine/trainer.cpp

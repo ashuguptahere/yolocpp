@@ -31,6 +31,7 @@
 #include <yolocpp/config.hpp>
 
 #include "yolocpp/cli/args.hpp"
+#include "yolocpp/registry/version_adapter.hpp"
 #include "yolocpp/cli/data_yaml.hpp"
 #include "yolocpp/cli/model_info.hpp"
 #include "yolocpp/cli/resolve.hpp"
@@ -307,221 +308,42 @@ int cmd_export(const std::string& weights, const std::string& format,
                 << " from " << weights << " (pass --scale to override)\n";
     }
   }
-  // Per-version imgsz override applied here so both ONNX-write and
-  // TRT-profile use the same value.
-  //   v4: anchors calibrated to 608².
-  //   v7 P6 variants (w6/e6/d6/e6e): trained at 1280².
-  //   v6 P6 variants (n6/s6/m6/l6): trained at 1280².
-  // Honour explicit caller overrides.
-  if (version == "v4" && imgsz == 640) imgsz = 608;
-  if (version == "v7" && imgsz == 640) {
-    if (scale_s == "w6" || scale_s == "e6" || scale_s == "d6" || scale_s == "e6e") {
-      imgsz = 1280;
-    }
-  }
-  if (version == "v6" && imgsz == 640) {
-    if (scale_s == "n6" || scale_s == "s6" || scale_s == "m6" || scale_s == "l6") {
-      imgsz = 1280;
-    }
+  // Resolve the per-version adapter from the registry; this replaces
+  // ~250 lines of if-else dispatch (per-version × per-task ctor +
+  // load_state_dict + warmup + emitter call). See
+  // include/yolocpp/registry/version_adapter.hpp for the contract and
+  // the "how to add a new YOLO version" walkthrough.
+  yolocpp::registry::register_all_versions();
+  const auto* adapter =
+      yolocpp::registry::Registry::instance().find(version);
+  if (!adapter) {
+    throw std::runtime_error(
+        "export: unknown version '" + version + "' — registry has " +
+        std::to_string(
+            yolocpp::registry::Registry::instance().known_ids().size()) +
+        " known");
   }
 
-  // v12 / v13 detect export: graph emitters live in onnx_export.cpp.
-  // Detect-only (neither Ultralytics v12 nor iMoonLab v13 ship task weights).
-
-  // All v3..v10 + v5/v8/v11/v12/v13/v26 ONNX/TRT export pipelines are
-  // wired. v6 supports n/s only at this point — m/l (BepC3+DFL),
-  // MBLA, P6 will surface a TORCH_CHECK from `export_yolo6_onnx`.
-  // v9-e (CBLinear/CBFuse) similarly guarded inside `export_yolo9_onnx`.
+  // Per-version + per-task imgsz default (v4=608, v6/v7-P6=1280,
+  // classify=224). Honours explicit caller imgsz when not the
+  // 640 default.
+  if (imgsz == 640 && adapter->default_imgsz) {
+    int v = adapter->default_imgsz(scale_s, task);
+    if (v > 0) imgsz = v;
+  }
 
   auto write_onnx = [&](const std::string& onnx_path) {
     yolocpp::serialization::OnnxExportConfig ocfg;
     ocfg.imgsz = imgsz; ocfg.input_name = input_name;
-    auto sd = yolocpp::serialization::load_state_dict(weights);
-    if (task == "detect") {
-      if (version == "v11") {
-        yolocpp::models::Yolo11Detect m(
-            yolocpp::models::yolo11_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo11_onnx(m, onnx_path, ocfg);
-      } else if (version == "v26") {
-        yolocpp::models::Yolo26Detect m(
-            yolocpp::models::yolo26_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo26_onnx(m, onnx_path, ocfg);
-      } else if (version == "v12") {
-        yolocpp::models::Yolo12Detect m(
-            yolocpp::models::yolo12_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo12_onnx(m, onnx_path, ocfg);
-      } else if (version == "v13") {
-        yolocpp::models::Yolo13Detect m(
-            yolocpp::models::yolo13_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo13_onnx(m, onnx_path, ocfg);
-      } else if (version == "v10") {
-        yolocpp::models::Yolo10 m(
-            yolocpp::models::yolo10_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries);
-        {
-          torch::NoGradGuard ng;
-          auto x = torch::zeros({1, 3, ocfg.imgsz, ocfg.imgsz});
-          m->forward_eval(x);
-        }
-        m->eval();
-        yolocpp::serialization::export_yolo10_onnx(m, onnx_path, ocfg);
-      } else if (version == "v3") {
-        yolocpp::models::Yolo3 m(yolocpp::models::kYolo3, nc);
-        m->load_from_state_dict(sd.entries);
-        {
-          torch::NoGradGuard ng;
-          auto x = torch::zeros({1, 3, ocfg.imgsz, ocfg.imgsz});
-          m->forward_eval(x);
-        }
-        m->eval();
-        yolocpp::serialization::export_yolo3_onnx(m, onnx_path, ocfg);
-      } else if (version == "v9") {
-        yolocpp::models::Yolo9 m(
-            yolocpp::models::yolo9_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries);
-        {
-          torch::NoGradGuard ng;
-          auto x = torch::zeros({1, 3, ocfg.imgsz, ocfg.imgsz});
-          m->forward_eval(x);
-        }
-        m->eval();
-        yolocpp::serialization::export_yolo9_onnx(m, onnx_path, ocfg);
-      } else if (version == "v4") {
-        yolocpp::models::Yolo4 m(nc);
-        m->load_from_state_dict(sd.entries);
-        m->eval();
-        yolocpp::serialization::export_yolo4_onnx(m, onnx_path, ocfg);
-      } else if (version == "v7") {
-        yolocpp::models::Yolo7 m(yolocpp::models::yolo7_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries);
-        {
-          torch::NoGradGuard ng;
-          auto x = torch::zeros({1, 3, ocfg.imgsz, ocfg.imgsz});
-          m->forward_eval(x);   // populates stride from feature sizes
-        }
-        m->eval();
-        yolocpp::serialization::export_yolo7_onnx(m, onnx_path, ocfg);
-      } else if (version == "v6") {
-        // Resolve scale and P6 flag from the scale string.
-        auto v6_scale = yolocpp::models::kYolo6s;
-        bool v6_p6 = false;
-        if      (scale_s == "n")        v6_scale = yolocpp::models::kYolo6n;
-        else if (scale_s == "s")        v6_scale = yolocpp::models::kYolo6s;
-        else if (scale_s == "m")        v6_scale = yolocpp::models::kYolo6m;
-        else if (scale_s == "l")        v6_scale = yolocpp::models::kYolo6l;
-        else if (scale_s == "n6")       { v6_scale = yolocpp::models::kYolo6n; v6_p6 = true; }
-        else if (scale_s == "s6")       { v6_scale = yolocpp::models::kYolo6s; v6_p6 = true; }
-        else if (scale_s == "m6")       { v6_scale = yolocpp::models::kYolo6m; v6_p6 = true; }
-        else if (scale_s == "l6")       { v6_scale = yolocpp::models::kYolo6l; v6_p6 = true; }
-        else if (scale_s == "s_mbla")   v6_scale = yolocpp::models::kYolo6s_mbla;
-        else if (scale_s == "m_mbla")   v6_scale = yolocpp::models::kYolo6m_mbla;
-        else if (scale_s == "l_mbla")   v6_scale = yolocpp::models::kYolo6l_mbla;
-        else if (scale_s == "x_mbla")   v6_scale = yolocpp::models::kYolo6x_mbla;
-        yolocpp::models::Yolo6 m(nc, v6_scale, /*reg_max=*/16, /*p6=*/v6_p6);
-        m->load_from_state_dict(sd.entries);
-        m->eval();
-        yolocpp::serialization::export_yolo6_onnx(m, onnx_path, ocfg);
-      } else if (version == "v5") {
-        // v5 (anchor-free `*u.pt` form) uses Yolo5Detect with 6×6 stem +
-        // C3 blocks. The dedicated emitter walks the v5 yaml and reuses
-        // emit_bottleneck (which reads cv1/cv2 kernel sizes at runtime,
-        // so v5's k=(1,3) Bottlenecks work without modification) plus a
-        // small `emit_c3` helper.
-        yolocpp::models::Yolo5Detect m(
-            yolocpp::models::yolo5_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo5_onnx(m, onnx_path, ocfg);
-      } else {
-        yolocpp::models::Yolo8Detect m(parse_scale(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo8_onnx(m, onnx_path, ocfg);
-      }
-    } else if (task == "classify") {
-      if (ocfg.imgsz == 640) ocfg.imgsz = 224;
-      if (nc < 0 || nc == 80) nc = 1000;
-      if (version == "v11") {
-        yolocpp::models::Yolo11Classify m(
-            yolocpp::models::yolo11_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo11_classify_onnx(m, onnx_path, ocfg);
-      } else if (version == "v26") {
-        yolocpp::models::Yolo26Classify m(
-            yolocpp::models::yolo26_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo26_classify_onnx(m, onnx_path, ocfg);
-      } else {
-        yolocpp::models::Yolo8Classify m(parse_scale(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo8_classify_onnx(m, onnx_path, ocfg);
-      }
-    } else if (task == "segment") {
-      if (version == "v11") {
-        yolocpp::models::Yolo11Segment m(
-            yolocpp::models::yolo11_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo11_segment_onnx(m, onnx_path, ocfg);
-      } else if (version == "v26") {
-        yolocpp::models::Yolo26Segment m(
-            yolocpp::models::yolo26_scale_from_letter(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo26_segment_onnx(m, onnx_path, ocfg);
-      } else {
-        yolocpp::models::Yolo8Segment m(parse_scale(scale_s), nc);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo8_segment_onnx(m, onnx_path, ocfg);
-      }
-    } else if (task == "pose") {
-      if (version == "v11") {
-        yolocpp::models::Yolo11Pose m(
-            yolocpp::models::yolo11_scale_from_letter(scale_s),
-            /*nc=*/1, /*num_kpts=*/17, /*kpt_dim=*/3);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo11_pose_onnx(m, onnx_path, ocfg);
-      } else if (version == "v26") {
-        yolocpp::models::Yolo26Pose m(
-            yolocpp::models::yolo26_scale_from_letter(scale_s),
-            /*nc=*/1, /*num_kpts=*/17, /*kpt_dim=*/3);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo26_pose_onnx(m, onnx_path, ocfg);
-      } else {
-        yolocpp::models::Yolo8Pose m(
-            parse_scale(scale_s), /*nc=*/1, /*num_kpts=*/17, /*kpt_dim=*/3);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo8_pose_onnx(m, onnx_path, ocfg);
-      }
-    } else if (task == "obb") {
-      // OBB nc default is 15 (DOTA) when caller passed the detect default 80.
-      int obb_nc = (nc == 80) ? 15 : nc;
-      if (version == "v11") {
-        yolocpp::models::Yolo11OBB m(
-            yolocpp::models::yolo11_scale_from_letter(scale_s), obb_nc, /*ne=*/1);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo11_obb_onnx(m, onnx_path, ocfg);
-      } else if (version == "v26") {
-        yolocpp::models::Yolo26OBB m(
-            yolocpp::models::yolo26_scale_from_letter(scale_s), obb_nc, /*ne=*/1);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo26_obb_onnx(m, onnx_path, ocfg);
-      } else {
-        yolocpp::models::Yolo8OBB m(parse_scale(scale_s), obb_nc, /*ne=*/1);
-        m->load_from_state_dict(sd.entries); m->eval();
-        yolocpp::serialization::export_yolo8_obb_onnx(m, onnx_path, ocfg);
-      }
-    } else {
-      throw std::runtime_error("export: unsupported task '" + task + "'");
+    if (!adapter->export_onnx) {
+      throw std::runtime_error(
+          "export: version '" + version + "' has no ONNX exporter wired");
     }
+    adapter->export_onnx(weights, scale_s, nc, task, onnx_path, ocfg);
   };
 
   auto base_name = [&]() -> std::string {
-    std::string base = (version == "v11") ? "yolo11"
-                       : (version == "v12") ? "yolo12"
-                       : (version == "v13") ? "yolo13"
-                       : (version == "v26") ? "yolo26"
-                       : "yolo8";
+    std::string base = adapter->default_export_basename;
     if (task != "detect") base += "_" + task;
     return base;
   }();
@@ -554,11 +376,11 @@ int cmd_export(const std::string& weights, const std::string& format,
     write_onnx(onnx_tmp);
     yolocpp::serialization::TrtBuildConfig tcfg;
     tcfg.imgsz = imgsz; tcfg.fp16 = fp16; tcfg.input_name = input_name;
-    // v10 saturates cls outputs to near-zero under TF32 accumulation across
-    // every scale (the RepVGGDW 7×7 dwconv with bias accumulates enough
-    // mantissa loss that cls drops from ~0.95 to ~0.5/n or ~0.001/s+).
-    // Force true FP32 math for the full v10 family.
-    if (version == "v10") {
+    // v10's RepVGGDW 7×7 dwconv-with-bias stack saturates cls under TF32
+    // accumulation; the registry adapter declares this with
+    // `trt_disable_tf32`. Generic switch covers any future version that
+    // hits the same class of issue.
+    if (adapter->trt_disable_tf32) {
       tcfg.tf32 = false;
     }
     yolocpp::serialization::build_trt_engine(onnx_tmp, path, tcfg);

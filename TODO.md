@@ -199,10 +199,15 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 
 | # | scope | priority | session-cost estimate | blockers |
 |---|-------|----------|------------------------|----------|
-| #46  | Modular architecture for adding new YOLO versions in one pass | high | 2 sessions | per-model header + ctor + loss + yaml currently touch six different files; needs a registry |
-| #46A | Extract a per-version factory (`name → builder/forward/loss/yaml`) | — | within #46 | — |
-| #46B | One abstract base / concept that every `Yolo<N>Impl` satisfies (forward_train + forward_eval + state_dict shape) | — | within #46 | — |
-| #46C | Document "how to add a new YOLO version" walkthrough in CLAUDE.md (link to #46A/#46B) | — | within #46 | — |
+| #46  | Modular architecture for adding new YOLO versions in one pass | high | 2 sessions | export pipeline migrated; predict/val/train follow as #46D/#46E/#46F |
+| #46A | ✅ closed — `include/yolocpp/registry/version_adapter.hpp` + `src/registry/version_registry.cpp` provide a `VersionAdapter` (std::function-typed hooks) and a `Registry` singleton seeded by `register_all_versions()`. All 12 versions register themselves declaring `version_id`, `display_name`, `default_export_basename`, `supported_tasks`, `default_imgsz(scale, task)`, `export_onnx(...)`, and a `trt_disable_tf32` quirk flag. | — | landed | — |
+| #46B | ✅ closed (interim) — type erasure via std::function in `VersionAdapter` is the abstract base every concrete `Yolo<N>Impl` plugs into without inheritance. A real C++ concept-based base (one ABC every Impl satisfies via `forward_train` + `forward_eval` shapes) is deferred to #46H once predict/train are also on the registry; not blocking. | — | landed | — |
+| #46C | ✅ closed — "how to add a new YOLO version" walkthrough lives at the top of `include/yolocpp/registry/version_adapter.hpp` (4-step recipe: drop the model TU, write a `register_yolo<N>` helper, add it to `register_all_versions()`, list the TU in CMakeLists). Mirrored in CLAUDE.md. | — | landed | — |
+| #46D | Migrate `cmd_predict` to the registry (replace ~70-line if-else chain in `cli/main.cpp:560-740` with a `predict_holder` adapter hook). Pre-req: design a runtime `IDetector` interface that erases the holder type. | — | within #46 | — |
+| #46E | Migrate `cmd_val` to the registry (val branches at `cli/main.cpp:633-740`). | — | within #46 | — |
+| #46F | Migrate `cmd_train` + `cmd_benchmark` to the registry (export already done; train via `LossTraits<M>` is per-version, registry can carry the loss-binding too). | — | within #46 | — |
+| #46G | Add a per-version registry test (`tests/test_registry.cpp`) — asserts every expected `version_id` is registered and the minimum hooks exist. | ✅ closed | landed | — |
+| #46H | Convert `VersionAdapter` from std::function-erased hooks to a concept-based abstract base once predict/val/train are migrated and the surface area is stable. Optional polish; std::function is fine in practice. | low | within #46 | — |
 | #47  | Centralise version stamp — single source of truth | high | 0.5 session | low risk; mostly text edits |
 | #47A | ✅ closed — top-level `./VERSION` file is now the single source of truth; CMake `file(READ)`s it into `project(... VERSION ...)`, exports through `config.hpp` (`YOLOCPP_VERSION_STRING`), surfaces via `yolocpp --version` / `-v` / `-V` and `yolocpp info`. To bump the version, edit `./VERSION` only. | — | landed | — |
 | #47B | ✅ closed — SESSION_DIGEST.md re-headered as "frozen snapshot of prior session" (its `0.X.Y` mentions are now explicitly historical). README and CLAUDE already cleaned in earlier commit. One stale parenthetical in TODO.md re-worded to "landed in 0.22.0". | — | landed | — |
@@ -314,6 +319,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #62 | Optional: Ninja generator support for faster builds | low (optional) | 0.25 session | none; just `cmake -G Ninja` validation + docs |
 | #63 | Optional: cross-platform GUI (Dear ImGui / Qt) for train/val/predict/export | low (optional) | many sessions | not on the critical path |
 | #50 | Optional: license decision (Apache 2.0 recommended). Moved here from Group I per maintainer — no quick decision wanted. Re-promote when the maintainer is ready to commit to a license; gates #60 *publication* but not #60 training itself. | optional | 0.25 session | — |
+| #64 | `tests/test_v6_e2e.cpp` lines 64 / 97 fail to compile — `predict_v6_to_file` signature took an `NMSConfig` previously but now expects a different type (compiler reports "cannot convert NMSConfig to bool"). Pre-existing breakage discovered during #46 — surfaced when the full build was kicked off, not caused by the registry refactor. Fix: update test to match current `predict_v6_to_file` signature, or restore the helper. | medium | 0.25 session | — |
 
 ---
 
