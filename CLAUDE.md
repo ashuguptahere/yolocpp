@@ -76,22 +76,31 @@ The project is **pre-1.0** until the user explicitly declares it
 - **PATCH** bumps for additive changes (new test, new helper, bug fix,
   parity gotcha caught) that don't move the public surface.
 
-**Single source of truth for the version literal:** `project(yolocpp
-VERSION X.Y.Z)` in `CMakeLists.txt`. CMake flows that into
-`build/generated/yolocpp/config.hpp` (`YOLOCPP_VERSION_STRING` macro),
-which `yolocpp info` prints at runtime. **Do not duplicate the version
-string anywhere else.** The only legitimate places a literal `X.Y.Z`
-should appear are:
+**Single source of truth for the version literal:** the top-level
+[`./VERSION`](VERSION) file (one line, `MAJOR.MINOR.PATCH`).
+`CMakeLists.txt` `file(READ)`s it and feeds it to `project(yolocpp
+VERSION ...)`, which CMake then exports into
+`build/generated/yolocpp/config.hpp` as `YOLOCPP_VERSION_STRING`.
+Consumers:
 
-1. `CMakeLists.txt` — the declaration itself.
-2. `CHANGELOG.md` — `## [X.Y.Z] — YYYY-MM-DD` headings (immutable
+- `yolocpp --version` / `-v` / `-V` (and `yolocpp info`) print it at
+  runtime.
+- Future docs / release tooling read it through the same header — never
+  duplicate.
+
+**To bump the version, edit `./VERSION` only** (then add a
+`CHANGELOG.md` heading). The only other legitimate places a literal
+`X.Y.Z` should appear are:
+
+1. `CHANGELOG.md` — `## [X.Y.Z] — YYYY-MM-DD` headings (immutable
    history).
-3. Historical "landed in X.Y.Z" / "added 0.20.0" lines inside TODO.md
+2. Historical "landed in X.Y.Z" / "added 0.20.0" lines inside TODO.md
    tables — refer to a specific past commit, also immutable.
 
 Anything else (README front-matter, prose snapshots, "current version
 is …" lines) must read through the CMake-stamped string or be cut.
-Task #47 owns this clean-up.
+Task #47 owns this clean-up; #47A landed (the `./VERSION` file
+itself), #47B/C remain.
 
 **Every code change MUST be documented**:
 1. Add a `## [X.Y.Z] — YYYY-MM-DD` heading at the **top** of

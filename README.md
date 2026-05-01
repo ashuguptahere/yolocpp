@@ -3,13 +3,20 @@
 Pure C++ computer-vision suite. LibTorch for training/eval, TensorRT for
 deployment, OpenCV for image I/O. **No Python in the runtime path.**
 
-**Pre-1.0.** The current release version is the value of
-`project(yolocpp VERSION ...)` in [CMakeLists.txt](CMakeLists.txt) —
-that's the single source of truth. It flows into the binary through
-`build/generated/yolocpp/config.hpp` and `yolocpp info` prints it at
-runtime. See [CHANGELOG.md](CHANGELOG.md) for the per-release log, and
-its header for the pre-1.0 versioning policy. The `1.0.0` line is
-deliberately gated on the maintainer's call — not a feature checklist.
+**Pre-1.0.** The current release version lives in the top-level
+[`VERSION`](VERSION) file (one line, `MAJOR.MINOR.PATCH`) — that's the
+single source of truth. CMake reads it at configure time, embeds it
+into the binary via `yolocpp/config.hpp`, and exposes it on the CLI:
+
+```bash
+yolocpp --version    # or -v / -V
+yolocpp info         # full build info: yolocpp + libtorch + cuda + trt + opencv
+```
+
+To bump the version, edit `./VERSION` and add a `CHANGELOG.md` entry.
+See [CHANGELOG.md](CHANGELOG.md) for the per-release log and its header
+for the pre-1.0 versioning policy. The `1.0.0` line is deliberately
+gated on the maintainer's call — not a feature checklist.
 
 ## Status
 

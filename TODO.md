@@ -204,9 +204,9 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #46B | One abstract base / concept that every `Yolo<N>Impl` satisfies (forward_train + forward_eval + state_dict shape) | — | within #46 | — |
 | #46C | Document "how to add a new YOLO version" walkthrough in CLAUDE.md (link to #46A/#46B) | — | within #46 | — |
 | #47  | Centralise version stamp — single source of truth | high | 0.5 session | low risk; mostly text edits |
-| #47A | `CMakeLists.txt VERSION` is the only authoritative literal; flow through `config.hpp` → CLI `info` | — | within #47 | — |
-| #47B | Strip stale "Current version: X.Y.Z" prose from README/TODO/SESSION_DIGEST/CLAUDE; keep only CHANGELOG headings + historical "landed in X.Y.Z" lines | — | within #47 | — |
-| #47C | CI / pre-commit lint that flags stray `0\.\d+\.\d+` literals outside the allow-list | — | within #47 | — |
+| #47A | ✅ closed — top-level `./VERSION` file is now the single source of truth; CMake `file(READ)`s it into `project(... VERSION ...)`, exports through `config.hpp` (`YOLOCPP_VERSION_STRING`), surfaces via `yolocpp --version` / `-v` / `-V` and `yolocpp info`. To bump the version, edit `./VERSION` only. | — | landed | — |
+| #47B | Strip stale "Current version: X.Y.Z" prose from SESSION_DIGEST and any other doc that hardcodes a release number (README + CLAUDE already done in this batch); keep only CHANGELOG headings + historical "landed in X.Y.Z" lines. | — | within #47 | — |
+| #47C | CI / pre-commit lint that flags stray `0\.\d+\.\d+` literals outside the allow-list (`CMakeLists.txt`, `VERSION`, `CHANGELOG.md`, historical TODO entries). | — | within #47 | — |
 | #48  | Centralise + minimise third-party libs | high | 1 session | currently scripted via `install_third_party.sh`; needs an explicit pinned list and audit |
 | #48A | Audit `third_party/` and produce a single pinned `deps.lock`-style manifest | — | within #48 | — |
 | #48B | Drop redundant deps; document why each remaining one is in the closed set | — | within #48 | — |
@@ -214,10 +214,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #49A | Rename internal identifiers / namespaces / comments | — | within #49 | — |
 | #49B | URL resolver: keep one allow-listed spot only | — | within #49 | — |
 | #49C | Strip from public docs / CLI help text | — | within #49 | — |
-| #50  | Pick + apply a permissive license (Apache 2.0 / MIT / GPL — final call by maintainer) | high | 0.25 session | required before public release of weights (#60) |
-| #50A | Add top-level `LICENSE` file | — | within #50 | — |
-| #50B | Per-file SPDX header where practical; `NOTICE` for vendored deps | — | within #50 | — |
-| #50C | Document license + commercial-use stance in README | — | within #50 | — |
+| ~~#50~~ | Pick + apply a license — **moved to Group VII (optional / deferred)**. Maintainer's call; recommendation on file is Apache 2.0 (patent grant covers ML/transformer IP, all upstream model deps already Apache/MIT, monetisation works via dual-licensing + hosted SaaS + premium weights). Filed at #50 originally; no longer blocks #60 in the ordering — but #60 *publish* must wait until a license is chosen. | optional | — | — |
 
 ### Group II — CLI / API surface (depends on Group I)
 
@@ -316,6 +313,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 |---|-------|----------|------------------------|----------|
 | #62 | Optional: Ninja generator support for faster builds | low (optional) | 0.25 session | none; just `cmake -G Ninja` validation + docs |
 | #63 | Optional: cross-platform GUI (Dear ImGui / Qt) for train/val/predict/export | low (optional) | many sessions | not on the critical path |
+| #50 | Optional: license decision (Apache 2.0 recommended). Moved here from Group I per maintainer — no quick decision wanted. Re-promote when the maintainer is ready to commit to a license; gates #60 *publication* but not #60 training itself. | optional | 0.25 session | — |
 
 ---
 
