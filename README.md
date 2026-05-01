@@ -3,78 +3,90 @@
 Pure C++ computer-vision suite. LibTorch for training/eval, TensorRT for
 deployment, OpenCV for image I/O. **No Python in the runtime path.**
 
-**Current version: `0.17.0`** (pre-1.0).
+**Pre-1.0.** The current release version is the value of
+`project(yolocpp VERSION ...)` in [CMakeLists.txt](CMakeLists.txt) —
+that's the single source of truth. It flows into the binary through
+`build/generated/yolocpp/config.hpp` and `yolocpp info` prints it at
+runtime. See [CHANGELOG.md](CHANGELOG.md) for the per-release log, and
+its header for the pre-1.0 versioning policy. The `1.0.0` line is
+deliberately gated on the maintainer's call — not a feature checklist.
 
-**All 12 YOLO versions now have ONNX export wired** (v3..v13 + v26). With v6 landing in 0.17.0, every detection-supported version produces a valid ONNX file via the templated graph emitters in `src/serialization/onnx_export.cpp`.
+## Status
 
-**All 12 YOLO versions now train end-to-end.** With v10 train landing in this release, every detection-supported version (v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v26) trains via the templated `TrainerT<M>` runner using one of four loss classes: `V8DetectionLoss` (anchor-free DFL), `V6DetectionLoss` (VFL+SIoU+TAL), `V7DetectionLoss` (anchor-based v3-style), or `Yolo26Loss` (DFL-free NMS-free). Every code change is logged in
-[CHANGELOG.md](CHANGELOG.md) with a bumped semver — see the file's
-header for the pre-1.0 versioning policy. The `1.0.0` line is reserved
-for whenever the project is declared stable (deliberately gated on the
-maintainer's call, not a feature checklist).
+All twelve supported YOLO versions (`yolo3 yolo4 yolo5 yolo6 yolo7
+yolo8 yolo9 yolo10 yolo11 yolo12 yolo13 yolo26`) currently ship the
+detect pipeline end-to-end — **predict, val, train, ONNX export, TRT
+export** — across every published scale. v8 / v11 / v26 additionally
+ship the full five-task family (detect / classify / segment / pose /
+obb). v12 / v13 ship detect-only upstream; their task heads are
+scaffolded in code and queued for retraining on COCO under task #60.
 
-A recurring **gap-audit** task (#33) sweeps the codebase periodically
+Reference reading on the current state:
+
+```
+ctest --test-dir build                # 31/31 green
+bash scripts/full_matrix_sweep.sh     # PASS=152 FAIL=0 SKIP=0
+                                      #   predict 121, val 4, train 3,
+                                      #   export 12, benchmark 12
+```
+
+Cross-cutting infrastructure that's already wired:
+
+- Hand-written ONNX protobuf emitter (no libprotobuf, no Python tracer)
+  with task-aware decoders for detect / segment / pose / obb / classify.
+- TensorRT builder via `nvonnxparser::IParser`, FP16 on Blackwell,
+  TF32-cleared per-version where required (v10 RepVGGDW saturation).
+- Templated `TrainerT<M>` + `LossTraits<M>` covering all twelve
+  versions via four loss classes (`V8DetectionLoss`,
+  `V6DetectionLoss`, `V7DetectionLoss`, `Yolo26Loss`).
+- Templated `engine::validate<M>` for every detect-shape model.
+- Multi-GPU DDP scaffolding (NCCL + all-reduce), world_size=1
+  verified end-to-end; two-GPU box validation pending hardware.
+- Auto-resolve of `model=` / `data=` / `scale=` / `version=` / `nc=`
+  from cwd / cache / state-dict shape / filename — pass `model=`
+  alone and the rest is inferred (renamed `best.pt` / `last.pt`
+  works).
+- Run artefacts: `results.csv`, `args.yaml`, `confusion_matrix.png`,
+  `BoxPR/BoxF1/BoxP/BoxR_curve.png`, `labels.jpg`, `results.png`,
+  `train_batch{0,1,2}.jpg`, `best.pt` at peak mAP@0.5:0.95,
+  `patience=N` early-stop.
+- `runs/<mode>/` default output convention (predict / val / export
+  all live alongside `runs/train/`).
+
+## Roadmap
+
+The full task ledger lives in **[TODO.md](TODO.md)** — every completed,
+in-flight, and pending task across the codebase, not just the active
+session. Highlights of the next-batch roadmap (tasks #46..#63, filed
+2026-05-01):
+
+- **Group I (foundation):** modular per-version registry (#46),
+  centralised version stamp (#47), centralised+minimised third-party
+  deps (#48), strip every "ultralytics" trace (#49), pick a license
+  (#50).
+- **Group II (CLI / API):** long+short flags (`--model/-m`, …),
+  `--source` covering image/video/dir/URL/webcam, `--seed`,
+  `yolocpp download <dataset>`, unified `export precision=` switch,
+  auto-export ONNX after train, `--device` covering cpu/cuda/mps,
+  Ultralytics-Python-like `yolocpp::YOLO(...)` chainable C++ API.
+- **Group III (verification):** cross-backend `.pt`/`.onnx`/`.engine`
+  parity assert; mAP small/medium/large breakdown.
+- **Group IV (features):** SAHI + tracker family
+  (SORT/DeepSORT/OC-SORT/ByteTrack/BoT-SORT/NvSORT); add legacy +
+  additional YOLO families (yolo1, yolo2, YOLOX, YOLO-NAS,
+  YOLO-WORLD, YOLOE, YOLOR, PP-YOLO, Scaled-YOLOv4, DAMO-YOLO).
+- **Group V (perf / hardware):** parallelisation pass, multi-device
+  dispatch, iOS/Android/edge deploy, Jetson Nano/Orin/THOR + DGX Spark
+  TRT plans.
+- **Group VI (distribution):** retrain every (version × scale × task)
+  on COCO and publish weights to GitHub Releases; comparison
+  table/graphs.
+- **Group VII (optional):** Ninja generator, cross-platform GUI.
+
+A recurring **gap-audit** (task #33) sweeps the codebase periodically
 for unwired pipelines, stub implementations, SKIP-gated tests, and
-per-version variants not yet shipped — see CLAUDE.md
-"Periodic gap-audit (recurring TODO)" for the checklist and trigger
-points.
-
-**For the full task ledger** — completed, pending, and in-flight across
-the entire codebase (not just the active session) — see
-**[TODO.md](TODO.md)**. It aggregates session task numbers, per-version
-capability gaps, code-level TODO/FIXME comments, SKIP-gated tests, and
-pre-numbered Phase work.
-
-## Status — Phase 6 + extension tasks (val for v3..v10, v9 train) complete
-
-| component                              | state     |
-|----------------------------------------|-----------|
-| Build skeleton + CMake + smoke test    | ✅ Phase 0 |
-| YOLO8n architecture (Conv/C2f/SPPF/Detect/DFL) | ✅ |
-| Ultralytics `.pt` weight loader (clean-room pickle parser) | ✅ |
-| Letterbox + NMS + predict CLI          | ✅ |
-| YOLO-format dataset + augmentation     | ✅ HSV + flip (mosaic/mixup TODO) |
-| YOLO8 loss (CIoU + DFL + BCE + TAL)   | ✅ |
-| Trainer (SGD + cosine LR + EMA)        | ✅ AMP TODO |
-| Validator (mAP@0.5, mAP@0.5:0.95)      | ✅ |
-| **ONNX export (hand-written protobuf, no Python)**       | ✅ Phase 2 |
-| **TensorRT engine builder (NvOnnxParser, FP16, sm_120)** | ✅ Phase 2 |
-| **TRT runtime predictor (matches libtorch detections)**  | ✅ Phase 2 |
-| **Classify task (yolo8n-cls.pt → top-K)**               | ✅ Phase 3 — predict + train + val |
-| **Segment task (yolo8n-seg.pt → mask overlays)**        | ✅ Phase 3 — predict + train + val (mask BCE loss, mask-mAP@0.5) |
-| **Pose task (yolo8n-pose.pt → 17-keypoint skeleton)**   | ✅ Phase 3 — predict + train + val (kpt L1 + visibility BCE, OKS-mAP) |
-| **OBB task (yolo8n-obb.pt → rotated boxes + NMS)**      | ✅ Phase 3 — predict + train + val (cosine angular loss, rotated-IoU mAP) |
-| **Auto-resolve `model=` and `data=` from cwd / cache / Ultralytics** | ✅ Phase 3.2 |
-| **Auto finetune-LR (`lr0=0.001` when `model=*.pt` supplied)** | ✅ Phase 3.2 |
-| **LR-warmup formula fixed for tiny datasets**            | ✅ Phase 3.2 |
-| **Trainer saves `.pt` in load_state_dict-compatible format** | ✅ Phase 3.2 |
-| **All v8 scales (n / s / m / l / x) verified end-to-end** | ✅ Phase 3.3 |
-| **Scale auto-detected from filename (`yolo8m.pt` → scale=m)** | ✅ Phase 3.3 |
-| **Save-dir auto-increments (`runs/train` → `train2` → `train3`)** | ✅ Phase 3.4 |
-| **`best.pt` saved at peak val mAP@0.5:0.95**             | ✅ Phase 3.4 |
-| **Auto-attach val split when `<root>/images/val` exists** | ✅ Phase 3.4 |
-| **`results.csv` per-epoch (Ultralytics-shape header)**   | ✅ Phase 3.5 |
-| **`patience=N` early stopping when val mAP plateaus**    | ✅ Phase 3.5 |
-| **`runs/<run>/args.yaml` reproducibility dump**          | ✅ Phase 3.6 (timestamped, Ultralytics-shape field list — 107 keys) |
-| **`runs/<run>/confusion_matrix.png` rendered at end**    | ✅ Phase 3.6 |
-| **`runs/<run>/{BoxPR,BoxF1,BoxP,BoxR}_curve.png`**       | ✅ Phase 3.7 |
-| **`runs/<run>/labels.jpg` (per-class GT histogram)**     | ✅ Phase 3.7 |
-| **`runs/<run>/results.png` (training-curve plot)**       | ✅ Phase 3.7 |
-| **Multi-GPU DDP infrastructure (NCCL + all-reduce)**     | ✅ Phase 4A — compiles, world_size=1 verified; needs 2-GPU box for full validation |
-| **`scripts/launch_ddp.sh <N>` torchrun-equivalent launcher** | ✅ Phase 4A |
-| **`runs/<run>/train_batch{0,1,2}.jpg` augmentation sanity grids** | ✅ Phase 3.8 |
-| **YOLO5 (anchorless v5u) end-to-end** — predict, **train, val** for all five scales (n/s/m/l/x) | ✅ Phase 5A + 5D |
-| **YOLO3 (yolov3u: Darknet-53 + v8 DFL head, end-to-end)** | ✅ Phase 5B + 0.10/0.14 (predict / val / train / ONNX+TRT) |
-| **YOLO11 — full 5 scales × 5 tasks, parity-clean forward**  | ✅ Phase 6A |
-| **YOLO26 — STAL + ProgLoss train, full 5 scales × 5 tasks** | ✅ Phase 6B |
-| **YOLO12 — A2C2f / AAttn detect + train + val + ONNX/TRT export** (n/s/m/l/x) | ✅ Phase 6C |
-| **YOLO13 — HyperACE / FullPAD detect + train + val + ONNX/TRT export** (n/s/l/x) | ✅ Phase 6D |
-| **CLI dispatch on filename pattern (`yolo3*`, `yolo5*`, `yolo8*`, …)** | ✅ Phase 5C |
-| **Ultralytics-style `data=path/to/data.yaml`** (yaml-only — no directory form) | ✅ Phase 5E |
-| **`data.yaml` parsed via vendored rapidyaml** (`path:` / `train:` / `val:` / `names:`) | ✅ Phase 5E |
-| **Auto-download from `data.yaml`'s `download:` URL** when dataset missing | ✅ Phase 5E |
-| **Model auto-inference from `.pt` state_dict shapes** — version (kernel=6 → v5, kernel=3 → v8), scale (16/32/48/64/80 → n/s/m/l/x), nc (head shape) | ✅ Phase 5E |
-| **`scale=`/`version=`/`nc=` no longer required** — works on renamed `best.pt`/`last.pt` too | ✅ Phase 5E |
+upstream variants not yet mirrored — see CLAUDE.md "Periodic gap-audit
+(recurring TODO #33)".
 
 ## YOLO version roadmap
 
@@ -130,30 +142,11 @@ yolo13        ✅       ✅            ✅       ✅                ✅
 yolo26        ✅       ✅            ✅       ✅                ✅
 ```
 
-Outstanding work, by version (each is its own multi-session task):
-
-- **v3 train** — `Yolo3Impl` needs `forward_train` + `(scale, nc)` ctor
-  reorder; can reuse `V8DetectionLoss` since yolov3u uses v8's
-  anchor-free DFL Detect head. Tracked as #29.
-- **v4/v7 train** — anchor-based v3-style loss class (BCE-obj +
-  BCE-cls + IoU-box, multi-anchor assignment). Tracked as #30.
-- **v6 train** — VFL + SIoU + TAL loss (anchor-free, with the
-  knowledge-distillation `reg_preds_dist` branch as the DFL target).
-  Tracked as #31.
-- **v10 train** — dual-head consistent assignment (one2many +
-  one2one). Needs arch rework to keep `one2many` in `Yolo10Impl`
-  (currently dropped at conversion via `convert_yolov10_pt`). Tracked
-  as #32.
-- **v3/v4/v6/v7/v9/v10 ONNX + TRT export** — anchor-decode emitter
-  for v4/v7; dual-branch decode (or just `reg_preds`) for v6; v3u/v9
-  reuse the existing v8 `emit_detect_v8` once the trainer's
-  `forward_train` plumbs through; v10 needs the NMS-free postprocess
-  (per-class topk on the one2one head). Tracked as #19.
-- **v6 high-res P6 variants** (`yolov6{n,s,m,l}6.pt`) and **MBLA
-  variants** (`yolov6x_mbla.pt`, etc.) — separate tasks #23 / #24.
-- **v10 s/m/b/l/x predict** — different channel widths and
-  per-layer dispatch (which layers are SCDown vs Conv vs C2fCIB vs
-  C2f differs per scale). Tracked as #21.
+Outstanding work — see **[TODO.md](TODO.md) §2A** for the full filed
+roadmap (#46..#63). The earlier per-version "v3 train / v4 train /
+…" gaps that lived here in pre-0.22 releases have all closed (every
+detect-pipeline cell of the matrix above is ✅); what remains is the
+new feature/refactor work captured in TODO.md.
 
 | dependency | version            |
 |-----------|--------------------|
@@ -341,28 +334,24 @@ output matches libtorch detections within 30 px box-center tolerance and
 
 ## What's deliberately deferred
 
-- **v3/v4/v6/v7/v10 train + v3..v10 ONNX/TRT export** — see the per-version
-  outstanding-work list above. Each is a multi-session deliverable:
-  v4/v7 share an anchor-based v3-style loss class, v6 needs VFL +
-  SIoU + TAL, v10 needs dual-head consistent assignment + arch rework
-  to keep one2many. v3 / v9 / v10 export piggyback on v8's emitter
-  once their `forward_train` (or one2one-only graph for v10) is
-  exposed.
+The full deferred / pending list lives in **[TODO.md](TODO.md)**. Highlights:
+
 - **v12 / v13 task heads (segment / pose / obb / classify)** — neither
   Ultralytics nor iMoonLab publishes task weights upstream (only detect
-  ships). **Planned future session:** train our own task heads on COCO
-  using the existing templated `Trainer` (already supports v12/v13
-  detect) — v12 = 5 scales × 4 tasks = 20 runs, v13 = 4 scales × 4 tasks
-  = 16 runs. Yolo12 task scaffolding already exists in
-  `src/models/yolo12_tasks.cpp` but is untested against real weights;
-  Yolo13 task module declarations are not yet written. See CLAUDE.md
-  "Task variants for v12 / v13 — not available upstream".
-- **Mosaic / mixup augmentation**: full multi-image augmentation in C++
-  is straightforward but ~600 lines we haven't needed yet.
-- **AMP (mixed-precision training)**: Trainer is FP32-only. Adding
-  `torch::autocast` is a future change.
-- **Multi-threaded data prefetch**: dataset is synchronous. With OpenCV
-  decode + CUDA inference, the IO bottleneck on a 5090 is real but
-  fixable later.
-- **TRT INT8 calibration** and dynamic-shape multi-batch profiles: easy
-  to add on top of `TrtBuildConfig` once a calibration set exists.
+  ships). Scaffolding exists in `src/models/yolo12_tasks.cpp`; we'll
+  train our own task heads on COCO under task #60 (publish-weights
+  initiative).
+- **Mosaic / mixup augmentation** — straightforward but ~600 lines we
+  haven't needed yet (TODO #54D).
+- **AMP (mixed-precision training)** — Trainer is FP32-only.
+- **Multi-threaded data prefetch** — dataset is synchronous (TODO
+  #57A).
+- **TRT INT8 calibration** + dynamic-shape multi-batch profiles —
+  easy on top of `TrtBuildConfig` once a calibration set exists.
+- **Two-GPU DDP validation** — wiring is in place, world_size=1
+  verified; no two-GPU box has run training yet.
+
+For the full filed roadmap (modular architecture, CLI overhaul,
+trackers + SAHI, additional YOLO families, multi-device deployment,
+weights publication, license decision, etc.) see TODO.md §2A
+(tasks #46..#63).
