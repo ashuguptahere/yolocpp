@@ -2,9 +2,9 @@
 //
 // Auto-resolution for CLI arguments that name weights / datasets.
 //
-// Behaviour matches user expectations from Ultralytics:
+// Behaviour matches user expectations from upstream tooling:
 //   model=yolo8n.pt   → looks in cwd, ./data, ~/.cache/yolocpp/weights;
-//                         downloads from ultralytics/assets if recognised
+//                         downloads from the upstream asset host if recognised
 //   data=coco8         → looks in cwd, ./data; downloads coco8 zip
 //   data=coco          → ditto; downloads val2017 images + YOLO labels
 //
@@ -27,14 +27,14 @@ std::string scale_from_filename(const std::string& path);
 
 // Infer YOLO version family from a weights filename. Recognised values:
 //   "v3", "v5", "v6", "v7", "v8", "v9", "v10",
-//   "v11" (Ultralytics official, ships as `yolo11*.pt` — no 'v'),
+//   "v11" (upstream official, ships as `yolo11*.pt` — no 'v'),
 //   "v12" (Tian et al., unofficial — `yolo12*.pt`),
 //   "v13" (Lei et al., unofficial — `yolo13*.pt`),
-//   "v26" (Ultralytics official, ships as `yolo26*.pt` — no 'v'),
+//   "v26" (upstream official, ships as `yolo26*.pt` — no 'v'),
 //   "rtdetr".
-// Returns "v8" as a permissive default — most Ultralytics-style anchor-free
-// weights load through the v8 path since their Detect head shares the same
-// DFL layout.
+// Returns "v8" as a permissive default — most anchor-free weights in
+// the wild load through the v8 path since their Detect head shares the
+// same DFL layout.
 std::string version_from_filename(const std::string& path);
 
 }  // namespace yolocpp::cli

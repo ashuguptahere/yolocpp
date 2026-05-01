@@ -1,6 +1,6 @@
 // yolocpp CLI — supports two argument styles, dispatched automatically:
 //
-// 1. Ultralytics-style key=value args (canonical):
+// 1. kv-style key=value args (canonical, drop-in for upstream tooling):
 //      yolocpp task=detect mode=train  model=yolo8n.pt data=coco/ epochs=100
 //      yolocpp task=detect mode=val    model=yolo8n.pt data=coco/
 //      yolocpp task=detect mode=predict model=yolo8n.pt source=bus.jpg
@@ -415,7 +415,7 @@ int cmd_benchmark(const std::string& weights, const std::string& source,
   return 0;
 }
 
-// ── New-style (Ultralytics) parser dispatcher ────────────────────────────
+// ── New-style (kv) parser dispatcher ─────────────────────────────────────
 
 constexpr const char* kSupportedTasks[] = {"detect", "classify", "segment", "pose", "obb"};
 constexpr const char* kSupportedModes[] = {"train", "val", "predict", "export", "benchmark", "info"};
@@ -710,7 +710,7 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
 
   std::string task = a.get_str("task", "detect");
   std::string mode = a.get_str("mode", "");
-  // "model" is the Ultralytics name; we also accept "weights".
+  // "model" is the canonical kv-style name; we also accept "weights".
   std::string weights = a.get_str("model", a.get_str("weights", ""));
 
   // Default mode if absent: predict if model+source given; info otherwise.
@@ -752,7 +752,7 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
   std::string input_name = a.get_str("input_name", "images");
   std::string format     = a.get_str("format", "");
 
-  // Auto-resolve weights (search cwd / data / cache, download Ultralytics
+  // Auto-resolve weights (search cwd / data / cache, download upstream
   // assets if recognised) and datasets (cwd / data; setup coco/coco8 if
   // recognised).
   if (!weights.empty()) weights = yolocpp::cli::resolve_weights(weights);
@@ -787,7 +787,7 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
   if (!weights.empty()) {
     // For v4/v6/v7 the filename hint is authoritative — those models have
     // their own state-dict layouts that infer_model_info (which probes for
-    // Ultralytics-shaped keys) will mis-classify as v8.
+    // upstream-shaped keys) will mis-classify as v8.
     auto v_hint_pre = yolocpp::cli::version_from_filename(weights);
     bool legacy_pre = (v_hint_pre == "v3" || v_hint_pre == "v4" ||
                        v_hint_pre == "v6" || v_hint_pre == "v7" ||
@@ -824,7 +824,7 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
                 << "/" << scale_s << " nc=" << nc
                 << " from " << weights << "\n";
     } catch (const std::exception& e) {
-      // v4 has a single architecture (no scales) and no Ultralytics-style
+      // v4 has a single architecture (no scales) and no upstream-style
       // marker keys, so infer_model_info will throw — silence that case.
       auto v_hint = yolocpp::cli::version_from_filename(weights);
       if (v_hint != "v3" && v_hint != "v4" && v_hint != "v6"
@@ -837,7 +837,7 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
   }
 
   // Auto finetune-LR: if user supplies pretrained weights AND didn't set
-  // lr0 explicitly, drop lr0 to 0.001 (Ultralytics finetune default).
+  // lr0 explicitly, drop lr0 to 0.001 (upstream finetune default).
   // Without this, lr0=0.01 destroys pretrained features in <100 steps.
   bool lr_explicit = a.has("lr0");
   if (!lr_explicit && !weights.empty() && mode == "train") {
@@ -1557,14 +1557,14 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // Print Ultralytics-style help if user asks.
+  // Print top-level help if user asks.
   if (argc <= 1 ||
       (argc == 2 && (std::string(argv[1]) == "--help" ||
                      std::string(argv[1]) == "-h"))) {
     std::cout <<
       "yolocpp — pure C++ computer vision suite\n"
       "\n"
-      "Usage (Ultralytics-style):\n"
+      "Usage (kv-style):\n"
       "  yolocpp task=detect mode=train  model=yolo8n.pt data=DATA epochs=100\n"
       "  yolocpp task=detect mode=val    model=yolo8n.pt data=DATA\n"
       "  yolocpp task=detect mode=predict model=yolo8n.pt source=IMG\n"

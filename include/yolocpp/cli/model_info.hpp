@@ -21,7 +21,7 @@ struct ModelInfo {
 };
 
 // Infer everything we can from `pt_path`. Throws if the file isn't a
-// readable Ultralytics checkpoint *and* the filename/sibling-args.yaml
+// readable upstream checkpoint *and* the filename/sibling-args.yaml
 // fallbacks also yield nothing.
 ModelInfo infer_model_info(const std::string& pt_path);
 

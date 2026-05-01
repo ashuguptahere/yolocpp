@@ -54,34 +54,38 @@ bool run_unzip(const fs::path& zip, const fs::path& out_dir,
   return std::system(cmd.str().c_str()) == 0;
 }
 
-// Where Ultralytics publishes most of their assets:
-//   https://github.com/ultralytics/assets/releases/download/v8.3.0/<basename>
-// And dataset zips:
-//   https://github.com/ultralytics/assets/releases/download/v0.0.0/<name>.zip
+// Upstream asset host for legacy YOLO releases (the only allow-listed
+// mention of the upstream vendor in the codebase — see CLAUDE.md
+// "remove every trace of upstream branding" / TODO #49). These are
+// real network endpoints we can't rename; everything else in the
+// codebase uses neutral terminology ("upstream", "the source `.pt`
+// format").
+//   weights : https://github.com/ultralytics/assets/releases/download/v8.3.0/<basename>
+//   datasets: https://github.com/ultralytics/assets/releases/download/v0.0.0/<name>.zip
 const std::string kAssetBase = "https://github.com/ultralytics/assets/releases/download/v8.3.0";
 
-// Ultralytics publishes weights at `yolov<N>...pt` upstream (e.g. yolov5n.pt,
-// yolov8n.pt) and the new official lines `yolo11<x>.pt` / `yolo26<x>.pt`
-// without the 'v'. We accept BOTH the upstream name and our canonical
+// Upstream weights for v3/v5/v8/v9/v10 ship as `yolov<N>...pt` (note
+// the 'v'); v11+ ship as `yolo<N>...pt` (no 'v') — already in our
+// canonical form. We accept BOTH the upstream name and our canonical
 // `yolo<N>` form. When the local file is missing we map back to the
 // upstream URL via `upstream_basename()` below.
-bool looks_like_ultralytics_weight(const std::string& base) {
+bool looks_like_upstream_weight(const std::string& base) {
   static const std::regex re(
       R"(^(yolo[0-9]+[nsmlxce]?u?(-cls|-seg|-pose|-obb)?|yolo3(-tiny|-spp)?u?|rtdetr-[lx])\.pt$)");
   return std::regex_match(base, re);
 }
 
-// Translate a canonical local name (yolo5n.pt, yolo8n-seg.pt, yolo11n.pt) to
-// the upstream Ultralytics filename. v3/v5/v8/v9/v10 are published as
-// `yolov<N>...pt`; v11/v26 are published without the 'v' (they're already
-// canonical). Returns the input unchanged if no transform is needed.
+// Translate a canonical local name (yolo5n.pt, yolo8n-seg.pt, yolo11n.pt)
+// to the upstream filename. v3/v5/v8/v9/v10 are published as
+// `yolov<N>...pt`; v11/v26 ship without the 'v' (already canonical).
+// Returns the input unchanged if no transform is needed.
 std::string upstream_basename(const std::string& base) {
   static const std::regex re(R"(^yolo([0-9]+)(.*)$)");
   std::smatch m;
   if (!std::regex_match(base, m, re)) return base;
   std::string num  = m[1].str();
   std::string rest = m[2].str();
-  // Ultralytics upstream uses "yolov<N>" for v3..v10 and "yolo<N>" for v11+.
+  // Upstream uses "yolov<N>" for v3..v10 and "yolo<N>" for v11+.
   int n = std::stoi(num);
   if (n >= 11) return base;        // already canonical upstream
   return "yolov" + num + rest;     // re-insert the 'v'
@@ -215,7 +219,7 @@ std::string resolve_weights(const std::string& spec) {
     break;
   }
 
-  // 2d) Special-case Ultralytics YOLOv9 scales — convert upstream `.pt`
+  // 2d) Special-case YOLOv9 scales — convert the upstream `.pt`
   // to ours. Supports yolo9{t,s,m,c,e}.pt.
   for (const std::string letter : {"t", "s", "m", "c", "e"}) {
     std::string ours    = "yolo9"  + letter + ".pt";
@@ -256,7 +260,7 @@ std::string resolve_weights(const std::string& spec) {
     break;
   }
 
-  // 2e) Special-case yolo10*.pt — convert from Ultralytics' yolov10{n,s,m,b,l,x}.pt
+  // 2e) Special-case yolo10*.pt — convert from upstream yolov10{n,s,m,b,l,x}.pt
   // (one2many head dropped, RepVGGDW fusion, fp16→fp32). All 6 scales wired.
   // Letter detection: filename suffix before `.pt` (e.g. yolo10s.pt → "s").
   // The base "yolo10.pt" (no letter) is treated as the n scale for backwards
@@ -311,7 +315,7 @@ std::string resolve_weights(const std::string& spec) {
     }
   }
 
-  // 2f) yolo3.pt — convert from Ultralytics' yolov3u.pt (anchor-free
+  // 2f) yolo3.pt — convert from upstream yolov3u.pt (anchor-free
   // v3 with v8-style head). No fusion needed — fp16→fp32 cast only.
   if (base == "yolo3.pt" || base == "yolov3u.pt" || base == "yolov3.pt") {
     fs::path target = home_cache() / "weights" / "yolo3.pt";
@@ -369,11 +373,11 @@ std::string resolve_weights(const std::string& spec) {
     if (fs::exists(c) && fs::is_regular_file(c)) return c.string();
   }
 
-  // 3) If recognized Ultralytics name, download.
+  // 3) If recognised upstream name, download.
   //    The local cache is keyed by our canonical `yolo<N>` name, but
   //    upstream still publishes v3..v10 as `yolov<N>...pt`, so we fetch
   //    from the v-prefixed URL and save under the canonical name.
-  if (looks_like_ultralytics_weight(base)) {
+  if (looks_like_upstream_weight(base)) {
     auto target = home_cache() / "weights" / base;
     std::string upstream = upstream_basename(base);
     // v26 lives in the v8.4.0 asset release; everything else in v8.3.0.
@@ -395,7 +399,7 @@ std::string resolve_weights(const std::string& spec) {
 
 // Ensure `dst` looks like a YOLO dataset (has `images/` or `train`/`val`).
 // If empty/missing and `download_url` is set, fetch + unzip into `dst`'s
-// parent (Ultralytics zips conventionally have a single top-level dir
+// parent (upstream zips conventionally have a single top-level dir
 // matching the dataset name). Returns true if the layout is in place.
 namespace {
 bool ensure_layout(const fs::path& dst, const std::string& download_url) {
@@ -424,7 +428,7 @@ bool ensure_layout(const fs::path& dst, const std::string& download_url) {
 }
 }  // namespace
 
-// `data=` accepts ONLY a path to a YAML file (Ultralytics data.yaml form).
+// `data=` accepts ONLY a path to a YAML file (upstream `data.yaml` form).
 // Directories and bare names are rejected by design — the YAML is the
 // single source of truth for `path`, `train`, `val`, `names`, `download`.
 std::string resolve_dataset(const std::string& spec) {
@@ -516,10 +520,10 @@ std::string version_from_filename(const std::string& path) {
 
   // Order matters: longer prefixes first (yolo10/11/12/13/26 must be
   // matched before yolo1/yolo2 to avoid collapsing to a shorter version).
-  if (base.rfind("yolo26", 0) == 0) return "v26";  // Ultralytics official
+  if (base.rfind("yolo26", 0) == 0) return "v26";  // upstream official
   if (base.rfind("yolo13", 0) == 0) return "v13";  // Lei et al. (unofficial)
   if (base.rfind("yolo12", 0) == 0) return "v12";  // Tian et al. (unofficial)
-  if (base.rfind("yolo11", 0) == 0) return "v11";  // Ultralytics official
+  if (base.rfind("yolo11", 0) == 0) return "v11";  // upstream official
   if (base.rfind("yolo10", 0) == 0) return "v10";
   if (base.rfind("yolo9",  0) == 0) return "v9";
   if (base.rfind("yolo8",  0) == 0) return "v8";

@@ -1,6 +1,6 @@
 #pragma once
 //
-// Ultralytics-compatible dataset YAML parser.
+// Dataset YAML parser — accepts the upstream `data.yaml` schema.
 //
 //   path:  ../datasets/coco8       # dataset root (relative to YAML or abs)
 //   train: ./images/train          # relative to `path`
@@ -23,11 +23,11 @@ struct DataYaml {
   std::string val_dir;                  // absolute path or empty
   std::string test_dir;                 // absolute path or empty
   std::vector<std::string> names;       // class names, index-ordered
-  std::string download_url;             // optional `download:` URL (Ultralytics)
+  std::string download_url;             // optional `download:` URL (upstream schema)
   std::string yaml_path;                // absolute path to the YAML itself
 };
 
-// Parse a YAML file written in the Ultralytics dataset format. Throws
+// Parse a YAML file written in the upstream dataset format. Throws
 // std::runtime_error on missing file / malformed YAML / inconsistent keys.
 DataYaml parse_data_yaml(const std::string& yaml_path);
 

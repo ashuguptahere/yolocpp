@@ -1,8 +1,9 @@
 #pragma once
 //
-// Ultralytics-style key=value argument parser.
+// kv-style (`key=value`) argument parser — drop-in compatible with the
+// invocation form familiar from upstream tooling.
 //
-// Accepts Ultralytics-compatible invocations such as
+// Accepts invocations such as
 //
 //   yolocpp task=detect mode=train model=yolo8n.pt data=coco.yaml \
 //           epochs=100 imgsz=640 batch=16 device=cuda:0
