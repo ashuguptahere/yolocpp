@@ -8,7 +8,7 @@
 //
 // This header carries the architecture AND the Darknet `.weights` binary
 // loader. v4 ships from AlexeyAB's release as a flat float32 blob in
-// yolov4.cfg layer order (no key names) — totally unlike Ultralytics'
+// yolov4.cfg layer order (no key names) — totally unlike the upstream
 // nested PyTorch `.pt` state-dicts. To make the binary stream match our
 // PyTorch parameters position-for-position, every conv-bearing module is
 // REGISTERED in cfg-execution order (so DFS over registered children

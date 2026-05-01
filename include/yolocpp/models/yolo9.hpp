@@ -9,7 +9,7 @@
 // Head     : v8-style Detect (anchor-free, DFL, reg_max=16). PGI's
 //            auxiliary branch is training-only and dropped at deploy.
 //
-// We ship Ultralytics' yolov9c.yaml. Keys match upstream's flat ModuleList
+// We ship the upstream yolov9c.yaml. Keys match its flat ModuleList
 // `model.<i>.<sub>` exactly. Each `RepConv` is stored at deploy as a
 // single 3×3 Conv2d with bias + SiLU; `serialization::convert_yolov9_pt`
 // fuses the train-form (conv1 3×3 + conv2 1×1, optional identity-BN)

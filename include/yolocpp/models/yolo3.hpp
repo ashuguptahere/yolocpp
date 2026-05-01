@@ -1,12 +1,12 @@
 #pragma once
 //
 // YOLO3 — Redmon & Farhadi, "YOLOv3: An Incremental Improvement" (2018).
-// We ship Ultralytics' anchor-free `yolov3u.pt` form: Darknet-53 backbone
+// We ship the anchor-free `yolov3u.pt` form: Darknet-53 backbone
 // + v8-style anchor-free DFL Detect head. Predict piggybacks on the
 // existing v8 pipeline.
 //
 // Architecture is a flat yaml-walker (ModuleList "model") matching
-// Ultralytics' yolov3.yaml indices 0..28. Reuses v8's `Conv`,
+// the upstream yolov3.yaml indices 0..28. Reuses v8's `Conv`,
 // `Bottleneck`, and `DetectImpl(legacy=true)` directly, so upstream key
 // names map 1:1.
 //

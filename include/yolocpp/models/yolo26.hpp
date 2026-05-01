@@ -1,6 +1,6 @@
 #pragma once
 //
-// YOLO26 — Ultralytics official (preview / early-access, 2025). Ships as
+// YOLO26 — upstream official (preview / early-access, 2025). Ships as
 // `yolo26<scale>.pt` (no 'v', matching the YOLO11 convention).
 //
 // Stated changes vs. YOLO11:
@@ -84,7 +84,7 @@ TORCH_MODULE(C2PSAf);
 //                              boxes decoded to xyxy in input pixels,
 //                              cls is sigmoided.
 //
-// Head structure (matches Ultralytics' shipped yolo26<x>.pt):
+// Head structure (matches the shipped yolo26<x>.pt):
 //   cv2 (regression, 4 ch out — regular Conv, not depthwise):
 //       Conv 3×3 → Conv 3×3 → Conv2d 1×1 (c → 4)
 //   cv3 (classification, nc ch out — depthwise-separable, v11-style):

@@ -2,8 +2,8 @@
 //
 // YOLO8 detection model in libtorch.
 //
-// Architecture matches Ultralytics yolo8.yaml exactly so that the
-// Ultralytics .pt state_dict maps onto our parameters in iteration order.
+// Architecture matches the upstream yolo8.yaml exactly so that the
+// upstream `.pt` state_dict maps onto our parameters in iteration order.
 //
 // Variants are scaled by depth and width multipliers:
 //   n: depth=0.33, width=0.25, max_channels=1024
@@ -36,7 +36,7 @@ constexpr Yolo8Scale kYolo8x{1.00, 1.25, 512};
 
 // Thread-local BN epsilon override for ConvImpl / DWConvImpl.
 //
-// Ultralytics' yaml-built models use BN eps=1e-3 for detect/segment/pose/
+// Upstream yaml-built models use BN eps=1e-3 for detect/segment/pose/
 // obb, but plain PyTorch default 1e-5 for the *cls models. Switching this
 // global before constructing a Yolo*Classify (and restoring afterward)
 // lets all cls submodules pick up the right eps without threading a new
@@ -160,7 +160,7 @@ TORCH_MODULE(DWConv);
 // DWConvBlock = (DWConv 3×3) → (Conv 1×1). Registered children are named
 // "0" and "1" so when this is pushed into another Sequential at index i, the
 // resulting state_dict path becomes <prefix>.<i>.{0,1}.{conv,bn}.<...> —
-// matching Ultralytics' v11 Detect cv3 nesting exactly.
+// matching the upstream v11 Detect cv3 nesting exactly.
 //
 // libtorch's nn::Sequential cannot directly hold another nn::Sequential
 // (its forward is templated and that breaks AnyModule). This helper has a
@@ -175,7 +175,7 @@ TORCH_MODULE(DWConvBlock);
 
 // ─── Whole model ───────────────────────────────────────────────────────────
 //
-// Order of registered child modules MATCHES Ultralytics yolo8.yaml indices.
+// Order of registered child modules MATCHES the upstream yolo8.yaml indices.
 // This is the contract that lets the .pt state_dict map cleanly:
 //   children:
 //     model.0  Conv
@@ -201,7 +201,7 @@ struct Yolo8DetectImpl : torch::nn::Module {
   std::vector<torch::Tensor> forward_train(torch::Tensor x);
   torch::Tensor              forward_eval(torch::Tensor x);
 
-  // Returns flat parameter+buffer name list in Ultralytics state_dict order.
+  // Returns flat parameter+buffer name list in upstream state_dict order.
   // Used by the .pt loader for positional mapping.
   std::vector<std::string>          state_keys() const;
   std::vector<torch::Tensor*>       state_tensors();

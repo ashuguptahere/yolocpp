@@ -2,7 +2,7 @@
 //
 // YOLO12 task heads — Segment, Pose, OBB, Classify.
 //
-// Yolo12 detect ships from Ultralytics for all 5 scales; the four task
+// Yolo12 detect ships upstream for all 5 scales; the four task
 // heads are not in the upstream assets release as of v8.4.0, but the
 // architecture is straightforward to fill in by reusing the v8/v11 task
 // modules (Segment / Pose / OBB / Classify all wrap a Detect inside +

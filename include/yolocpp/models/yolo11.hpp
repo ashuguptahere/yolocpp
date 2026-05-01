@@ -1,6 +1,6 @@
 #pragma once
 //
-// YOLO11 — Ultralytics official (Sept 2024). Filename convention: `yolo11<n/s/m/l/x>.pt`
+// YOLO11 — upstream official (Sept 2024). Filename convention: `yolo11<n/s/m/l/x>.pt`
 // (no 'v').
 //
 // What's new vs. YOLO8:
@@ -23,7 +23,7 @@
 //   l: depth=1.00, width=1.00, max_channels=512
 //   x: depth=1.00, width=1.50, max_channels=512
 //
-// State-dict layout matches Ultralytics exactly so that yolo11<N>.pt loads
+// State-dict layout matches upstream exactly so that yolo11<N>.pt loads
 // without remapping. The 24-module list:
 //   0-9   backbone: Conv, Conv, C3k2, Conv, C3k2, Conv, C3k2, Conv, C3k2, SPPF
 //   10    C2PSA
@@ -92,7 +92,7 @@ struct C3k2Impl : torch::nn::Module {
 TORCH_MODULE(C3k2);
 
 // ─── PSA Attention (qkv conv + depthwise positional encoding + proj conv) ─
-// Notes (matching Ultralytics ultralytics/nn/modules/block.py::Attention):
+// Notes (matching the upstream `nn/modules/block.py::Attention`):
 //   num_heads = c // 64 (set by C2PSA at construction), key_dim = head_dim*0.5,
 //   qkv: Conv(dim, dim + 2*nh*key_dim, 1, act=False),
 //   pe : Conv(dim, dim, 3, g=dim, act=False)  // depthwise pos-encoding,

@@ -1,7 +1,7 @@
 #pragma once
 //
 // YOLO12 — Tian et al., "YOLO12: Attention-Centric Real-Time Object
-// Detectors" (Feb 2025), shipped through Ultralytics' assets.
+// Detectors" (Feb 2025), shipped through the upstream asset host.
 //
 // Architectural summary vs. v11:
 //   - **No SPPF, no C2PSA.** v11's deep-stage feature mixing is replaced

@@ -1,6 +1,6 @@
 #pragma once
 //
-// YOLO5 (anchor-free Ultralytics "v5u" variant — yolo5nu.pt et al.)
+// YOLO5 (anchor-free upstream "v5u" variant — yolo5nu.pt et al.)
 //
 // Architecture differs from YOLO8 in two places:
 //   1. Layer 0: 6×6 stride-2 conv (v5 stem) instead of v8's 3×3.
@@ -51,7 +51,7 @@ TORCH_MODULE(C3);
 
 // ─── Yolo5Detect (top-level model) ─────────────────────────────────────
 //
-// Layer order, from yolo5.yaml (Ultralytics v5u):
+// Layer order, from yolo5.yaml (upstream v5u form):
 //   0  Conv 3→64, k=6, s=2, p=2   (P1/2)
 //   1  Conv → P2/4
 //   2  C3

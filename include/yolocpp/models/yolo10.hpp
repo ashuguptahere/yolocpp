@@ -10,7 +10,7 @@
 //            essentially redundant. Our pipeline still calls our
 //            standard NMS at default IoU=0.45 for safety.
 //
-// Yolo10Impl is a yaml-walker matching Ultralytics' yolov10*.yaml indices
+// Yolo10Impl is a yaml-walker matching the upstream yolov10*.yaml indices
 // 0..23. All 6 scales (n / s / m / b / l / x) are wired via a per-scale
 // spec table. Backbone/head topology is identical; per-position layer
 // kind (`C2f` vs `C2fCIB`) varies — captured in `v10_yaml_for(scale)`.

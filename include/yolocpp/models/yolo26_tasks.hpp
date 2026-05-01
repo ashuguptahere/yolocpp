@@ -44,7 +44,7 @@ TORCH_MODULE(Segment26);
 
 // ─── Pose26 head (Detect26 + cv4 keypoint regression) ─────────────────────
 //
-// Ultralytics' v26 Pose head adds an uncertainty (sigma) branch alongside
+// Upstream v26 Pose head adds an uncertainty (sigma) branch alongside
 // the standard keypoints: cv4 emits `nk + nk_sigma` channels per anchor,
 // where `nk_sigma = num_kpts * 2` (one σx, σy per keypoint). The sigma
 // branch is a training-only signal — for inference we emit it through the
@@ -54,7 +54,7 @@ struct Pose26Impl : torch::nn::Module {
   Detect26 detect{nullptr};
   torch::nn::ModuleList cv4{nullptr};
   int nk = 51;
-  int nk_sigma = 34;       // 17 kpts × 2 (matches Ultralytics' shipped v26)
+  int nk_sigma = 34;       // 17 kpts × 2 (matches upstream's shipped v26)
   int nl, nc;
   std::vector<int> ch;
   std::vector<double> stride;
