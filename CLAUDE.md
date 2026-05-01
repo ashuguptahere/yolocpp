@@ -391,8 +391,11 @@ That's it — `cmd_export`, `cmd_predict_task`, `cmd_val`, `cmd_train`,
 and `engine::run_benchmark` all pick the adapter up automatically; no
 edits to `cli/main.cpp` or `engine/benchmark.cpp` per added version.
 As of writing #46A/B/C/D/E/F/F2 have landed (export + predict + val +
-train + benchmark migrated; 12-version registry seeded; walkthrough);
-#46F3 (dispatch_kv consolidation) is the remaining cleanup.
+train + benchmark migrated; 12-version registry seeded; walkthrough).
+#46F3 (dispatch_kv consolidation) is the remaining cleanup. #46H
+(concept-based base) is recorded as won't-fix — std::function-erased
+hooks read more cleanly and don't force every version to implement
+every hook; see TODO.md #46H for the full evaluation.
 
 ## Architecture commitments
 
