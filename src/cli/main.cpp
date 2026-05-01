@@ -224,6 +224,15 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   if (names.empty()) names = yolocpp::inference::coco_names();
   int nc = (int)names.size();
 
+  // Auto-resolve scale from the init weights filename when not passed
+  // (mirrors cmd_predict / cmd_val / cmd_export). Without this, the
+  // registry-driven dispatch errors out on `scale_letter == ""` for
+  // any version that requires a scale (v5/v6/v7/v9/v10/v11/v12/v13/v26).
+  if (scale_s.empty() && !init_weights.empty()) {
+    auto fs_scale = yolocpp::cli::scale_from_filename(init_weights);
+    if (!fs_scale.empty()) scale_s = fs_scale;
+  }
+
   yolocpp::datasets::YoloDataset train_ds(root, "train", imgsz, names);
 
   yolocpp::engine::TrainConfig cfg;
@@ -251,34 +260,27 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   std::string v_hint =
       init_weights.empty() ? "" : yolocpp::cli::version_from_filename(init_weights);
 
-  auto load_init = [&](auto& model) {
-    if (init_weights.empty()) return;
+  // Registry-driven dispatch: each non-v8 adapter wires
+  // `run_train_detect` with its concrete holder type + matching
+  // TrainerT<Holder>. v8 falls through to the explicit
+  // `engine::Trainer = TrainerT<Yolo8Detect>` path below.
+  yolocpp::registry::register_all_versions();
+  if (const auto* adapter =
+          yolocpp::registry::Registry::instance().find(v_hint);
+      adapter && adapter->run_train_detect) {
+    adapter->run_train_detect(init_weights, scale_s, nc,
+                               std::move(train_ds), cfg);
+    return 0;
+  }
+
+  auto scale = parse_scale(scale_s);
+  yolocpp::models::Yolo8Detect model(scale, nc);
+  if (!init_weights.empty()) {
     auto sd = yolocpp::serialization::load_state_dict(init_weights);
     int copied = model->load_from_state_dict(sd.entries);
     std::cout << "[train] loaded " << copied << " weights from "
               << init_weights << "\n";
-  };
-
-  if (v_hint == "v12") {
-    yolocpp::models::Yolo12Detect model(
-        yolocpp::models::yolo12_scale_from_letter(scale_s), nc);
-    load_init(model);
-    yolocpp::engine::TrainerV12 trainer(model, train_ds, cfg);
-    trainer.run();
-    return 0;
   }
-  if (v_hint == "v13") {
-    yolocpp::models::Yolo13Detect model(
-        yolocpp::models::yolo13_scale_from_letter(scale_s), nc);
-    load_init(model);
-    yolocpp::engine::TrainerV13 trainer(model, train_ds, cfg);
-    trainer.run();
-    return 0;
-  }
-  // Default v8 path.
-  auto scale = parse_scale(scale_s);
-  yolocpp::models::Yolo8Detect model(scale, nc);
-  load_init(model);
   yolocpp::engine::Trainer trainer(model, train_ds, cfg);
   trainer.run();
   return 0;

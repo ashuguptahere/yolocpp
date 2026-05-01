@@ -36,6 +36,7 @@
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
 #include "yolocpp/datasets/yolo_dataset.hpp"
+#include "yolocpp/engine/trainer.hpp"
 #include "yolocpp/engine/validator.hpp"
 #include "yolocpp/inference/nms.hpp"
 #include "yolocpp/inference/predictor.hpp"
@@ -137,6 +138,24 @@ VersionAdapter::ValResult run_val_with(Holder& m,
   return VersionAdapter::ValResult{r.map_50, r.map_50_95};
 }
 
+// Shared detect-train driver: optionally load init weights, construct
+// the matching `TrainerT<Holder>`, run. Every version's
+// `run_train_detect` lambda calls this after building its holder.
+template <typename Holder>
+void run_train_with(Holder& m,
+                    const std::string& init_weights,
+                    datasets::YoloDataset train_ds,
+                    const engine::TrainConfig& cfg) {
+  if (!init_weights.empty()) {
+    auto sd = serialization::load_state_dict(init_weights);
+    int copied = m->load_from_state_dict(sd.entries);
+    std::cout << "[train] loaded " << copied << " weights from "
+              << init_weights << "\n";
+  }
+  engine::TrainerT<Holder> trainer(m, std::move(train_ds), cfg);
+  trainer.run();
+}
+
 // Default imgsz lookups shared by multiple versions.
 int detect_imgsz_default(const std::string& /*scale*/,
                          const std::string& task) {
@@ -175,6 +194,12 @@ VersionAdapter make_v3() {
                  const torch::Device& device) {
     models::Yolo3 m(models::kYolo3, nc);
     return run_val_with(m, weights, ds, device);
+  };
+  a.run_train_detect = [](const std::string& init, const std::string&,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo3 m(models::kYolo3, nc);
+    run_train_with(m, init, std::move(ds), cfg);
   };
   return a;
 }
@@ -217,6 +242,12 @@ VersionAdapter make_v4() {
     models::Yolo4 m(nc);
     return run_val_with(m, weights, ds, device);
   };
+  a.run_train_detect = [](const std::string& init, const std::string&,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo4 m(nc);
+    run_train_with(m, init, std::move(ds), cfg);
+  };
   return a;
 }
 
@@ -254,6 +285,12 @@ VersionAdapter make_v5() {
                  const torch::Device& device) {
     models::Yolo5Detect m(models::yolo5_scale_from_letter(scale), nc);
     return run_val_with(m, weights, ds, device);
+  };
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo5Detect m(models::yolo5_scale_from_letter(scale), nc);
+    run_train_with(m, init, std::move(ds), cfg);
   };
   return a;
 }
@@ -301,6 +338,13 @@ VersionAdapter make_v6() {
     models::Yolo6 m(nc, r.scale, /*reg_max=*/16, /*p6=*/r.p6);
     return run_val_with(m, weights, ds, device);
   };
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    auto r = resolve_v6(scale);
+    models::Yolo6 m(nc, r.scale, /*reg_max=*/16, /*p6=*/r.p6);
+    run_train_with(m, init, std::move(ds), cfg);
+  };
   return a;
 }
 
@@ -341,6 +385,12 @@ VersionAdapter make_v7() {
                  const torch::Device& device) {
     models::Yolo7 m(models::yolo7_scale_from_letter(scale), nc);
     return run_val_with(m, weights, ds, device);
+  };
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo7 m(models::yolo7_scale_from_letter(scale), nc);
+    run_train_with(m, init, std::move(ds), cfg);
   };
   return a;
 }
@@ -424,6 +474,12 @@ VersionAdapter make_v9() {
     models::Yolo9 m(models::yolo9_scale_from_letter(scale), nc);
     return run_val_with(m, weights, ds, device);
   };
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo9 m(models::yolo9_scale_from_letter(scale), nc);
+    run_train_with(m, init, std::move(ds), cfg);
+  };
   return a;
 }
 
@@ -460,6 +516,12 @@ VersionAdapter make_v10() {
                  const torch::Device& device) {
     models::Yolo10 m(models::yolo10_scale_from_letter(scale), nc);
     return run_val_with(m, weights, ds, device);
+  };
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo10 m(models::yolo10_scale_from_letter(scale), nc);
+    run_train_with(m, init, std::move(ds), cfg);
   };
   return a;
 }
@@ -521,6 +583,12 @@ VersionAdapter make_v11() {
     models::Yolo11Detect m(models::yolo11_scale_from_letter(scale), nc);
     return run_val_with(m, weights, ds, device);
   };
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo11Detect m(models::yolo11_scale_from_letter(scale), nc);
+    run_train_with(m, init, std::move(ds), cfg);
+  };
   return a;
 }
 
@@ -560,6 +628,12 @@ VersionAdapter make_v12() {
     models::Yolo12Detect m(models::yolo12_scale_from_letter(scale), nc);
     return run_val_with(m, weights, ds, device);
   };
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo12Detect m(models::yolo12_scale_from_letter(scale), nc);
+    run_train_with(m, init, std::move(ds), cfg);
+  };
   return a;
 }
 
@@ -597,6 +671,12 @@ VersionAdapter make_v13() {
                  const torch::Device& device) {
     models::Yolo13Detect m(models::yolo13_scale_from_letter(scale), nc);
     return run_val_with(m, weights, ds, device);
+  };
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo13Detect m(models::yolo13_scale_from_letter(scale), nc);
+    run_train_with(m, init, std::move(ds), cfg);
   };
   return a;
 }
@@ -657,6 +737,12 @@ VersionAdapter make_v26() {
                  const torch::Device& device) {
     models::Yolo26Detect m(models::yolo26_scale_from_letter(scale), nc);
     return run_val_with(m, weights, ds, device);
+  };
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                          int nc, datasets::YoloDataset ds,
+                          const engine::TrainConfig& cfg) {
+    models::Yolo26Detect m(models::yolo26_scale_from_letter(scale), nc);
+    run_train_with(m, init, std::move(ds), cfg);
   };
   return a;
 }

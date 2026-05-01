@@ -45,6 +45,9 @@ struct NMSConfig;
 namespace yolocpp::datasets {
 class YoloDataset;
 }
+namespace yolocpp::engine {
+struct TrainConfig;
+}
 
 namespace yolocpp::registry {
 
@@ -115,6 +118,19 @@ struct VersionAdapter {
                           yolocpp::datasets::YoloDataset& ds,
                           const torch::Device& device)>
       run_val;
+
+  // Detect-task training: construct the right holder, optionally
+  // `load_state_dict` from `init_weights` (empty ⇒ from-scratch), then
+  // run `engine::TrainerT<Holder>(model, ds, cfg).run()`. The unified
+  // template handles every version with the matching `LossTraits<M>`
+  // specialisation. v8 leaves this empty and falls back to the
+  // `engine::Trainer = TrainerT<Yolo8Detect>` path.
+  std::function<void(const std::string& init_weights,
+                     const std::string& scale,
+                     int nc,
+                     yolocpp::datasets::YoloDataset train_ds,
+                     const yolocpp::engine::TrainConfig& cfg)>
+      run_train_detect;
 };
 
 class Registry {
