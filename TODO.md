@@ -205,8 +205,8 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #46C | Document "how to add a new YOLO version" walkthrough in CLAUDE.md (link to #46A/#46B) | — | within #46 | — |
 | #47  | Centralise version stamp — single source of truth | high | 0.5 session | low risk; mostly text edits |
 | #47A | ✅ closed — top-level `./VERSION` file is now the single source of truth; CMake `file(READ)`s it into `project(... VERSION ...)`, exports through `config.hpp` (`YOLOCPP_VERSION_STRING`), surfaces via `yolocpp --version` / `-v` / `-V` and `yolocpp info`. To bump the version, edit `./VERSION` only. | — | landed | — |
-| #47B | Strip stale "Current version: X.Y.Z" prose from SESSION_DIGEST and any other doc that hardcodes a release number (README + CLAUDE already done in this batch); keep only CHANGELOG headings + historical "landed in X.Y.Z" lines. | — | within #47 | — |
-| #47C | CI / pre-commit lint that flags stray `0\.\d+\.\d+` literals outside the allow-list (`CMakeLists.txt`, `VERSION`, `CHANGELOG.md`, historical TODO entries). | — | within #47 | — |
+| #47B | ✅ closed — SESSION_DIGEST.md re-headered as "frozen snapshot of prior session" (its `0.X.Y` mentions are now explicitly historical). README and CLAUDE already cleaned in earlier commit. One stale parenthetical in TODO.md re-worded to "landed in 0.22.0". | — | landed | — |
+| #47C | ✅ closed — `scripts/check_version_literals.sh` added. Walks tracked files, flags any `0.X.Y` outside the allow-list (`./VERSION`, `CHANGELOG.md`, `SESSION_DIGEST.md`, historical "landed in X.Y.Z" / "added X.Y.Z" qualifiers, third-party / vendor strings). Currently passes; wire into pre-commit / CI when those land. | — | landed | — |
 | #48  | Centralise + minimise third-party libs | high | 1 session | currently scripted via `install_third_party.sh`; needs an explicit pinned list and audit |
 | #48A | Audit `third_party/` and produce a single pinned `deps.lock`-style manifest | — | within #48 | — |
 | #48B | Drop redundant deps; document why each remaining one is in the closed set | — | within #48 | — |
@@ -341,7 +341,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 
 ### yolo10
 - ✅ All 6 scales (n/s/m/b/l/x) wired end-to-end (predict + val + train + ONNX/TRT).
-- ✅ Paper §3.1 dual-head consistent assignment training (0.22.0).
+- ✅ Paper §3.1 dual-head consistent assignment training (landed in 0.22.0).
 
 ### yolo12 / yolo13
 - ⏳ Task heads (segment / pose / obb / classify) — neither Ultralytics nor iMoonLab publishes task weights upstream. **Planned future session:** train our own on COCO using the existing templated `Trainer`. v12 = 5 scales × 4 tasks = 20 runs; v13 = 4 scales × 4 tasks = 16 runs. v12 task scaffolding exists in `src/models/yolo12_tasks.cpp`; v13 task module declarations not yet written.

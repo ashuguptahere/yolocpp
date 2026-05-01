@@ -1,8 +1,13 @@
 # Session digest — 2026-05-01
 
-End-state: **yolocpp 0.24.0**, full matrix sweep `PASS=152 FAIL=0 SKIP=0`,
-ctest 31/31 green, every numbered task #12..#45 closed (except recurring
-#33 — gap audit).
+Frozen snapshot of the prior session's end-state (the version stamp in
+this header is **historical** — refers to that session's release). For
+the current release version see `./VERSION` / `yolocpp --version`.
+
+Session end-state: full matrix sweep `PASS=152 FAIL=0 SKIP=0`, ctest
+31/31 green, every numbered task #12..#45 closed (except recurring #33
+— gap audit). The "ver" column in the table below is the
+landed-at-version of each line item (also historical / immutable).
 
 ## Versions shipped this session
 
