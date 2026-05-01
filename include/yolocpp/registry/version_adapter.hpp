@@ -34,11 +34,16 @@
 #include <unordered_map>
 #include <vector>
 
+#include <torch/torch.h>
+
 namespace yolocpp::serialization {
 struct OnnxExportConfig;
 }
 namespace yolocpp::inference {
 struct NMSConfig;
+}
+namespace yolocpp::datasets {
+class YoloDataset;
 }
 
 namespace yolocpp::registry {
@@ -98,6 +103,18 @@ struct VersionAdapter {
                             int nc,
                             const yolocpp::inference::NMSConfig& nm)>
       predict_to_file;
+
+  // Validation: construct the right holder, load_state_dict, run
+  // `engine::validate<M>(model, ds, device)`. Returns (mAP@0.5,
+  // mAP@0.5:0.95). Versions that fall back to the unified
+  // `inference::Predictor` (currently v8) leave this empty.
+  struct ValResult { double map_50; double map_50_95; };
+  std::function<ValResult(const std::string& weights,
+                          const std::string& scale,
+                          int nc,
+                          yolocpp::datasets::YoloDataset& ds,
+                          const torch::Device& device)>
+      run_val;
 };
 
 class Registry {

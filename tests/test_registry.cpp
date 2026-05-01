@@ -41,14 +41,18 @@ int main() {
     EXPECT(static_cast<bool>(a->export_onnx),
            id + " has no export_onnx hook");
 
-    // predict_to_file is required for every version EXCEPT v8 (which
-    // falls back to the unified inference::Predictor).
+    // predict_to_file + run_val are required for every version EXCEPT
+    // v8 (which falls back to the unified inference::Predictor).
     if (id != "v8") {
       EXPECT(static_cast<bool>(a->predict_to_file),
              id + " has no predict_to_file hook");
+      EXPECT(static_cast<bool>(a->run_val),
+             id + " has no run_val hook");
     } else {
       EXPECT(!a->predict_to_file,
              "v8 must NOT register a predict_to_file (uses unified Predictor)");
+      EXPECT(!a->run_val,
+             "v8 must NOT register a run_val (uses unified Predictor)");
     }
 
     std::set<std::string> tasks(a->supported_tasks.begin(),

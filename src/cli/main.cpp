@@ -188,29 +188,27 @@ int cmd_val(const std::string& weights, const std::string& root,
     if (!fs_scale.empty()) scale_s = fs_scale;
   }
   auto v_hint = yolocpp::cli::version_from_filename(weights);
-  auto run = [&](auto& model) {
-    auto sd = yolocpp::serialization::load_state_dict(weights);
-    model->load_from_state_dict(sd.entries);
-    model->to(torch_dev); model->eval();
-    auto res = yolocpp::engine::validate(model, ds, torch_dev);
-    std::cout << "mAP@0.5      = " << res.map_50    << "\n" << "mAP@0.5:0.95 = " << res.map_50_95 << "\n";
-    write_val_results(weights, root, imgsz, res.map_50, res.map_50_95);
-  };
-  if (v_hint == "v12") {
-    yolocpp::models::Yolo12Detect m(
-        yolocpp::models::yolo12_scale_from_letter(scale_s), nc);
-    run(m); return 0;
+
+  // Registry-driven dispatch: each non-v8 adapter wires `run_val`
+  // with its concrete holder type. v8 leaves it empty and falls back
+  // to the unified `inference::Predictor` (which already holds
+  // Yolo8Detect — the unified path's only supported architecture).
+  yolocpp::registry::register_all_versions();
+  if (const auto* adapter =
+          yolocpp::registry::Registry::instance().find(v_hint);
+      adapter && adapter->run_val) {
+    auto r = adapter->run_val(weights, scale_s, nc, ds, torch_dev);
+    std::cout << "mAP@0.5      = " << r.map_50    << "\n"
+              << "mAP@0.5:0.95 = " << r.map_50_95 << "\n";
+    write_val_results(weights, root, imgsz, r.map_50, r.map_50_95);
+    return 0;
   }
-  if (v_hint == "v13") {
-    yolocpp::models::Yolo13Detect m(
-        yolocpp::models::yolo13_scale_from_letter(scale_s), nc);
-    run(m); return 0;
-  }
-  // Fallback: v8/v5 path via Predictor (existing behaviour).
+
   yolocpp::inference::Predictor p(weights, imgsz, device, nc,
                                    parse_scale(scale_s));
   auto res = yolocpp::engine::validate(p.model(), ds, p.device());
-  std::cout << "mAP@0.5      = " << res.map_50    << "\n" << "mAP@0.5:0.95 = " << res.map_50_95 << "\n";
+  std::cout << "mAP@0.5      = " << res.map_50    << "\n"
+            << "mAP@0.5:0.95 = " << res.map_50_95 << "\n";
   write_val_results(weights, root, imgsz, res.map_50, res.map_50_95);
   return 0;
 }

@@ -35,6 +35,8 @@
 #include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
+#include "yolocpp/datasets/yolo_dataset.hpp"
+#include "yolocpp/engine/validator.hpp"
 #include "yolocpp/inference/nms.hpp"
 #include "yolocpp/inference/predictor.hpp"
 #include "yolocpp/inference/task_predictors.hpp"
@@ -118,6 +120,23 @@ models::Yolo8Scale v8_scale_from_letter(const std::string& s) {
   return models::kYolo8n;
 }
 
+// Shared val driver: loads weights, moves to device, runs the
+// templated `engine::validate<M>` and unwraps the mAPResult into the
+// adapter's ValResult. Every version's `run_val` lambda calls this
+// after constructing its concrete holder.
+template <typename Holder>
+VersionAdapter::ValResult run_val_with(Holder& m,
+                                       const std::string& weights,
+                                       datasets::YoloDataset& ds,
+                                       const torch::Device& device) {
+  auto sd = serialization::load_state_dict(weights);
+  m->load_from_state_dict(sd.entries);
+  m->to(device);
+  m->eval();
+  auto r = engine::validate(m, ds, device);
+  return VersionAdapter::ValResult{r.map_50, r.map_50_95};
+}
+
 // Default imgsz lookups shared by multiple versions.
 int detect_imgsz_default(const std::string& /*scale*/,
                          const std::string& task) {
@@ -150,6 +169,12 @@ VersionAdapter make_v3() {
                          int nc, const inference::NMSConfig& nm) {
     return inference::predict_v3_to_file(weights, src, out, imgsz, device,
                                          nc, nm).size();
+  };
+  a.run_val = [](const std::string& weights, const std::string&,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo3 m(models::kYolo3, nc);
+    return run_val_with(m, weights, ds, device);
   };
   return a;
 }
@@ -186,6 +211,12 @@ VersionAdapter make_v4() {
     return inference::predict_v4_to_file(weights, src, out, v4_imgsz,
                                          device, nc, nm).size();
   };
+  a.run_val = [](const std::string& weights, const std::string&,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo4 m(nc);
+    return run_val_with(m, weights, ds, device);
+  };
   return a;
 }
 
@@ -217,6 +248,12 @@ VersionAdapter make_v5() {
     return inference::predict_v5_to_file(weights, src, out, imgsz, device,
                                          nc, models::yolo5_scale_from_letter(scale),
                                          nm).size();
+  };
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo5Detect m(models::yolo5_scale_from_letter(scale), nc);
+    return run_val_with(m, weights, ds, device);
   };
   return a;
 }
@@ -257,6 +294,13 @@ VersionAdapter make_v6() {
     return inference::predict_v6_to_file(weights, src, out, v6_imgsz, device,
                                          nc, r.scale, r.p6, nm).size();
   };
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    auto r = resolve_v6(scale);
+    models::Yolo6 m(nc, r.scale, /*reg_max=*/16, /*p6=*/r.p6);
+    return run_val_with(m, weights, ds, device);
+  };
   return a;
 }
 
@@ -291,6 +335,12 @@ VersionAdapter make_v7() {
     return inference::predict_v7_to_file(weights, src, out, imgsz, device,
                                          nc, models::yolo7_scale_from_letter(scale),
                                          nm).size();
+  };
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo7 m(models::yolo7_scale_from_letter(scale), nc);
+    return run_val_with(m, weights, ds, device);
   };
   return a;
 }
@@ -368,6 +418,12 @@ VersionAdapter make_v9() {
                                          nc, models::yolo9_scale_from_letter(scale),
                                          nm).size();
   };
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo9 m(models::yolo9_scale_from_letter(scale), nc);
+    return run_val_with(m, weights, ds, device);
+  };
   return a;
 }
 
@@ -398,6 +454,12 @@ VersionAdapter make_v10() {
     return inference::predict_v10_to_file(weights, src, out, imgsz, device,
                                           nc, models::yolo10_scale_from_letter(scale),
                                           nm).size();
+  };
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo10 m(models::yolo10_scale_from_letter(scale), nc);
+    return run_val_with(m, weights, ds, device);
   };
   return a;
 }
@@ -453,6 +515,12 @@ VersionAdapter make_v11() {
                                           nc, models::yolo11_scale_from_letter(scale),
                                           nm).size();
   };
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo11Detect m(models::yolo11_scale_from_letter(scale), nc);
+    return run_val_with(m, weights, ds, device);
+  };
   return a;
 }
 
@@ -486,6 +554,12 @@ VersionAdapter make_v12() {
                                           nc, models::yolo12_scale_from_letter(scale),
                                           nm).size();
   };
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo12Detect m(models::yolo12_scale_from_letter(scale), nc);
+    return run_val_with(m, weights, ds, device);
+  };
   return a;
 }
 
@@ -517,6 +591,12 @@ VersionAdapter make_v13() {
     return inference::predict_v13_to_file(weights, src, out, imgsz, device,
                                           nc, models::yolo13_scale_from_letter(scale),
                                           nm).size();
+  };
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo13Detect m(models::yolo13_scale_from_letter(scale), nc);
+    return run_val_with(m, weights, ds, device);
   };
   return a;
 }
@@ -571,6 +651,12 @@ VersionAdapter make_v26() {
     return inference::predict_v26_to_file(weights, src, out, imgsz, device,
                                           nc, models::yolo26_scale_from_letter(scale),
                                           nm).size();
+  };
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                 int nc, datasets::YoloDataset& ds,
+                 const torch::Device& device) {
+    models::Yolo26Detect m(models::yolo26_scale_from_letter(scale), nc);
+    return run_val_with(m, weights, ds, device);
   };
   return a;
 }
