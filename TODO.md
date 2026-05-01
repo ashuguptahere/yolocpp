@@ -2,9 +2,11 @@
 
 **Single source of truth for everything done, in flight, and pending across the entire codebase** — not just the active session. Compiled by walking session task #1..#33, README.md "deferred" sections, CLAUDE.md "Remaining gaps", per-file `TODO`/`FIXME`/`deferred` comments, SKIP-gated tests, and the git history (Phases 0..6 pre-dating session task numbering).
 
-This file is maintained as part of recurring task **#33** (gap-audit) — see CLAUDE.md `## Periodic gap-audit (recurring TODO)` for the audit checklist and trigger points. Last refreshed at version `0.24.0` (2026-05-01).
+This file is maintained as part of recurring task **#33** (gap-audit) — see CLAUDE.md `## Periodic gap-audit (recurring TODO)` for the audit checklist and trigger points.
 
-> **Snapshot at 0.24.0**: every numbered task #12..#45 closed except recurring #33. Full matrix sweep (`scripts/full_matrix_sweep.sh`) reports `PASS=152 FAIL=0 SKIP=0`. ctest 31/31 green. See `SESSION_DIGEST.md` for the per-version landing map across this session's work.
+The current release version is **always read from `CMakeLists.txt` `project(... VERSION ...)`** (which flows into `build/generated/yolocpp/config.hpp` as `YOLOCPP_VERSION_STRING` and out via `yolocpp info`). Do not duplicate it into prose snapshots in this file — the only places a literal version belongs are `CMakeLists.txt`, `CHANGELOG.md` headings, and historical "landed in X.Y.Z" lines.
+
+> **Latest snapshot**: every numbered task #12..#45 closed except recurring #33. Full matrix sweep (`scripts/full_matrix_sweep.sh`) reports `PASS=152 FAIL=0 SKIP=0`. ctest 31/31 green. New roadmap tasks **#46..#63** below were filed 2026-05-01 from the user's next-batch requirement list. See `SESSION_DIGEST.md` for the per-version landing map across the previous session.
 
 Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started · 🔁 recurring
 
@@ -184,6 +186,136 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 | #31 | v6 train (VFL + SIoU + TAL) | medium | 2 sessions | new loss class — anchor-free with KD `reg_preds_dist` as DFL target |
 | #32 | v10 train (single-head one2one) | ✅ closed | n/a | landed in 0.13.0 — V8DetectionLoss on one2one head |
 | #33 | Codebase gap audit | recurring | 30–60 min per pass | none — runs at task-batch / phase boundaries, or on demand |
+
+---
+
+## 2A. Roadmap — next-batch requirements (filed 2026-05-01, tasks #46..#63)
+
+Filed in priority order. Tasks are grouped so dependent items land together. Sub-tasks (`#NA`/`#NB`/...) belong to the same parent and are resolved as a unit. Optional / nice-to-have items live at the end of the list and don't block anything.
+
+**Ordering convention going forward:** when a new gap turns up while resolving task `#N`, file it as `#NA`, `#NB`, … (related + dependent → same parent). When it's unrelated, append it to the end of the queue with the next free number. Never delete tasks from this file unless the user asks; superseded items get crossed out (`✅ closed` / `❌ won't fix`) but stay on the page.
+
+### Group I — foundation (must land before downstream groups)
+
+| # | scope | priority | session-cost estimate | blockers |
+|---|-------|----------|------------------------|----------|
+| #46  | Modular architecture for adding new YOLO versions in one pass | high | 2 sessions | per-model header + ctor + loss + yaml currently touch six different files; needs a registry |
+| #46A | Extract a per-version factory (`name → builder/forward/loss/yaml`) | — | within #46 | — |
+| #46B | One abstract base / concept that every `Yolo<N>Impl` satisfies (forward_train + forward_eval + state_dict shape) | — | within #46 | — |
+| #46C | Document "how to add a new YOLO version" walkthrough in CLAUDE.md (link to #46A/#46B) | — | within #46 | — |
+| #47  | Centralise version stamp — single source of truth | high | 0.5 session | low risk; mostly text edits |
+| #47A | `CMakeLists.txt VERSION` is the only authoritative literal; flow through `config.hpp` → CLI `info` | — | within #47 | — |
+| #47B | Strip stale "Current version: X.Y.Z" prose from README/TODO/SESSION_DIGEST/CLAUDE; keep only CHANGELOG headings + historical "landed in X.Y.Z" lines | — | within #47 | — |
+| #47C | CI / pre-commit lint that flags stray `0\.\d+\.\d+` literals outside the allow-list | — | within #47 | — |
+| #48  | Centralise + minimise third-party libs | high | 1 session | currently scripted via `install_third_party.sh`; needs an explicit pinned list and audit |
+| #48A | Audit `third_party/` and produce a single pinned `deps.lock`-style manifest | — | within #48 | — |
+| #48B | Drop redundant deps; document why each remaining one is in the closed set | — | within #48 | — |
+| #49  | Remove every trace of "ultralytics" from identifiers, comments, CLI strings | high | 1 session | leave a single allow-listed mention in `cli/resolve.cpp::upstream_basename` for legacy URL mapping |
+| #49A | Rename internal identifiers / namespaces / comments | — | within #49 | — |
+| #49B | URL resolver: keep one allow-listed spot only | — | within #49 | — |
+| #49C | Strip from public docs / CLI help text | — | within #49 | — |
+| #50  | Pick + apply a permissive license (Apache 2.0 / MIT / GPL — final call by maintainer) | high | 0.25 session | required before public release of weights (#60) |
+| #50A | Add top-level `LICENSE` file | — | within #50 | — |
+| #50B | Per-file SPDX header where practical; `NOTICE` for vendored deps | — | within #50 | — |
+| #50C | Document license + commercial-use stance in README | — | within #50 | — |
+
+### Group II — CLI / API surface (depends on Group I)
+
+| # | scope | priority | session-cost estimate | blockers |
+|---|-------|----------|------------------------|----------|
+| #51  | CLI overhaul — clean, intuitive, both long + short forms | high | 2 sessions | depends on #49 (legacy strings) |
+| #51A | Long + short flags everywhere (`--model/-m`, `--data/-d`, `--source/-s`, `--device/-D`, `--epochs/-e`, `--imgsz/-i`, `--batch/-b`, …) | — | within #51 | — |
+| #51B | Legacy kv-style CLI removal (or formal deprecation with one-release grace window) | — | within #51 | — |
+| #51C | `--source` accepts: image file, video file, directory, glob, RTSP/HTTP(S) URL, webcam index, stdin pipe | — | within #51 | — |
+| #51D | `--seed` plumbed through trainer + dataset shuffle + augmentation RNG (deterministic train) | — | within #51 | — |
+| #51E | `yolocpp download <dataset>` subcommand (coco, coco8, voc, imagenet, dota, etc.) | — | within #51 | — |
+| #51F | `yolocpp export format=onnx\|trt precision=fp32\|fp16\|int8\|int4\|nvfp4` unified CLI shape | — | within #51 | — |
+| #51G | `--export-onnx-after-train` (auto-export best.pt at end of train) | — | within #51 | — |
+| #51H | `--device` accepting `cpu`, `cuda:N`, `cuda:0,1,…`, `mps`, `auto` | — | within #51 | — |
+| #51I | Clean CLI UX pass — consistent help text, examples, error messages, exit codes | — | within #51 | — |
+| #52  | First-class C++ API surface (Ultralytics-Python-like ergonomics, no Python) | high | 2 sessions | depends on #46 (modular base) |
+| #52A | `yolocpp::YOLO("model.pt").train(...)/.val()/.predict()/.export_(...)` chainable, header-only entry point | — | within #52 | — |
+| #52B | Public header + usage-example snippets in `examples/` | — | within #52 | — |
+| #52C | (deferred) optional pybind11 wrapper for users who want Python bindings on top — strictly **off** the runtime path | — | within #52 | — |
+
+### Group III — verification (run continuously once Group I + II land)
+
+| # | scope | priority | session-cost estimate | blockers |
+|---|-------|----------|------------------------|----------|
+| #53  | End-to-end detection parity across `.pt` / `.onnx` / `.engine` for every (version × scale × task) | high | 1 session | partly covered by full_matrix_sweep already; needs the cross-backend equality assert |
+| #53A | New ctest: load all three backends, run on bus.jpg, assert `len(dets)` matches and bbox IoU ≥ 0.95 | — | within #53 | — |
+| #53B | Extend `scripts/full_matrix_sweep.sh` to walk all three backends per cell | — | within #53 | — |
+| #54  | Dataset / training infra v2 | medium | 2 sessions | partly depends on #46 (factory pattern leaks into dataset format dispatch) |
+| #54A | New single-file dataset format with a `split` column (train/val/test); shuffled deterministically by `--seed` | — | within #54 | — |
+| #54B | Multi-format loader: YOLO (existing) + COCO JSON + the new format (autodetect) | — | within #54 | — |
+| #54C | mAP small/medium/large breakdown (COCO eval style), exposed in `val` output and `results.csv` | — | within #54 | — |
+| #54D | Mosaic + mixup augmentation (existing `datasets/yolo_dataset.hpp:20` TODO) | — | within #54 | — |
+
+### Group IV — feature add-ons (independent of one another; can land in any order after Group I)
+
+| # | scope | priority | session-cost estimate | blockers |
+|---|-------|----------|------------------------|----------|
+| #55  | Trackers + SAHI integration | medium | 3 sessions | needs a clean abstract `Tracker` base; design first |
+| #55A | Centralised abstract `Tracker` base (`update(det) → tracks`) | — | within #55 | — |
+| #55B | SORT | — | within #55 | — |
+| #55C | DeepSORT (re-id embedder) | — | within #55 | — |
+| #55D | OC-SORT | — | within #55 | — |
+| #55E | ByteTrack | — | within #55 | — |
+| #55F | BoT-SORT | — | within #55 | — |
+| #55G | NvSORT | — | within #55 | — |
+| #55H | SAHI (slicing-aided hyper inference) wrapper around `Predictor` for small-object recall | — | within #55 | — |
+| #56  | Add legacy / additional YOLO families (depends on #46 modularisation) | medium | many sessions | each variant is its own self-contained sub-task |
+| #56A | yolo1 — implement architecture from paper; convert pretrained weights to our `.pt`-equivalent (no Darknet) | — | within #56 | — |
+| #56B | yolo2 / yolo9000 — same approach (no Darknet) | — | within #56 | — |
+| #56C | YOLOX | — | within #56 | — |
+| #56D | YOLO-NAS | — | within #56 | — |
+| #56E | YOLO-WORLD (open-vocab) | — | within #56 | — |
+| #56F | YOLOE | — | within #56 | — |
+| #56G | YOLOR | — | within #56 | — |
+| #56H | PP-YOLO / PP-YOLOE | — | within #56 | — |
+| #56I | Scaled-YOLOv4 | — | within #56 | — |
+| #56J | DAMO-YOLO | — | within #56 | — |
+| #56K | Centralised model zoo umbrella for non-YOLO open-source CV models that share the same license profile (commercial-friendly) | — | within #56 | — |
+
+### Group V — performance + hardware
+
+| # | scope | priority | session-cost estimate | blockers |
+|---|-------|----------|------------------------|----------|
+| #57  | Parallelisation pass over hot paths | medium | 1 session | profile-driven; not a blanket change |
+| #57A | Multi-threaded data prefetch (existing TODO in §5) | — | within #57 | — |
+| #57B | Audit + parallelise per-image preprocess / NMS / export emitters where safe | — | within #57 | — |
+| #57C | CUDA streams overlap for multi-batch predict | — | within #57 | — |
+| #58  | Multi-device + cross-platform deployment (depends on #51H for CLI) | medium | 3 sessions | per-platform sub-tasks |
+| #58A | CPU / multi-CUDA / MPS device dispatch in core | — | within #58 | — |
+| #58B | iPhone / iOS deployment (CoreML export) | — | within #58 | — |
+| #58C | Android deployment (NNAPI / TFLite via ONNX) | — | within #58 | — |
+| #58D | Small ARM SBC edge devices | — | within #58 | — |
+| #59  | Jetson + DGX Spark TRT export profiles | medium | 1 session | requires the device for actual validation |
+| #59A | Jetson Nano TRT plan | — | within #59 | — |
+| #59B | Jetson Orin TRT plan | — | within #59 | — |
+| #59C | Jetson THOR TRT plan | — | within #59 | — |
+| #59D | DGX Spark TRT plan | — | within #59 | — |
+
+### Group VI — distribution + documentation
+
+| # | scope | priority | session-cost estimate | blockers |
+|---|-------|----------|------------------------|----------|
+| #60  | Retrain every (version × scale × task) on COCO; publish weights to GitHub Releases | medium | many sessions | depends on #50 (license decided) and #54 (dataset infra) |
+| #60A | Train script harness driving the templated trainer across the matrix | — | within #60 | — |
+| #60B | Compute budget plan (GPUs × hours per cell) | — | within #60 | — |
+| #60C | Release artifact upload pipeline | — | within #60 | — |
+| #60D | Mirror the resulting weights table in README + CLI auto-resolver | — | within #60 | — |
+| #61  | Comparison table + graphs ("which model when") | medium | 1 session | depends on #60 numbers |
+| #61A | mAP / params / FLOPs / latency table per (version × scale × task) | — | within #61 | — |
+| #61B | Auto-generated SVG graphs in `docs/` | — | within #61 | — |
+| #61C | Decision-tree style picker ("pick a model for my use case") | — | within #61 | — |
+
+### Group VII — optional / nice-to-have (do not block anything)
+
+| # | scope | priority | session-cost estimate | blockers |
+|---|-------|----------|------------------------|----------|
+| #62 | Optional: Ninja generator support for faster builds | low (optional) | 0.25 session | none; just `cmake -G Ninja` validation + docs |
+| #63 | Optional: cross-platform GUI (Dear ImGui / Qt) for train/val/predict/export | low (optional) | many sessions | not on the critical path |
 
 ---
 
