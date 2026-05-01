@@ -194,23 +194,63 @@ The marketing-published numbers (e.g. yolo11n=0.395) come from
 directly comparable to our square-letterbox path, and on that
 apples-to-apples basis we're parity-clean.
 
+### Task variants for v12 / v13 — not available upstream
+
+Neither Ultralytics nor iMoonLab publishes task weights for v12 or v13.
+Only the detect variants ship:
+
+```
+v12: yolo12{n,s,m,l,x}.pt           (5 detect-only)
+v13: yolo13{n,s,l,x}.pt             (4 detect-only — no `m` scale either)
+```
+
+Confirmed by probing the upstream release URLs (no `-seg`/`-pose`/`-obb`/
+`-cls` artefacts exist).
+
+**Planned (future session): train our own v12/v13 task weights on COCO**
+and wire them through predict/val/train/export the same way v8/v11/v26
+task heads work today. Concretely this means:
+
+1. Add Yolo13Segment / Yolo13Pose / Yolo13OBB / Yolo13Classify modules
+   under `include/yolocpp/models/yolo13_tasks.hpp` + matching `src/`.
+   Yolo12 task heads already exist as scaffolding in
+   `src/models/yolo12_tasks.cpp` but are untested against real weights.
+2. Train each (version × task × scale) combination on COCO using the
+   existing `Trainer` (already templated on model class) — for v12
+   that's 5 scales × 4 tasks = 20 runs; for v13 it's 4 scales × 4 tasks
+   = 16 runs.
+3. Add `predict_v12_to_file` / `predict_v13_to_file` task wrappers in
+   `predictor.cpp` (existing `predict_v{12,13}_to_file` covers detect).
+4. Add ONNX emitters for the task heads (segment proto / pose kpt
+   decode / obb dist2rbox / classify head) — the v8/v11/v26 path
+   already has these; v12/v13 detect uses `emit_detect_v11` so the
+   incremental work is the per-task head only.
+
 ### Per-version capability matrix (detect, current state)
 
 ```
               predict    val        train      ONNX/TRT export
 yolo8         ✅         ✅         ✅         ✅
 yolo11        ✅         ✅         ✅         ✅
-yolo12        ✅         ✅         ✅         ⚠️ gap
-yolo13        ✅         ✅         ✅         ⚠️ gap
+yolo12        ✅         ✅         ✅         ✅
+yolo13        ✅         ✅         ✅         ✅
 yolo26        ✅         ✅         ✅         ✅
 ```
 
-The v12/v13 ONNX/TRT export gap is structural: graph emitters for
-`A2C2f` / `AAttn` (and the v13 `HyperACE` / `FullPAD_Tunnel` /
-`AdaHGConv` set) are not yet written. predict/val/train use libtorch
-directly so all three work fully — only deployment via ONNX/TRT is
-blocked. The cli refuses these export paths with a clear message; it
-does not silently fall through to v8.
+ONNX export numerical parity (cls-channel max|Δ| vs Ultralytics Python
+on `arange(N)/(N-1)` input through onnxruntime CPU):
+
+```
+yolo12 n=1.78e-7  s=1.39e-7  m=1.39e-7  l=1.39e-7  x=1.37e-7
+yolo13 n=1.39e-7  s=1.76e-7  l=1.32e-7  x=1.39e-7
+```
+
+All within fp32 noise. v12 ONNX uses upstream Ultralytics' AAttn
+structure (fused 3C qkv, k=7 pe with conv.bias=True); v13 ONNX uses
+iMoonLab's V13AAttn (separate qk/v convs, k=5 pe). Both opset-17
+compatible — `Gelu` (added in opset 20) is decomposed inline as
+`0.5 * x * (1 + Erf(x / sqrt(2)))`; `ReduceMean` / `ReduceMax` use
+axes-as-attribute (the input form moves to opset 18+).
 
 ### Task coverage matrix (predict/val/export/benchmark)
 

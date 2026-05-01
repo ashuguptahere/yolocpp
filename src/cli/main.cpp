@@ -253,23 +253,8 @@ int cmd_export(const std::string& weights, const std::string& format,
                             ? yolocpp::cli::version_from_filename(weights)
                             : version_hint;
 
-  // v12 / v13 export: ONNX graph emitters not yet written (would mirror
-  // export_yolo11_onnx with new emit_a2c2f / emit_aattn / emit_hyperace).
-  // Bail clearly instead of falling through to v8 and producing a
-  // misleading shape mismatch.
-  if (version == "v12") {
-    std::cerr << "[export] yolo12 ONNX/TRT export not yet implemented "
-                 "— predict path is parity-clean and can be used directly. "
-                 "Need emit_a2c2f / emit_aattn graph emitters.\n";
-    return 2;
-  }
-  if (version == "v13") {
-    std::cerr << "[export] yolo13 ONNX/TRT export not yet implemented "
-                 "— forward path is parity-clean and predict works, but "
-                 "ONNX emitters for HyperACE / FullPAD_Tunnel / "
-                 "AdaHGConv etc. are not written.\n";
-    return 2;
-  }
+  // v12 / v13 detect export: graph emitters live in onnx_export.cpp.
+  // Detect-only (neither Ultralytics v12 nor iMoonLab v13 ship task weights).
 
   auto write_onnx = [&](const std::string& onnx_path) {
     yolocpp::serialization::OnnxExportConfig ocfg;
@@ -286,6 +271,16 @@ int cmd_export(const std::string& weights, const std::string& format,
             yolocpp::models::yolo26_scale_from_letter(scale_s), nc);
         m->load_from_state_dict(sd.entries); m->eval();
         yolocpp::serialization::export_yolo26_onnx(m, onnx_path, ocfg);
+      } else if (version == "v12") {
+        yolocpp::models::Yolo12Detect m(
+            yolocpp::models::yolo12_scale_from_letter(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo12_onnx(m, onnx_path, ocfg);
+      } else if (version == "v13") {
+        yolocpp::models::Yolo13Detect m(
+            yolocpp::models::yolo13_scale_from_letter(scale_s), nc);
+        m->load_from_state_dict(sd.entries); m->eval();
+        yolocpp::serialization::export_yolo13_onnx(m, onnx_path, ocfg);
       } else {
         yolocpp::models::Yolo8Detect m(parse_scale(scale_s), nc);
         m->load_from_state_dict(sd.entries); m->eval();
@@ -369,6 +364,8 @@ int cmd_export(const std::string& weights, const std::string& format,
 
   auto base_name = [&]() -> std::string {
     std::string base = (version == "v11") ? "yolo11"
+                       : (version == "v12") ? "yolo12"
+                       : (version == "v13") ? "yolo13"
                        : (version == "v26") ? "yolo26"
                        : "yolo8";
     if (task != "detect") base += "_" + task;

@@ -17,6 +17,8 @@
 
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo11_tasks.hpp"
+#include "yolocpp/models/yolo12.hpp"
+#include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
 #include "yolocpp/models/yolo8.hpp"
@@ -58,6 +60,24 @@ void export_yolo11_onnx(models::Yolo11Detect&  model,
 // with sigmoided class scores. Box decode in the graph uses Softplus(box)
 // directly (no DFL projection).
 void export_yolo26_onnx(models::Yolo26Detect&  model,
+                         const std::string&    path,
+                         const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO12 (Tian et al. — A2C2f / AAttn) model. Same
+// output contract: [N, 4 + nc, A]. Graph emits the per-head interleaved
+// qkv split, area-windowing reshape (when area>1), gamma-gated outer
+// residual at l/x scales, and the legacy=False Detect head.
+void export_yolo12_onnx(models::Yolo12Detect& model,
+                         const std::string&    path,
+                         const OnnxExportConfig& cfg = {});
+
+// Export the given YOLO13 (iMoonLab — HyperACE / FullPAD) model. Same
+// output contract: [N, 4 + nc, A]. Graph emits DSConv (depthwise →
+// pointwise → BN-fused), V13AAttn (separate qk/v convs, k=5 pe applied
+// to v), HyperACE (FuseModule + 2× C3AH with hypergraph attention +
+// inner DSC3k chain), the five FullPAD_Tunnel gated residuals, and
+// Detect (legacy=False).
+void export_yolo13_onnx(models::Yolo13Detect& model,
                          const std::string&    path,
                          const OnnxExportConfig& cfg = {});
 

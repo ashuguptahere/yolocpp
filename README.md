@@ -43,6 +43,10 @@ deployment (Phase 2), OpenCV for image I/O. **No Python in the runtime path.**
 | **`runs/<run>/train_batch{0,1,2}.jpg` augmentation sanity grids** | ✅ Phase 3.8 |
 | **YOLO5 (anchorless v5u) end-to-end** — predict, **train, val** for all five scales (n/s/m/l/x) | ✅ Phase 5A + 5D |
 | **YOLO3 architecture (Darknet-53, 3-scale FPN)**        | ✅ Phase 5B (forward-shape verified; weight loader deferred) |
+| **YOLO11 — full 5 scales × 5 tasks, parity-clean forward**  | ✅ Phase 6A |
+| **YOLO26 — STAL + ProgLoss train, full 5 scales × 5 tasks** | ✅ Phase 6B |
+| **YOLO12 — A2C2f / AAttn detect + train + val + ONNX/TRT export** (n/s/m/l/x) | ✅ Phase 6C |
+| **YOLO13 — HyperACE / FullPAD detect + train + val + ONNX/TRT export** (n/s/l/x) | ✅ Phase 6D |
 | **CLI dispatch on filename pattern (`yolo3*`, `yolo5*`, `yolo8*`, …)** | ✅ Phase 5C |
 | **Ultralytics-style `data=path/to/data.yaml`** (yaml-only — no directory form) | ✅ Phase 5E |
 | **`data.yaml` parsed via vendored rapidyaml** (`path:` / `train:` / `val:` / `names:`) | ✅ Phase 5E |
@@ -70,19 +74,25 @@ set (v1, v2, anything between v13 and v26) are intentionally not supported.
 | **yolo8**  | 2023 | Ultralytics (official)                     | CSP + C2f backbone, anchor-free DFL Detect, TAL assigner | ✅ **full** — train / val / predict / export across 5 scales × 5 tasks (detect / segment / classify / pose / OBB) |
 | **yolo9**  | 2024 | Wang, Yeh & Liao (academic)                | GELAN backbone, PGI (Programmable Gradient Information) auxiliary branch | 🟡 stub — plan: reuse v8 head, swap backbone |
 | **yolo10** | 2024 | Tsinghua MIG (academic, Ultralytics-hosted)| Dual-head consistent assignment → end-to-end NMS-free at inference, rank-guided block design | 🟡 stub — needs dual-head training graph |
-| **yolo11** | 2024 | **Ultralytics (official)**                 | Refined CSP: C3k2 (kernel-tunable C3) + C2PSA (position-sensitive attention); v11 Detect head with depthwise-separable cv3 (DWConv→Conv) | ✅ **end-to-end** — train / val / predict / ONNX + TRT export across all 5 scales (n/s/m/l/x) and 4 task heads (detect/classify/segment/pose/obb). Param counts match Ultralytics exactly (2.62M / 9.46M / 20.1M / 25.4M / 56.97M). **Known calibration quirk on m/l/x:** cv3 outputs are over-saturated independent of input signal (verified by zero-input test); n/s give correct mAP@0.5 ≈ 0.78/0.74 on coco8, m/l/x give 0.03/0.11/0.007. Pinpointing the divergence requires a Python parity harness (see CLAUDE.md). |
-| **yolo12** | 2025 | Tian et al. (unofficial)                   | Attention-centric: A2C2f (Area-Attention C2f) for windowed global attention with v8 latency | 🟡 stub |
-| **yolo13** | 2025 | Lei et al. (unofficial)                    | HyperACE (hypergraph adaptive correlation enhancement), FullPAD pipeline, DSConv variants | 🟡 stub |
-| **yolo26** | 2025 | **Ultralytics (official, preview)**        | DFL-free Detect head, end-to-end NMS-free inference, ProgLoss + STAL assigner — edge/mobile-first | 🟡 stub — needs new head + assigner + loss |
+| **yolo11** | 2024 | **Ultralytics (official)**                 | Refined CSP: C3k2 (kernel-tunable C3) + C2PSA (position-sensitive attention); v11 Detect head with depthwise-separable cv3 (DWConv→Conv) | ✅ **full** — train / val / predict / ONNX + TRT export across 5 scales × 5 tasks. Forward bit-exact vs Ultralytics Python through layer 22 (parity harness verified). Full-COCO val mAP@0.5:0.95 within 0.05% of Ultralytics' own `m.val(rect=False)` on n/s. |
+| **yolo12** | 2025 | Tian et al., Ultralytics-hosted            | Attention-centric: A2C2f (Area-Attention C2f) with windowed global attention, gamma-gated outer residual at l/x | ✅ **detect end-to-end** — train / val / predict / ONNX + TRT export across all 5 scales (n/s/m/l/x). Forward parity-clean (5/5/5/6/5 detections matching Python on bus.jpg). ONNX max\|Δ\| ≤ 1.8e-7 vs Python through onnxruntime. Task heads (segment / pose / obb / classify) ⏳ **planned future session** — Ultralytics ships only detect weights for v12, so we'll train our own task heads on COCO. |
+| **yolo13** | 2025 | Lei et al. (iMoonLab fork)                 | HyperACE (hypergraph adaptive correlation enhancement) + FullPAD distribution + DSConv depthwise-separable variants + V13AAttn (separate qk/v convs, k=5 pe) | ✅ **detect end-to-end** — train / val / predict / ONNX + TRT export across n/s/l/x (iMoonLab does not ship `m`). Forward cls-channel max\|Δ\| ≤ 7.6e-10 vs iMoonLab Python on all 4 scales. ONNX max\|Δ\| ≤ 1.8e-7. Task heads ⏳ **planned future session** — iMoonLab ships only detect weights, so we'll train our own task heads on COCO. |
+| **yolo26** | 2025 | **Ultralytics (official, preview)**        | DFL-free Detect head, end-to-end NMS-free inference, ProgLoss + STAL assigner — edge/mobile-first | ✅ **full** — train / val / predict / ONNX + TRT export across 5 scales × 5 tasks |
 | RT-DETR    | 2023 | Baidu (official)                           | HGNetv2 + AIFI + deformable-attention decoder; transformer-based, NMS-free | 🟡 architecture probed (Phase 4 — transformers) |
 
 Stub status (🟡) means the header / source files exist with the right
 class name and namespace, the build links cleanly, and `mode=predict`
 will produce a clear `not implemented yet` runtime error pointing at the
-header that explains the design plan. Implementation order is roughly:
-**yolo11 → yolo9 → yolo10 → yolo26 → yolo12 → yolo13 → yolo6 → yolo7
-→ yolo4** (Ultralytics-head-compatible families first, since they let us
-reuse the v8 Detect / DFL / loss / trainer wholesale).
+header that explains the design plan.
+
+Pending status (⏳) means the architecture is end-to-end for detect, but
+task variants (segment/pose/obb/classify) are not yet trained because
+neither upstream publishes those weights. Planned to train our own on
+COCO in a future session.
+
+Remaining stub-implementation order: **yolo9 → yolo10 → yolo6 → yolo7
+→ yolo4** (Ultralytics-head-compatible families first, since they reuse
+the v8 Detect / DFL / loss / trainer wholesale).
 
 | dependency | version            |
 |-----------|--------------------|
@@ -253,10 +263,15 @@ output matches libtorch detections within 30 px box-center tolerance and
 
 ## What's deliberately deferred
 
-- **Numerical parity to Ultralytics**: requires a one-time tensor dump
-  from Python — outside the runtime contract. The `.pt` loader and
-  forward path are structurally exact; producing reference dumps to
-  validate every block is a Phase 1.5 task.
+- **v12 / v13 task heads (segment / pose / obb / classify)** — neither
+  Ultralytics nor iMoonLab publishes task weights upstream (only detect
+  ships). **Planned future session:** train our own task heads on COCO
+  using the existing templated `Trainer` (already supports v12/v13
+  detect) — v12 = 5 scales × 4 tasks = 20 runs, v13 = 4 scales × 4 tasks
+  = 16 runs. Yolo12 task scaffolding already exists in
+  `src/models/yolo12_tasks.cpp` but is untested against real weights;
+  Yolo13 task module declarations are not yet written. See CLAUDE.md
+  "Task variants for v12 / v13 — not available upstream".
 - **Mosaic / mixup augmentation**: full multi-image augmentation in C++
   is straightforward but ~600 lines we haven't needed yet.
 - **AMP (mixed-precision training)**: Trainer is FP32-only. Adding
@@ -264,6 +279,5 @@ output matches libtorch detections within 30 px box-center tolerance and
 - **Multi-threaded data prefetch**: dataset is synchronous. With OpenCV
   decode + CUDA inference, the IO bottleneck on a 5090 is real but
   fixable later.
-- **DDP / multi-GPU training**: out of scope.
 - **TRT INT8 calibration** and dynamic-shape multi-batch profiles: easy
   to add on top of `TrtBuildConfig` once a calibration set exists.

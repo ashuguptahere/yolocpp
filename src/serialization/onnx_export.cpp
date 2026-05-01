@@ -2326,6 +2326,705 @@ void write_model_proto(const GraphBuilder& g, const OnnxExportConfig& cfg,
           (std::streamsize)model_pb.bytes().size());
 }
 
+// ─── v12 emitters (A2C2f / AAttn / ABlock) ────────────────────────────
+//
+// AAttn forward (mirror of yolo12.cpp::AAttnImpl::forward):
+//   1) qkv = Conv(x)                                  [B, 3C, H, W]
+//   2) flatten + transpose                            [B, N, 3C]
+//   3) optional reshape for area-windowing            [B*area, N/area, 3C]
+//   4) view → permute(0,2,3,1)                        [Bg, num_heads, 3hd, Ng]
+//   5) slice 3 → q, k, v                              [Bg, nh, hd, Ng] each
+//   6) attn = softmax(qᵀ@k * scale, dim=-1)
+//   7) out = v @ attnᵀ                                [Bg, nh, hd, Ng]
+//   8) permute(0,3,1,2)                               [Bg, Ng, nh, hd]
+//   9) reshape to [B, N, C] then [B, H, W, C] then permute(0,3,1,2)
+//  10) v_p = v.permute(0,3,1,2) → [B, C, H, W] (same path)
+//  11) out = out + pe(v_p);  return proj(out)
+//
+// pe is depthwise k=7 with conv.bias=True (v12 unique). emit_conv_module
+// handles bias=False; we expand it inline for pe.
+//
+// ABlock: x = x + attn(x); x = x + mlp(x). mlp = Sequential(
+//   Conv(dim, mlp_hidden, 1, act=true),
+//   Conv(mlp_hidden, dim, 1, act=false))
+//
+// A2C2f: cv1 → c_inner. Then for each m[i]:
+//   if a2: m[i] = Sequential(ABlock × 2) — call forward
+//   else:  m[i] = C3k(c_inner, c_inner, n=2) — emit_c3k
+// cv2 ← (1+n)*c_inner. Optional gamma residual gate at l/x.
+std::string emit_aattn_v12(GraphBuilder& g, const std::string& in,
+                           int B, int C, int H, int W,
+                           const std::string& prefix,
+                           models::AAttnImpl* a) {
+  int nh = a->num_heads;
+  int hd = a->head_dim;
+  int N  = H * W;
+  int area = a->area;
+  int Bg = (area > 1) ? B * area : B;
+  int Ng = (area > 1) ? N / area : N;
+
+  // 1) qkv conv (act=False; v12 qkv has bias=False).
+  auto qkv = emit_conv_module(g, in, prefix + ".qkv", a->qkv.get());
+  // 2) Reshape [B, 3C, H, W] → [B, 3C, N]
+  auto rshape0 = g.add_init_int64(prefix + ".rshape0",
+                                   {(int64_t)B, (int64_t)(3*C), (int64_t)N});
+  auto y3 = g.node("Reshape", {qkv, rshape0}, {}, prefix + ".y3");
+  // Transpose perm=(0,2,1) → [B, N, 3C]
+  auto y_flat = g.node("Transpose", {y3},
+                        {attr_ints("perm", {0, 2, 1})}, prefix + ".y_flat");
+  // 3) Optional area-window reshape → [Bg, Ng, 3C]
+  std::string after_window = y_flat;
+  if (area > 1) {
+    auto ws = g.add_init_int64(prefix + ".win_shape",
+                                {(int64_t)Bg, (int64_t)Ng, (int64_t)(3*C)});
+    after_window = g.node("Reshape", {y_flat, ws}, {}, prefix + ".windowed");
+  }
+  // 4) View [Bg, Ng, nh, 3hd] → permute (0,2,3,1) → [Bg, nh, 3hd, Ng]
+  auto vshape = g.add_init_int64(prefix + ".v.shape",
+                                  {(int64_t)Bg, (int64_t)Ng, (int64_t)nh,
+                                   (int64_t)(3*hd)});
+  auto y4 = g.node("Reshape", {after_window, vshape}, {}, prefix + ".y4");
+  auto qkv_h = g.node("Transpose", {y4},
+                       {attr_ints("perm", {0, 2, 3, 1})}, prefix + ".qkv_h");
+  // 5) Slice into q, k, v along dim=2 with size hd each.
+  auto axes2 = g.add_init_int64(prefix + ".ax2", {2});
+  auto step1 = g.add_init_int64(prefix + ".st1", {1});
+  auto sq0 = g.add_init_int64(prefix + ".sq0", {0});
+  auto sq1 = g.add_init_int64(prefix + ".sq1", {(int64_t)hd});
+  auto q   = g.node("Slice", {qkv_h, sq0, sq1, axes2, step1}, {}, prefix + ".q");
+  auto sk0 = g.add_init_int64(prefix + ".sk0", {(int64_t)hd});
+  auto sk1 = g.add_init_int64(prefix + ".sk1", {(int64_t)(2*hd)});
+  auto k   = g.node("Slice", {qkv_h, sk0, sk1, axes2, step1}, {}, prefix + ".k");
+  auto sv0 = g.add_init_int64(prefix + ".sv0", {(int64_t)(2*hd)});
+  auto sv1 = g.add_init_int64(prefix + ".sv1", {(int64_t)(3*hd)});
+  auto v   = g.node("Slice", {qkv_h, sv0, sv1, axes2, step1}, {}, prefix + ".v");
+  // 6) attn = softmax((qᵀ @ k) * scale, dim=-1)
+  auto qT  = g.node("Transpose", {q},
+                     {attr_ints("perm", {0, 1, 3, 2})}, prefix + ".qT");
+  auto attn0 = g.node("MatMul", {qT, k}, {}, prefix + ".attn0");
+  std::vector<float> sv = {(float)a->scale};
+  auto scale_init = g.add_init_float(prefix + ".scale", sv, {1});
+  auto attn = g.node("Mul", {attn0, scale_init}, {}, prefix + ".attn.s");
+  attn = g.node("Softmax", {attn}, {attr_int("axis", -1)}, prefix + ".attn.sm");
+  // 7) out = v @ attnᵀ → [Bg, nh, hd, Ng]
+  auto attnT = g.node("Transpose", {attn},
+                       {attr_ints("perm", {0, 1, 3, 2})}, prefix + ".attnT");
+  auto out0 = g.node("MatMul", {v, attnT}, {}, prefix + ".out0");
+  // 8) permute(0,3,1,2) → [Bg, Ng, nh, hd]
+  auto out1 = g.node("Transpose", {out0},
+                      {attr_ints("perm", {0, 3, 1, 2})}, prefix + ".out1");
+  auto v_p1 = g.node("Transpose", {v},
+                      {attr_ints("perm", {0, 3, 1, 2})}, prefix + ".v_p1");
+  // 9) reshape to [B, N, C] (un-windows if area > 1) then to [B, H, W, C]
+  //    then permute to [B, C, H, W].
+  auto bnc_shape = g.add_init_int64(prefix + ".bnc",
+                                     {(int64_t)B, (int64_t)N, (int64_t)C});
+  auto out_bnc = g.node("Reshape", {out1, bnc_shape}, {}, prefix + ".out.bnc");
+  auto v_p_bnc = g.node("Reshape", {v_p1, bnc_shape}, {}, prefix + ".v_p.bnc");
+  auto bhwc_shape = g.add_init_int64(prefix + ".bhwc",
+                                      {(int64_t)B, (int64_t)H, (int64_t)W,
+                                       (int64_t)C});
+  auto out_bhwc = g.node("Reshape", {out_bnc, bhwc_shape}, {}, prefix + ".out.bhwc");
+  auto v_p_bhwc = g.node("Reshape", {v_p_bnc, bhwc_shape}, {}, prefix + ".v_p.bhwc");
+  auto out_sp = g.node("Transpose", {out_bhwc},
+                        {attr_ints("perm", {0, 3, 1, 2})}, prefix + ".out.sp");
+  auto v_p_sp = g.node("Transpose", {v_p_bhwc},
+                        {attr_ints("perm", {0, 3, 1, 2})}, prefix + ".v_p.sp");
+  // 10) pe(v_p_sp). v12's pe has conv.bias=True; emit_conv_module honours
+  //     the conv's stored bias when fusing — but ConvImpl with conv_bias=true
+  //     stores bias on conv, and BN absorbs (Wx + b_conv - rm)*γ/sqrt(rv+ε)+β.
+  //     fuse_conv_bn here doesn't have a b_conv path; v12 pe.conv.bias is
+  //     stored separately. We fold it manually:
+  //         scale = γ / sqrt(rv + ε)
+  //         fused_w = cw * scale.view([-1,1,1,1])
+  //         fused_b = (b_conv - rm) * scale + β
+  auto* pe = a->pe.get();
+  at::Tensor cw  = pe->conv->weight;
+  at::Tensor cb  = pe->conv->bias.defined() ? pe->conv->bias
+                                            : torch::zeros({cw.size(0)});
+  at::Tensor bw  = pe->bn->weight;
+  at::Tensor bb  = pe->bn->bias;
+  at::Tensor brm = pe->bn->running_mean;
+  at::Tensor brv = pe->bn->running_var;
+  double eps     = pe->bn->options.eps();
+  auto bn_scale  = bw / torch::sqrt(brv + eps);
+  auto fused_w   = cw * bn_scale.view({-1, 1, 1, 1});
+  auto fused_b   = (cb - brm) * bn_scale + bb;
+  auto pe_w      = g.add_init(prefix + ".pe.weight", fused_w.to(torch::kFloat32));
+  auto pe_b      = g.add_init(prefix + ".pe.bias",   fused_b.to(torch::kFloat32));
+  int pe_k    = pe->conv->options.kernel_size()->at(0);
+  int pe_pad  = std::get<torch::ExpandingArray<2>>(pe->conv->options.padding())->at(0);
+  int pe_g    = (int)pe->conv->options.groups();
+  auto pe_out = g.node("Conv", {v_p_sp, pe_w, pe_b},
+                        {attr_ints("dilations", {1, 1}),
+                         attr_int("group", pe_g),
+                         attr_ints("kernel_shape", {pe_k, pe_k}),
+                         attr_ints("pads", {pe_pad, pe_pad, pe_pad, pe_pad}),
+                         attr_ints("strides", {1, 1})},
+                        prefix + ".pe.out");
+  auto added = g.node("Add", {out_sp, pe_out}, {}, prefix + ".add");
+  return emit_conv_module(g, added, prefix + ".proj", a->proj.get());
+}
+
+std::string emit_ablock_v12(GraphBuilder& g, const std::string& in,
+                            int B, int C, int H, int W,
+                            const std::string& prefix,
+                            models::ABlockImpl* b) {
+  auto attn_out = emit_aattn_v12(g, in, B, C, H, W, prefix + ".attn",
+                                  b->attn.get());
+  auto y1 = g.node("Add", {in, attn_out}, {}, prefix + ".add1");
+  auto* mlp0 = b->mlp->ptr(0)->as<models::ConvImpl>();
+  auto* mlp1 = b->mlp->ptr(1)->as<models::ConvImpl>();
+  auto m0 = emit_conv_module(g, y1, prefix + ".mlp.0", mlp0);
+  auto m1 = emit_conv_module(g, m0, prefix + ".mlp.1", mlp1);
+  return g.node("Add", {y1, m1}, {}, prefix + ".add2");
+}
+
+std::string emit_a2c2f_v12(GraphBuilder& g, const std::string& in,
+                            int B, int H, int W,
+                            const std::string& prefix,
+                            models::A2C2fImpl* m) {
+  auto y0 = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  std::vector<std::string> outs = {y0};
+  std::string last = y0;
+  for (size_t i = 0; i < m->m->size(); ++i) {
+    auto sub_prefix = prefix + ".m." + std::to_string(i);
+    if (m->a2) {
+      auto* seq = m->m[i]->as<torch::nn::SequentialImpl>();
+      // Sequential of 2 ABlocks.
+      auto* ab0 = seq->ptr(0)->as<models::ABlockImpl>();
+      auto* ab1 = seq->ptr(1)->as<models::ABlockImpl>();
+      last = emit_ablock_v12(g, last, B, m->c_inner, H, W,
+                              sub_prefix + ".0", ab0);
+      last = emit_ablock_v12(g, last, B, m->c_inner, H, W,
+                              sub_prefix + ".1", ab1);
+    } else {
+      auto* c3k = m->m[i]->as<models::C3kImpl>();
+      last = emit_c3k(g, last, sub_prefix, c3k);
+    }
+    outs.push_back(last);
+  }
+  auto cat = g.node("Concat", outs, {attr_int("axis", 1)}, prefix + ".cat");
+  auto y = emit_conv_module(g, cat, prefix + ".cv2", m->cv2.get());
+  // Mirror v12 A2C2f forward: residual fires only when c1 == c2. has_gamma
+  // is only registered when a2 && residual && c1 == c2 (yolo12.cpp ctor),
+  // so it implies the channel match too.
+  int c1 = m->cv1->conv->options.in_channels();
+  int c2 = m->cv2->conv->options.out_channels();
+  if (m->residual && m->has_gamma) {
+    auto gw = g.add_init(prefix + ".gamma", m->gamma.detach());
+    auto gw_r = g.node("Reshape", {gw,
+                       g.add_init_int64(prefix + ".gamma.r",
+                                         {1, (int64_t)m->gamma.size(0), 1, 1})},
+                       {}, prefix + ".gamma.r.out");
+    auto gy = g.node("Mul", {gw_r, y}, {}, prefix + ".gamma.mul");
+    return g.node("Add", {in, gy}, {}, prefix + ".gamma.add");
+  } else if (m->residual && c1 == c2) {
+    return g.node("Add", {in, y}, {}, prefix + ".res.add");
+  }
+  return y;
+}
+
+// ─── v13 emitters (DSConv / DSC3k2 / V13AAttn / HyperACE / FullPAD) ─────
+
+// DSConv: depthwise k×k → pointwise 1×1 → BN → SiLU.
+// State-dict: dw.weight, pw.weight, bn.{weight,bias,running_mean,running_var}.
+// dw and pw both have bias=False; BN absorbs bias as usual.
+std::string emit_dsconv(GraphBuilder& g, const std::string& in,
+                        const std::string& prefix,
+                        models::DSConvImpl* m) {
+  // Depthwise conv.
+  auto* dwc = m->dw.get();
+  auto dw_w = g.add_init(prefix + ".dw.weight", dwc->weight);
+  int dw_k  = dwc->options.kernel_size()->at(0);
+  int dw_s  = dwc->options.stride()->at(0);
+  int dw_p  = std::get<torch::ExpandingArray<2>>(dwc->options.padding())->at(0);
+  int dw_g  = (int)dwc->options.groups();
+  auto dw_out = g.node("Conv", {in, dw_w},
+                        {attr_ints("dilations", {1, 1}),
+                         attr_int("group", dw_g),
+                         attr_ints("kernel_shape", {dw_k, dw_k}),
+                         attr_ints("pads", {dw_p, dw_p, dw_p, dw_p}),
+                         attr_ints("strides", {dw_s, dw_s})},
+                        prefix + ".dw.out");
+  // Pointwise conv with BN-fold and SiLU.
+  auto* pwc = m->pw.get();
+  auto fused = fuse_conv_bn(pwc->weight, m->bn->weight, m->bn->bias,
+                             m->bn->running_mean, m->bn->running_var,
+                             m->bn->options.eps());
+  auto pw_w = g.add_init(prefix + ".pw.weight", fused.weight);
+  auto pw_b = g.add_init(prefix + ".pw.bias",   fused.bias);
+  auto pw_out = g.node("Conv", {dw_out, pw_w, pw_b},
+                        {attr_ints("dilations", {1, 1}),
+                         attr_int("group", 1),
+                         attr_ints("kernel_shape", {1, 1}),
+                         attr_ints("pads", {0, 0, 0, 0}),
+                         attr_ints("strides", {1, 1})},
+                        prefix + ".pw.out");
+  if (!m->act_silu) return pw_out;
+  auto sig = g.node("Sigmoid", {pw_out}, {}, prefix + ".sig");
+  return g.node("Mul", {pw_out, sig}, {}, prefix + ".silu");
+}
+
+std::string emit_dsbottleneck(GraphBuilder& g, const std::string& in,
+                              const std::string& prefix,
+                              models::DSBottleneckImpl* m) {
+  auto y = emit_dsconv(g, in, prefix + ".cv1", m->cv1.get());
+  y = emit_dsconv(g, y, prefix + ".cv2", m->cv2.get());
+  return m->add ? g.node("Add", {in, y}, {}, prefix + ".add") : y;
+}
+
+std::string emit_dsc3k(GraphBuilder& g, const std::string& in,
+                       const std::string& prefix,
+                       models::DSC3kImpl* m) {
+  auto a = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  for (size_t i = 0; i < m->m->size(); ++i) {
+    auto* bn = m->m->ptr(i)->as<models::DSBottleneckImpl>();
+    a = emit_dsbottleneck(g, a, prefix + ".m." + std::to_string(i), bn);
+  }
+  auto b = emit_conv_module(g, in, prefix + ".cv2", m->cv2.get());
+  auto cat = g.node("Concat", {a, b}, {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv3", m->cv3.get());
+}
+
+std::string emit_dsc3k2(GraphBuilder& g, const std::string& in,
+                        const std::string& prefix,
+                        models::DSC3k2Impl* m) {
+  auto y = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  emit_split2(g, y, prefix + ".split", 2 * m->c_inner);
+  std::string a = prefix + ".split.a";
+  std::string b = prefix + ".split.b";
+  std::vector<std::string> outs = {a, b};
+  std::string last = b;
+  for (size_t i = 0; i < m->m->size(); ++i) {
+    auto sub_prefix = prefix + ".m." + std::to_string(i);
+    if (m->dsc3k) {
+      auto* sub = m->m[i]->as<models::DSC3kImpl>();
+      last = emit_dsc3k(g, last, sub_prefix, sub);
+    } else {
+      auto* sub = m->m[i]->as<models::DSBottleneckImpl>();
+      last = emit_dsbottleneck(g, last, sub_prefix, sub);
+    }
+    outs.push_back(last);
+  }
+  auto cat = g.node("Concat", outs, {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv2", m->cv2.get());
+}
+
+// V13AAttn: distinct from v12 — separate qk (out=2C) and v (out=C) convs;
+// pe is k=5 depthwise applied to v; final = proj(attn_out + pe(v_4d)).
+std::string emit_v13_aattn(GraphBuilder& g, const std::string& in,
+                           int B, int C, int H, int W,
+                           const std::string& prefix,
+                           models::V13AAttnImpl* a) {
+  int nh = a->num_heads;
+  int hd = a->head_dim;
+  int N  = H * W;
+  int area = a->area;
+  int Bg = (area > 1) ? B * area : B;
+  int Ng = (area > 1) ? N / area : N;
+
+  auto qk = emit_conv_module(g, in, prefix + ".qk", a->qk.get());
+  auto v_4d = emit_conv_module(g, in, prefix + ".v",  a->v.get());
+
+  // pe(v_4d): bias=False here (v13 pe doesn't ship with conv bias).
+  auto* pe = a->pe.get();
+  auto pe_fused = fuse_conv_bn(pe->conv->weight, pe->bn->weight, pe->bn->bias,
+                                pe->bn->running_mean, pe->bn->running_var,
+                                pe->bn->options.eps());
+  auto pe_w = g.add_init(prefix + ".pe.weight", pe_fused.weight);
+  auto pe_b = g.add_init(prefix + ".pe.bias",   pe_fused.bias);
+  int pe_k  = pe->conv->options.kernel_size()->at(0);
+  int pe_pad = std::get<torch::ExpandingArray<2>>(pe->conv->options.padding())->at(0);
+  int pe_g   = (int)pe->conv->options.groups();
+  auto pe_out = g.node("Conv", {v_4d, pe_w, pe_b},
+                        {attr_ints("dilations", {1, 1}),
+                         attr_int("group", pe_g),
+                         attr_ints("kernel_shape", {pe_k, pe_k}),
+                         attr_ints("pads", {pe_pad, pe_pad, pe_pad, pe_pad}),
+                         attr_ints("strides", {1, 1})},
+                        prefix + ".pe.out");
+
+  // qk_flat: [B, 2C, H, W] → [B, 2C, N] → transpose → [B, N, 2C]
+  auto qk_n2c = g.add_init_int64(prefix + ".qk.n2c",
+                                  {(int64_t)B, (int64_t)(2*C), (int64_t)N});
+  auto qk_r = g.node("Reshape", {qk, qk_n2c}, {}, prefix + ".qk.r");
+  auto qk_flat = g.node("Transpose", {qk_r},
+                         {attr_ints("perm", {0, 2, 1})}, prefix + ".qk.flat");
+  // v_flat: [B, N, C]
+  auto v_nc = g.add_init_int64(prefix + ".v.n1c",
+                                {(int64_t)B, (int64_t)C, (int64_t)N});
+  auto v_r = g.node("Reshape", {v_4d, v_nc}, {}, prefix + ".v.r");
+  auto v_flat = g.node("Transpose", {v_r},
+                        {attr_ints("perm", {0, 2, 1})}, prefix + ".v.flat");
+  // Optional area-window reshape.
+  std::string qk_w = qk_flat;
+  std::string v_w  = v_flat;
+  if (area > 1) {
+    auto qkw = g.add_init_int64(prefix + ".qk.win",
+                                 {(int64_t)Bg, (int64_t)Ng, (int64_t)(2*C)});
+    qk_w = g.node("Reshape", {qk_flat, qkw}, {}, prefix + ".qk.windowed");
+    auto vw  = g.add_init_int64(prefix + ".v.win",
+                                 {(int64_t)Bg, (int64_t)Ng, (int64_t)C});
+    v_w  = g.node("Reshape", {v_flat, vw}, {}, prefix + ".v.windowed");
+  }
+  // Split qk → q, k along last dim (size C each).
+  auto axes_last = g.add_init_int64(prefix + ".ax2", {2});
+  auto step1     = g.add_init_int64(prefix + ".st1", {1});
+  auto sq0 = g.add_init_int64(prefix + ".sq0", {0});
+  auto sq1 = g.add_init_int64(prefix + ".sq1", {(int64_t)C});
+  auto qf  = g.node("Slice", {qk_w, sq0, sq1, axes_last, step1}, {}, prefix + ".qf");
+  auto sk0 = g.add_init_int64(prefix + ".sk0", {(int64_t)C});
+  auto sk1 = g.add_init_int64(prefix + ".sk1", {(int64_t)(2*C)});
+  auto kf  = g.node("Slice", {qk_w, sk0, sk1, axes_last, step1}, {}, prefix + ".kf");
+
+  // Reshape q/k/v to (Bg, Ng, nh, hd) → transpose to (Bg, nh, hd, Ng).
+  auto qkv_shape = g.add_init_int64(prefix + ".qkv.shape",
+                                     {(int64_t)Bg, (int64_t)Ng,
+                                      (int64_t)nh, (int64_t)hd});
+  auto q_r = g.node("Reshape", {qf, qkv_shape}, {}, prefix + ".q.r");
+  auto k_r = g.node("Reshape", {kf, qkv_shape}, {}, prefix + ".k.r");
+  auto v_r2 = g.node("Reshape", {v_w, qkv_shape}, {}, prefix + ".v.r2");
+  auto q_h = g.node("Transpose", {q_r},
+                     {attr_ints("perm", {0, 2, 3, 1})}, prefix + ".q.h");
+  auto k_h = g.node("Transpose", {k_r},
+                     {attr_ints("perm", {0, 2, 3, 1})}, prefix + ".k.h");
+  auto v_h = g.node("Transpose", {v_r2},
+                     {attr_ints("perm", {0, 2, 3, 1})}, prefix + ".v.h");
+  // attn = softmax(qᵀ @ k * scale, dim=-1)
+  auto qT = g.node("Transpose", {q_h},
+                    {attr_ints("perm", {0, 1, 3, 2})}, prefix + ".qT");
+  auto attn0 = g.node("MatMul", {qT, k_h}, {}, prefix + ".attn0");
+  std::vector<float> sv = {(float)(1.0 / std::sqrt((double)hd))};
+  auto scale_init = g.add_init_float(prefix + ".scale", sv, {1});
+  auto attn = g.node("Mul", {attn0, scale_init}, {}, prefix + ".attn.s");
+  attn = g.node("Softmax", {attn}, {attr_int("axis", -1)}, prefix + ".attn.sm");
+  // out = v @ attnᵀ → (Bg, nh, hd, Ng) → permute (0,3,1,2) → (Bg, Ng, nh, hd)
+  auto attnT = g.node("Transpose", {attn},
+                       {attr_ints("perm", {0, 1, 3, 2})}, prefix + ".attnT");
+  auto out0 = g.node("MatMul", {v_h, attnT}, {}, prefix + ".out0");
+  auto out1 = g.node("Transpose", {out0},
+                      {attr_ints("perm", {0, 3, 1, 2})}, prefix + ".out1");
+  // → reshape to (B, N, C) → (B, H, W, C) → permute to (B, C, H, W)
+  auto bnc = g.add_init_int64(prefix + ".bnc",
+                               {(int64_t)B, (int64_t)N, (int64_t)C});
+  auto out_bnc = g.node("Reshape", {out1, bnc}, {}, prefix + ".out.bnc");
+  auto bhwc = g.add_init_int64(prefix + ".bhwc",
+                                {(int64_t)B, (int64_t)H, (int64_t)W,
+                                 (int64_t)C});
+  auto out_bhwc = g.node("Reshape", {out_bnc, bhwc}, {}, prefix + ".out.bhwc");
+  auto out_sp = g.node("Transpose", {out_bhwc},
+                        {attr_ints("perm", {0, 3, 1, 2})}, prefix + ".out.sp");
+  auto added = g.node("Add", {out_sp, pe_out}, {}, prefix + ".add");
+  return emit_conv_module(g, added, prefix + ".proj", a->proj.get());
+}
+
+std::string emit_v13_ablock(GraphBuilder& g, const std::string& in,
+                            int B, int C, int H, int W,
+                            const std::string& prefix,
+                            models::V13ABlockImpl* b) {
+  auto attn_out = emit_v13_aattn(g, in, B, C, H, W, prefix + ".attn",
+                                  b->attn.get());
+  auto y1 = g.node("Add", {in, attn_out}, {}, prefix + ".add1");
+  auto* mlp0 = b->mlp->ptr(0)->as<models::ConvImpl>();
+  auto* mlp1 = b->mlp->ptr(1)->as<models::ConvImpl>();
+  auto m0 = emit_conv_module(g, y1, prefix + ".mlp.0", mlp0);
+  auto m1 = emit_conv_module(g, m0, prefix + ".mlp.1", mlp1);
+  return g.node("Add", {y1, m1}, {}, prefix + ".add2");
+}
+
+std::string emit_v13_a2c2f(GraphBuilder& g, const std::string& in,
+                           int B, int H, int W,
+                           const std::string& prefix,
+                           models::V13A2C2fImpl* m) {
+  auto y0 = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  std::vector<std::string> outs = {y0};
+  std::string last = y0;
+  for (size_t i = 0; i < m->m->size(); ++i) {
+    auto sp = prefix + ".m." + std::to_string(i);
+    if (m->a2) {
+      auto* seq = m->m[i]->as<torch::nn::SequentialImpl>();
+      auto* ab0 = seq->ptr(0)->as<models::V13ABlockImpl>();
+      auto* ab1 = seq->ptr(1)->as<models::V13ABlockImpl>();
+      last = emit_v13_ablock(g, last, B, m->c_inner, H, W, sp + ".0", ab0);
+      last = emit_v13_ablock(g, last, B, m->c_inner, H, W, sp + ".1", ab1);
+    } else {
+      auto* c3k = m->m[i]->as<models::C3kImpl>();
+      last = emit_c3k(g, last, sp, c3k);
+    }
+    outs.push_back(last);
+  }
+  auto cat = g.node("Concat", outs, {attr_int("axis", 1)}, prefix + ".cat");
+  auto y = emit_conv_module(g, cat, prefix + ".cv2", m->cv2.get());
+  if (m->has_gamma) {
+    auto gw = g.add_init(prefix + ".gamma", m->gamma.detach());
+    auto gw_r_init = g.add_init_int64(prefix + ".gamma.r",
+                                       {1, (int64_t)m->gamma.size(0), 1, 1});
+    auto gw_r = g.node("Reshape", {gw, gw_r_init}, {}, prefix + ".gamma.r.out");
+    auto gy = g.node("Mul", {gw_r, y}, {}, prefix + ".gamma.mul");
+    return g.node("Add", {in, gy}, {}, prefix + ".gamma.add");
+  }
+  return y;
+}
+
+std::string emit_downsample_conv_v13(GraphBuilder& g, const std::string& in,
+                                      const std::string& prefix,
+                                      models::DownsampleConvImpl* m) {
+  auto pooled = g.node("AveragePool", {in},
+                        {attr_ints("kernel_shape", {2, 2}),
+                         attr_ints("strides",      {2, 2}),
+                         attr_ints("pads",         {0, 0, 0, 0})},
+                        prefix + ".pool");
+  if (!m->channel_adjust) return pooled;
+  return emit_conv_module(g, pooled, prefix + ".channel_adjust",
+                           m->channel_adjust_conv.get());
+}
+
+std::string emit_full_pad_tunnel(GraphBuilder& g,
+                                  const std::string& a,
+                                  const std::string& b,
+                                  const std::string& prefix,
+                                  models::FullPADTunnelImpl* m) {
+  auto gw = g.add_init(prefix + ".gate", m->gate.detach().view({1}));
+  auto mul = g.node("Mul", {gw, b}, {}, prefix + ".mul");
+  return g.node("Add", {a, mul}, {}, prefix + ".add");
+}
+
+std::string emit_fuse_module(GraphBuilder& g,
+                              const std::vector<std::string>& xs,
+                              const std::string& prefix,
+                              models::FuseModuleImpl* m) {
+  auto x0_ds = g.node("AveragePool", {xs[0]},
+                       {attr_ints("kernel_shape", {2, 2}),
+                        attr_ints("strides",      {2, 2}),
+                        attr_ints("pads",         {0, 0, 0, 0})},
+                       prefix + ".x0.ds");
+  auto x2_up = emit_upsample_2x(g, xs[2], prefix + ".x2.up");
+  auto cat = g.node("Concat", {x0_ds, xs[1], x2_up},
+                     {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".conv_out", m->conv_out.get());
+}
+
+// AdaHyperedgeGen forward (operates on tokens [B, N, D] → [B, N, M]).
+std::string emit_ada_hyperedge_gen(GraphBuilder& g, const std::string& in,
+                                    int B, int N, int D,
+                                    const std::string& prefix,
+                                    models::AdaHyperedgeGenImpl* a) {
+  int M  = a->num_hyperedges;
+  int nh = a->num_heads;
+  int hd = a->head_dim;
+
+  // context = cat(mean(in, dim=1), max(in, dim=1)) for context="both"
+  // shape (B, 2D). ReduceMean/ReduceMax use axes-as-attribute through
+  // opset 17; opset 18+ moves axes to input. We target opset 17.
+  auto mean = g.node("ReduceMean", {in},
+                      {attr_int("keepdims", 0),
+                       attr_ints("axes", {1})}, prefix + ".mean");
+  auto maxv = g.node("ReduceMax", {in},
+                      {attr_int("keepdims", 0),
+                       attr_ints("axes", {1})}, prefix + ".maxv");
+  auto ctx = g.node("Concat", {mean, maxv},
+                     {attr_int("axis", -1)}, prefix + ".ctx");
+  // context_net is a Linear: weight [M*D, 2D], bias [M*D]. y = ctx @ Wᵀ + b.
+  auto wt = a->context_net->weight;             // [M*D, 2D]
+  auto bt = a->context_net->bias;               // [M*D]
+  // ONNX MatMul expects [B, K] @ [K, OUT] so we Transpose wt → [2D, M*D]
+  auto cw = g.add_init(prefix + ".context_net.weight",
+                        wt.transpose(0, 1).contiguous());
+  auto cb = g.add_init(prefix + ".context_net.bias", bt);
+  auto offsets_flat = g.node("MatMul", {ctx, cw}, {}, prefix + ".offsets.mm");
+  offsets_flat = g.node("Add", {offsets_flat, cb}, {},
+                         prefix + ".offsets.bias");
+  // Reshape offsets to [B, M, D]
+  auto off_shape = g.add_init_int64(prefix + ".off.shape",
+                                     {(int64_t)B, (int64_t)M, (int64_t)D});
+  auto offsets = g.node("Reshape", {offsets_flat, off_shape}, {},
+                         prefix + ".offsets");
+  // prototypes = prototype_base.unsqueeze(0) + offsets  → [B, M, D]
+  auto proto_base_t = g.add_init(prefix + ".prototype_base",
+                                  a->prototype_base.unsqueeze(0));
+  auto prototypes = g.node("Add", {proto_base_t, offsets}, {},
+                            prefix + ".prototypes");
+
+  // pre_head_proj: Linear D → D. Apply elementwise on tokens.
+  auto pw = a->pre_head_proj->weight;          // [D, D]
+  auto pb = a->pre_head_proj->bias;            // [D]
+  auto pwT = g.add_init(prefix + ".pre_head_proj.weight",
+                         pw.transpose(0, 1).contiguous());
+  auto pbT = g.add_init(prefix + ".pre_head_proj.bias", pb);
+  auto x_proj = g.node("MatMul", {in, pwT}, {}, prefix + ".x_proj.mm");
+  x_proj = g.node("Add", {x_proj, pbT}, {}, prefix + ".x_proj.bias");
+
+  // Reshape & permute X_proj to (B, num_heads, N, head_dim)
+  auto xshape = g.add_init_int64(prefix + ".x.shape",
+                                  {(int64_t)B, (int64_t)N, (int64_t)nh,
+                                   (int64_t)hd});
+  auto x_r = g.node("Reshape", {x_proj, xshape}, {}, prefix + ".x.r");
+  auto X_heads = g.node("Transpose", {x_r},
+                         {attr_ints("perm", {0, 2, 1, 3})}, prefix + ".X_heads");
+  // proto_heads: (B, M, num_heads, head_dim) → permute (0,2,1,3) → (B, nh, M, hd)
+  auto pshape = g.add_init_int64(prefix + ".proto.shape",
+                                  {(int64_t)B, (int64_t)M, (int64_t)nh,
+                                   (int64_t)hd});
+  auto p_r = g.node("Reshape", {prototypes, pshape}, {}, prefix + ".p.r");
+  auto proto_heads = g.node("Transpose", {p_r},
+                             {attr_ints("perm", {0, 2, 1, 3})},
+                             prefix + ".proto_heads");
+  // logits = X_heads @ proto_headsᵀ / sqrt(hd) → (B, nh, N, M)
+  auto pT = g.node("Transpose", {proto_heads},
+                    {attr_ints("perm", {0, 1, 3, 2})}, prefix + ".pT");
+  auto logits_h = g.node("MatMul", {X_heads, pT}, {}, prefix + ".logits_h");
+  std::vector<float> sv = {(float)(1.0 / a->scaling)};
+  auto si = g.add_init_float(prefix + ".scale", sv, {1});
+  logits_h = g.node("Mul", {logits_h, si}, {}, prefix + ".logits_h.s");
+  // mean over num_heads (dim=1) → (B, N, M)
+  auto logits = g.node("ReduceMean", {logits_h},
+                        {attr_int("keepdims", 0),
+                         attr_ints("axes", {1})}, prefix + ".logits");
+  // softmax over N (dim=1)
+  return g.node("Softmax", {logits}, {attr_int("axis", 1)}, prefix + ".A");
+}
+
+std::string emit_ada_hg_conv(GraphBuilder& g, const std::string& in,
+                              int B, int N, int D,
+                              const std::string& prefix,
+                              models::AdaHGConvImpl* a) {
+  // A = edge_generator(in)              [B, N, M]
+  // He = bmm(Aᵀ, in)                    [B, M, D]
+  // He = GELU(edge_proj.0(He))
+  // X' = bmm(A, He)                     [B, N, D]
+  // X' = GELU(node_proj.0(X'))
+  // out = X' + in
+  auto A = emit_ada_hyperedge_gen(g, in, B, N, D,
+                                   prefix + ".edge_generator",
+                                   a->edge_generator.get());
+  auto AT = g.node("Transpose", {A},
+                    {attr_ints("perm", {0, 2, 1})}, prefix + ".AT");
+  auto He = g.node("MatMul", {AT, in}, {}, prefix + ".He");
+  // edge_proj.0 Linear D→D:
+  auto* ep0 = a->edge_proj->ptr(0)->as<torch::nn::LinearImpl>();
+  auto epw = g.add_init(prefix + ".edge_proj.0.weight",
+                         ep0->weight.transpose(0, 1).contiguous());
+  auto epb = g.add_init(prefix + ".edge_proj.0.bias", ep0->bias);
+  auto He2 = g.node("MatMul", {He, epw}, {}, prefix + ".ep0.mm");
+  He2 = g.node("Add", {He2, epb}, {}, prefix + ".ep0.bias");
+  // GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2))). Opset 17 has no Gelu op
+  // (added in 20); decompose explicitly.
+  {
+    std::vector<float> ones = {1.0f};
+    std::vector<float> half = {0.5f};
+    std::vector<float> isqrt2 = {(float)(1.0 / std::sqrt(2.0))};
+    auto one_t = g.add_init_float(prefix + ".ep0.gelu.one", ones, {1});
+    auto half_t = g.add_init_float(prefix + ".ep0.gelu.half", half, {1});
+    auto rs2 = g.add_init_float(prefix + ".ep0.gelu.rs2", isqrt2, {1});
+    auto u = g.node("Mul", {He2, rs2}, {}, prefix + ".ep0.gelu.u");
+    auto e = g.node("Erf", {u}, {}, prefix + ".ep0.gelu.erf");
+    auto p1 = g.node("Add", {e, one_t}, {}, prefix + ".ep0.gelu.p1");
+    auto hx = g.node("Mul", {He2, half_t}, {}, prefix + ".ep0.gelu.hx");
+    He2 = g.node("Mul", {hx, p1}, {}, prefix + ".ep0.gelu");
+  }
+  auto X_new = g.node("MatMul", {A, He2}, {}, prefix + ".X_new");
+  auto* np0 = a->node_proj->ptr(0)->as<torch::nn::LinearImpl>();
+  auto npw = g.add_init(prefix + ".node_proj.0.weight",
+                         np0->weight.transpose(0, 1).contiguous());
+  auto npb = g.add_init(prefix + ".node_proj.0.bias", np0->bias);
+  auto X2 = g.node("MatMul", {X_new, npw}, {}, prefix + ".np0.mm");
+  X2 = g.node("Add", {X2, npb}, {}, prefix + ".np0.bias");
+  {
+    std::vector<float> ones = {1.0f};
+    std::vector<float> half = {0.5f};
+    std::vector<float> isqrt2 = {(float)(1.0 / std::sqrt(2.0))};
+    auto one_t = g.add_init_float(prefix + ".np0.gelu.one", ones, {1});
+    auto half_t = g.add_init_float(prefix + ".np0.gelu.half", half, {1});
+    auto rs2 = g.add_init_float(prefix + ".np0.gelu.rs2", isqrt2, {1});
+    auto u = g.node("Mul", {X2, rs2}, {}, prefix + ".np0.gelu.u");
+    auto e = g.node("Erf", {u}, {}, prefix + ".np0.gelu.erf");
+    auto p1 = g.node("Add", {e, one_t}, {}, prefix + ".np0.gelu.p1");
+    auto hx = g.node("Mul", {X2, half_t}, {}, prefix + ".np0.gelu.hx");
+    X2 = g.node("Mul", {hx, p1}, {}, prefix + ".np0.gelu");
+  }
+  return g.node("Add", {X2, in}, {}, prefix + ".res.add");
+}
+
+std::string emit_ada_hg_computation(GraphBuilder& g, const std::string& in,
+                                     int B, int C, int H, int W,
+                                     const std::string& prefix,
+                                     models::AdaHGComputationImpl* m) {
+  // tokens = in.flatten(2).transpose(1, 2)  → (B, N, C)
+  int N = H * W;
+  auto bcn = g.add_init_int64(prefix + ".bcn",
+                               {(int64_t)B, (int64_t)C, (int64_t)N});
+  auto x_r = g.node("Reshape", {in, bcn}, {}, prefix + ".x.r");
+  auto tokens = g.node("Transpose", {x_r},
+                        {attr_ints("perm", {0, 2, 1})}, prefix + ".tokens");
+  auto y = emit_ada_hg_conv(g, tokens, B, N, C, prefix + ".hgnn",
+                              m->hgnn.get());
+  // back to (B, C, H, W)
+  auto y_t = g.node("Transpose", {y},
+                     {attr_ints("perm", {0, 2, 1})}, prefix + ".y.t");
+  auto bchw = g.add_init_int64(prefix + ".bchw",
+                                {(int64_t)B, (int64_t)C, (int64_t)H, (int64_t)W});
+  return g.node("Reshape", {y_t, bchw}, {}, prefix + ".out");
+}
+
+std::string emit_c3ah(GraphBuilder& g, const std::string& in,
+                       int B, int H, int W,
+                       const std::string& prefix,
+                       models::C3AHImpl* m) {
+  auto a = emit_conv_module(g, in, prefix + ".cv1", m->cv1.get());
+  // Determine c_ from cv1's output channels.
+  int c_ = m->cv1->conv->options.out_channels();
+  a = emit_ada_hg_computation(g, a, B, c_, H, W, prefix + ".m", m->m.get());
+  auto b = emit_conv_module(g, in, prefix + ".cv2", m->cv2.get());
+  auto cat = g.node("Concat", {a, b}, {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv3", m->cv3.get());
+}
+
+std::string emit_hyperace(GraphBuilder& g,
+                           const std::vector<std::string>& xs,
+                           int B, int H, int W,
+                           const std::string& prefix,
+                           models::HyperACEImpl* m) {
+  auto x = emit_fuse_module(g, xs, prefix + ".fuse", m->fuse.get());
+  auto cv1_out = emit_conv_module(g, x, prefix + ".cv1", m->cv1.get());
+  // Split into 3 chunks of c_inner along channel.
+  int c_in = m->c_inner;
+  auto axes = g.add_init_int64(prefix + ".ax", {1});
+  auto step = g.add_init_int64(prefix + ".st", {1});
+  std::vector<std::string> y;
+  for (int i = 0; i < 3; ++i) {
+    auto s0 = g.add_init_int64(prefix + ".s0." + std::to_string(i),
+                                {(int64_t)(i * c_in)});
+    auto s1 = g.add_init_int64(prefix + ".s1." + std::to_string(i),
+                                {(int64_t)((i + 1) * c_in)});
+    y.push_back(g.node("Slice", {cv1_out, s0, s1, axes, step}, {},
+                        prefix + ".chunk." + std::to_string(i)));
+  }
+  auto out1 = emit_c3ah(g, y[1], B, H, W,
+                         prefix + ".branch1", m->branch1.get());
+  auto out2 = emit_c3ah(g, y[1], B, H, W,
+                         prefix + ".branch2", m->branch2.get());
+  // m chain: y.append(m[i](y.back())). After loop y[1] = out1; y.append(out2).
+  std::string last = y[2];
+  for (size_t i = 0; i < m->m->size(); ++i) {
+    auto sp = prefix + ".m." + std::to_string(i);
+    auto mi = m->m[i];
+    if (auto* d = mi->as<models::DSC3kImpl>()) {
+      last = emit_dsc3k(g, last, sp, d);
+    } else if (auto* d = mi->as<models::DSBottleneckImpl>()) {
+      last = emit_dsbottleneck(g, last, sp, d);
+    } else {
+      throw std::runtime_error(
+          "emit_hyperace: unexpected inner module type");
+    }
+    y.push_back(last);
+  }
+  y[1] = out1;
+  y.push_back(out2);
+  auto cat = g.node("Concat", y, {attr_int("axis", 1)}, prefix + ".cat");
+  return emit_conv_module(g, cat, prefix + ".cv2", m->cv2.get());
+}
+
 // Spatial table for the 3 detect levels (h*w each).
 std::vector<int> spatial_table(const std::vector<std::pair<int,int>>& hw) {
   std::vector<int> s;
@@ -2335,6 +3034,208 @@ std::vector<int> spatial_table(const std::vector<std::pair<int,int>>& hw) {
 }
 
 }  // anonymous namespace
+
+// ─── v12 detect exporter ──────────────────────────────────────────────────
+
+void export_yolo12_onnx(models::Yolo12Detect& model,
+                         const std::string&    path,
+                         const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, /*FLOAT=*/1, {1, 3, cfg.imgsz, cfg.imgsz});
+
+  // v12 yaml: 22 layers ending in Detect (legacy=false).
+  struct Step { std::vector<int> from; std::string kind; };
+  static const std::vector<Step> yaml = {
+      {{-1}, "Conv"},   {{-1}, "Conv"},   {{-1}, "C3k2"},
+      {{-1}, "Conv"},   {{-1}, "C3k2"},
+      {{-1}, "Conv"},   {{-1}, "A2C2f"},
+      {{-1}, "Conv"},   {{-1}, "A2C2f"},
+      {{-1}, "Up"},     {{-1, 6}, "Cat"},  {{-1}, "A2C2f"},
+      {{-1}, "Up"},     {{-1, 4}, "Cat"},  {{-1}, "A2C2f"},
+      {{-1}, "Conv"},   {{-1, 11}, "Cat"}, {{-1}, "A2C2f"},
+      {{-1}, "Conv"},   {{-1, 8},  "Cat"}, {{-1}, "C3k2"},
+      {{14, 17, 20}, "Detect"},
+  };
+
+  std::vector<std::string> outs(yaml.size());
+  std::vector<std::pair<int, int>> outs_hw(yaml.size());
+  std::string prev = cfg.input_name;
+  int H_in = cfg.imgsz, W_in = cfg.imgsz;
+  int B_in = 1;
+
+  auto idx_or_prev = [&](int f) { return (f == -1) ? prev : outs[f]; };
+  auto hw_at = [&](int i, int f) -> std::pair<int, int> {
+    if (f == -1) return (i == 0) ? std::pair<int, int>{H_in, W_in}
+                                 : outs_hw[i - 1];
+    return outs_hw[f];
+  };
+
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    auto pfx = "model." + std::to_string(i);
+    if (s.kind == "Conv") {
+      auto* m = model->model[i]->as<models::ConvImpl>();
+      outs[i] = emit_conv_module(g, idx_or_prev(s.from[0]), pfx, m);
+      auto in_hw = hw_at(i, s.from[0]);
+      int st = m->conv->options.stride()->at(0);
+      outs_hw[i] = {in_hw.first / st, in_hw.second / st};
+    } else if (s.kind == "C3k2") {
+      auto* m = model->model[i]->as<models::C3k2Impl>();
+      outs[i] = emit_c3k2(g, idx_or_prev(s.from[0]), pfx, m);
+      outs_hw[i] = hw_at(i, s.from[0]);
+    } else if (s.kind == "A2C2f") {
+      auto* m = model->model[i]->as<models::A2C2fImpl>();
+      auto in_hw = hw_at(i, s.from[0]);
+      outs[i] = emit_a2c2f_v12(g, idx_or_prev(s.from[0]),
+                                 B_in, in_hw.first, in_hw.second, pfx, m);
+      outs_hw[i] = in_hw;
+    } else if (s.kind == "Up") {
+      outs[i] = emit_upsample_2x(g, idx_or_prev(s.from[0]), pfx);
+      auto in_hw = hw_at(i, s.from[0]);
+      outs_hw[i] = {in_hw.first * 2, in_hw.second * 2};
+    } else if (s.kind == "Cat") {
+      std::vector<std::string> ins;
+      for (int f : s.from) ins.push_back(idx_or_prev(f));
+      outs[i] = g.node("Concat", ins, {attr_int("axis", 1)}, pfx + ".cat");
+      outs_hw[i] = hw_at(i, s.from[0]);
+    } else if (s.kind == "Detect") {
+      auto* d = model->model[i]->as<models::DetectImpl>();
+      std::vector<std::string> det_in;
+      std::vector<int>          det_ch;
+      for (size_t k = 0; k < s.from.size(); ++k) {
+        det_in.push_back(outs[s.from[k]]);
+        det_ch.push_back(d->ch[k]);
+      }
+      outs[i] = emit_detect_v11(g, det_in, det_ch, model->stride, d,
+                                  cfg.imgsz, pfx, cfg.output_name);
+      outs_hw[i] = {0, 0};
+    }
+    prev = outs[i];
+  }
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+  write_model_proto(g, cfg, "yolo12", path);
+}
+
+// ─── v13 detect exporter ──────────────────────────────────────────────────
+
+void export_yolo13_onnx(models::Yolo13Detect& model,
+                         const std::string&    path,
+                         const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, /*FLOAT=*/1, {1, 3, cfg.imgsz, cfg.imgsz});
+
+  // 33-layer v13 yaml; same kV13Yaml table as Yolo13DetectImpl.
+  struct Step { std::vector<int> from; std::string kind; };
+  static const std::vector<Step> yaml = {
+      {{-1},      "Conv"},   {{-1},      "Conv"},   {{-1}, "DSC3k2"},
+      {{-1},      "Conv"},   {{-1},      "DSC3k2"},
+      {{-1},      "DSConv"}, {{-1},      "A2C2f"},
+      {{-1},      "DSConv"}, {{-1},      "A2C2f"},
+      {{4,6,8},   "HyperACE"},
+      {{-1},      "Up"},     {{9},       "DownsampleConv"},
+      {{6,9},     "FullPADTunnel"}, {{4,10}, "FullPADTunnel"},
+      {{8,11},    "FullPADTunnel"},
+      {{-1},      "Up"},     {{-1,12},   "Cat"},    {{-1}, "DSC3k2"},
+      {{-1,9},    "FullPADTunnel"},
+      {{17},      "Up"},     {{-1,13},   "Cat"},    {{-1}, "DSC3k2"},
+      {{10},      "Conv"},   {{21,22},   "FullPADTunnel"},
+      {{-1},      "Conv"},   {{-1,18},   "Cat"},    {{-1}, "DSC3k2"},
+      {{-1,9},    "FullPADTunnel"},
+      {{26},      "Conv"},   {{-1,14},   "Cat"},    {{-1}, "DSC3k2"},
+      {{-1,11},   "FullPADTunnel"},
+      {{23,27,31},"Detect"},
+  };
+
+  std::vector<std::string> outs(yaml.size());
+  std::vector<std::pair<int, int>> outs_hw(yaml.size());
+  std::string prev = cfg.input_name;
+  int H_in = cfg.imgsz, W_in = cfg.imgsz;
+  int B_in = 1;
+
+  auto idx_or_prev = [&](int f) { return (f == -1) ? prev : outs[f]; };
+  auto hw_at = [&](int i, int f) -> std::pair<int, int> {
+    if (f == -1) return (i == 0) ? std::pair<int, int>{H_in, W_in}
+                                 : outs_hw[i - 1];
+    return outs_hw[f];
+  };
+
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    auto pfx = "model." + std::to_string(i);
+    auto mod = model->model[i];
+    if (s.kind == "Conv") {
+      auto* m = mod->as<models::ConvImpl>();
+      outs[i] = emit_conv_module(g, idx_or_prev(s.from[0]), pfx, m);
+      auto in_hw = hw_at(i, s.from[0]);
+      int st = m->conv->options.stride()->at(0);
+      outs_hw[i] = {in_hw.first / st, in_hw.second / st};
+    } else if (s.kind == "DSConv") {
+      auto* m = mod->as<models::DSConvImpl>();
+      outs[i] = emit_dsconv(g, idx_or_prev(s.from[0]), pfx, m);
+      auto in_hw = hw_at(i, s.from[0]);
+      int st = m->dw->options.stride()->at(0);
+      outs_hw[i] = {in_hw.first / st, in_hw.second / st};
+    } else if (s.kind == "DSC3k2") {
+      auto* m = mod->as<models::DSC3k2Impl>();
+      outs[i] = emit_dsc3k2(g, idx_or_prev(s.from[0]), pfx, m);
+      outs_hw[i] = hw_at(i, s.from[0]);
+    } else if (s.kind == "A2C2f") {
+      auto* m = mod->as<models::V13A2C2fImpl>();
+      auto in_hw = hw_at(i, s.from[0]);
+      outs[i] = emit_v13_a2c2f(g, idx_or_prev(s.from[0]),
+                                 B_in, in_hw.first, in_hw.second, pfx, m);
+      outs_hw[i] = in_hw;
+    } else if (s.kind == "Up") {
+      outs[i] = emit_upsample_2x(g, idx_or_prev(s.from[0]), pfx);
+      auto in_hw = hw_at(i, s.from[0]);
+      outs_hw[i] = {in_hw.first * 2, in_hw.second * 2};
+    } else if (s.kind == "DownsampleConv") {
+      auto* m = mod->as<models::DownsampleConvImpl>();
+      outs[i] = emit_downsample_conv_v13(g, idx_or_prev(s.from[0]), pfx, m);
+      auto in_hw = hw_at(i, s.from[0]);
+      outs_hw[i] = {in_hw.first / 2, in_hw.second / 2};
+    } else if (s.kind == "Cat") {
+      std::vector<std::string> ins;
+      for (int f : s.from) ins.push_back(idx_or_prev(f));
+      outs[i] = g.node("Concat", ins, {attr_int("axis", 1)}, pfx + ".cat");
+      outs_hw[i] = hw_at(i, s.from[0]);
+    } else if (s.kind == "FullPADTunnel") {
+      auto* m = mod->as<models::FullPADTunnelImpl>();
+      outs[i] = emit_full_pad_tunnel(g, idx_or_prev(s.from[0]),
+                                       idx_or_prev(s.from[1]), pfx, m);
+      outs_hw[i] = hw_at(i, s.from[0]);
+    } else if (s.kind == "HyperACE") {
+      auto* m = mod->as<models::HyperACEImpl>();
+      // HyperACE output H,W = the spatial of fuse's middle input (xs[1]).
+      auto mid_hw = hw_at(i, s.from[1]);
+      std::vector<std::string> ins;
+      for (int f : s.from) ins.push_back(outs[f]);
+      outs[i] = emit_hyperace(g, ins, B_in, mid_hw.first, mid_hw.second,
+                                pfx, m);
+      outs_hw[i] = mid_hw;
+    } else if (s.kind == "Detect") {
+      auto* d = mod->as<models::DetectImpl>();
+      std::vector<std::string> det_in;
+      std::vector<int>          det_ch;
+      for (size_t k = 0; k < s.from.size(); ++k) {
+        det_in.push_back(outs[s.from[k]]);
+        det_ch.push_back(d->ch[k]);
+      }
+      outs[i] = emit_detect_v11(g, det_in, det_ch, model->stride, d,
+                                  cfg.imgsz, pfx, cfg.output_name);
+      outs_hw[i] = {0, 0};
+    }
+    prev = outs[i];
+  }
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
+  write_model_proto(g, cfg, "yolo13", path);
+}
 
 // ─── Segment exporters ────────────────────────────────────────────────────
 //
