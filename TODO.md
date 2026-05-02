@@ -22,7 +22,7 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 
 ### 1.2 yolo8 — full pipeline (Phase 1)
 - ✅ Architecture (Conv / C2f / SPPF / Detect with DFL).
-- ✅ Clean-room pickle parser for Ultralytics `.pt` (handles every opcode `torch.save` produces; treats unknown GLOBAL classes as opaque object stubs while still extracting tensor data).
+- ✅ Clean-room pickle parser for upstream `.pt` (handles every opcode `torch.save` produces; treats unknown GLOBAL classes as opaque object stubs while still extracting tensor data).
 - ✅ Letterbox + NMS + predict CLI.
 - ✅ YOLO-format dataset loader, HSV + flip augmentation.
 - ✅ Yolo8 loss (TAL assigner + CIoU + DFL + BCE).
@@ -40,11 +40,11 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 - ✅ segment — predict + train + val (mask BCE loss, mask-mAP@0.5).
 - ✅ pose — predict + train + val (kpt L1 + visibility BCE, OKS-mAP).
 - ✅ obb — predict + train + val (cosine angular loss, rotated-IoU mAP).
-- ✅ All 75 (version × task × scale) combinations for v8/v11/v26 load Ultralytics' shipped weights and produce non-empty output on bus.jpg.
+- ✅ All 75 (version × task × scale) combinations for v8/v11/v26 load the upstream-shipped weights and produce non-empty output on bus.jpg.
 - ✅ Task ONNX export — graph emitters for segment proto / pose kpt decode / OBB dist2rbox / classify head. ONNX max\|Δ\| ≤ 0.004 across tasks.
 
 ### 1.5 Production-training extras (Phases 3.2 – 3.8)
-- ✅ Auto-resolve `model=` and `data=` from cwd / cache / Ultralytics URL.
+- ✅ Auto-resolve `model=` and `data=` from cwd / cache / upstream asset URL.
 - ✅ Auto finetune-LR (`lr0=0.001` when `model=*.pt` supplied).
 - ✅ LR-warmup formula fixed for tiny datasets.
 - ✅ Trainer saves `.pt` in `load_state_dict`-compatible format.
@@ -52,9 +52,9 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 - ✅ Save-dir auto-increments (`runs/train` → `train2` → `train3`).
 - ✅ `best.pt` saved at peak val mAP@0.5:0.95.
 - ✅ Auto-attach val split when `<root>/images/val` exists.
-- ✅ `results.csv` per-epoch (Ultralytics-shape header).
+- ✅ `results.csv` per-epoch (upstream-shape header).
 - ✅ `patience=N` early stopping when val mAP plateaus.
-- ✅ `runs/<run>/args.yaml` reproducibility dump (timestamped, 107-key Ultralytics-shape).
+- ✅ `runs/<run>/args.yaml` reproducibility dump (timestamped, 107-key upstream-shape).
 - ✅ `runs/<run>/confusion_matrix.png` rendered at end.
 - ✅ `runs/<run>/{BoxPR,BoxF1,BoxP,BoxR}_curve.png`.
 - ✅ `runs/<run>/labels.jpg` per-class GT histogram.
@@ -67,14 +67,14 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 
 ### 1.7 Auto-resolve / data.yaml (Phase 5C + 5E)
 - ✅ CLI dispatch on filename pattern (`yolo3*`, `yolo5*`, `yolo8*`, …).
-- ✅ Ultralytics-style `data=path/to/data.yaml` (yaml-only — no directory form).
+- ✅ upstream-style `data=path/to/data.yaml` (yaml-only — no directory form).
 - ✅ `data.yaml` parsed via vendored rapidyaml (`path:` / `train:` / `val:` / `names:` / `download:`).
 - ✅ Auto-download from `data.yaml`'s `download:` URL when dataset missing.
 - ✅ Model auto-inference from `.pt` state_dict shapes — version, scale, nc.
 - ✅ `scale=` / `version=` / `nc=` no longer required (works on renamed `best.pt` / `last.pt`).
 
 ### 1.8 yolo3 (Phase 5B + task #13 + #29)
-- ✅ Predict end-to-end (Ultralytics' `yolov3u`) — Darknet-53 + v8 anchor-free DFL head. 103M params; 7 dets on bus.jpg.
+- ✅ Predict end-to-end (upstream `yolov3u`) — Darknet-53 + v8 anchor-free DFL head. 103M params; 7 dets on bus.jpg.
 - ✅ Val (task #17).
 - ✅ **Train** (task #29) — TrainerT<Yolo3> via default V8DetectionLoss; `forward_train` returns per-scale raw features. Smoke: yolov3u finetune on coco8, loss 7.87 → 6.63 in 2 epochs at lr=1e-3, mAP@0.5:0.95 0.723 → 0.758.
 - ✅ Converter `convert_yolov3_pt` (fp16 → fp32 + drop `num_batches_tracked`).
@@ -124,7 +124,7 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 
 ### 1.15 yolo11 (Phase 6A)
 - ✅ Full 5 scales × 5 tasks. Parity-clean forward (bit-exact vs Python through layer 22 across all 5 scales × {detect, classify, segment, pose, obb}).
-- ✅ Full-COCO val mAP@0.5:0.95 within 0.05% of Ultralytics' `m.val(rect=False)` on n/s.
+- ✅ Full-COCO val mAP@0.5:0.95 within 0.05% of the upstream `m.val(rect=False)` on n/s.
 - ✅ ONNX + TRT export.
 - ✅ New shared infrastructure: `DWConvImpl` + `DWConvBlockImpl`, `legacy` flag on `DetectImpl`, `infer_model_info` C2PSA marker detection.
 - ✅ Two parity-resolving fixes: BN eps=1e-3 (was libtorch default 1e-5), v26 SPPF differences (cv1 act=False + residual shortcut).
@@ -217,10 +217,10 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #48  | Centralise + minimise third-party libs | high | 1 session | currently scripted via `install_third_party.sh`; needs an explicit pinned list and audit |
 | #48A | Audit `third_party/` and produce a single pinned `deps.lock`-style manifest | — | within #48 | — |
 | #48B | Drop redundant deps; document why each remaining one is in the closed set | — | within #48 | — |
-| #49  | Remove every trace of "ultralytics" from identifiers, comments, CLI strings | high | 1 session | leave a single allow-listed mention in `cli/resolve.cpp::upstream_basename` for legacy URL mapping |
-| #49A | Rename internal identifiers / namespaces / comments | — | within #49 | — |
-| #49B | URL resolver: keep one allow-listed spot only | — | within #49 | — |
-| #49C | Strip from public docs / CLI help text | — | within #49 | — |
+| #49  | ✅ closed — every code-level mention of the upstream vendor neutralised across CLI / models / inference / engine / serialization / datasets / tasks / tests / scripts. Allow-list (kept by design): (a) the `kAssetBase` URL constant in `cli/resolve.cpp` (real network endpoint that hosts the legacy weights — documented as the only allow-listed mention); (b) the Meituan v6 release URL in `cli/resolve.cpp` (same reason); (c) the pickle wire-format token `"ultralytics.nn.tasks"` / `"DetectionModel"` in `pt_save.cpp` (downstream readers expect this exact GLOBAL — renaming would break interop); (d) historical entries in `CHANGELOG.md` (immutable history); (e) the `#49` task description itself (meta-reference). `looks_like_ultralytics_weight` → `looks_like_upstream_weight`. Help text, doc-comments, README/CLAUDE prose all read "upstream" / "the upstream form" / "upstream-shape" now. | — | landed | — |
+| #49A | ✅ closed — within #49. CLI rename + identifier slice. | — | landed | — |
+| #49B | ✅ closed — within #49. URL resolver allow-list documented in `cli/resolve.cpp` comment. | — | landed | — |
+| #49C | ✅ closed — within #49. README / TODO / CLAUDE / SESSION_DIGEST prose neutralised. CHANGELOG left as historical record. | — | landed | — |
 | ~~#50~~ | Pick + apply a license — **moved to Group VII (optional / deferred)**. Maintainer's call; recommendation on file is Apache 2.0 (patent grant covers ML/transformer IP, all upstream model deps already Apache/MIT, monetisation works via dual-licensing + hosted SaaS + premium weights). Filed at #50 originally; no longer blocks #60 in the ordering — but #60 *publish* must wait until a license is chosen. | optional | — | — |
 
 ### Group II — CLI / API surface (depends on Group I)
@@ -237,7 +237,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #51G | `--export-onnx-after-train` (auto-export best.pt at end of train) | — | within #51 | — |
 | #51H | `--device` accepting `cpu`, `cuda:N`, `cuda:0,1,…`, `mps`, `auto` | — | within #51 | — |
 | #51I | Clean CLI UX pass — consistent help text, examples, error messages, exit codes | — | within #51 | — |
-| #52  | First-class C++ API surface (Ultralytics-Python-like ergonomics, no Python) | high | 2 sessions | depends on #46 (modular base) |
+| #52  | First-class C++ API surface (Python-style chainable ergonomics, no Python at runtime) | high | 2 sessions | depends on #46 (modular base) |
 | #52A | `yolocpp::YOLO("model.pt").train(...)/.val()/.predict()/.export_(...)` chainable, header-only entry point | — | within #52 | — |
 | #52B | Public header + usage-example snippets in `examples/` | — | within #52 | — |
 | #52C | (deferred) optional pybind11 wrapper for users who want Python bindings on top — strictly **off** the runtime path | — | within #52 | — |
@@ -352,7 +352,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 - ✅ Paper §3.1 dual-head consistent assignment training (landed in 0.22.0).
 
 ### yolo12 / yolo13
-- ⏳ Task heads (segment / pose / obb / classify) — neither Ultralytics nor iMoonLab publishes task weights upstream. **Planned future session:** train our own on COCO using the existing templated `Trainer`. v12 = 5 scales × 4 tasks = 20 runs; v13 = 4 scales × 4 tasks = 16 runs. v12 task scaffolding exists in `src/models/yolo12_tasks.cpp`; v13 task module declarations not yet written.
+- ⏳ Task heads (segment / pose / obb / classify) — neither the upstream maintainer nor iMoonLab publishes task weights upstream. **Planned future session:** train our own on COCO using the existing templated `Trainer`. v12 = 5 scales × 4 tasks = 20 runs; v13 = 4 scales × 4 tasks = 16 runs. v12 task scaffolding exists in `src/models/yolo12_tasks.cpp`; v13 task module declarations not yet written.
 
 ### RT-DETR
 - 🟡 Architecture probed (Phase 4 — transformers). Header / source files exist; `mode=predict` returns a clear "not implemented yet" error pointing at the design plan.

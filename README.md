@@ -75,7 +75,7 @@ session. Highlights of the next-batch roadmap (tasks #46..#63, filed
   `--source` covering image/video/dir/URL/webcam, `--seed`,
   `yolocpp download <dataset>`, unified `export precision=` switch,
   auto-export ONNX after train, `--device` covering cpu/cuda/mps,
-  Ultralytics-Python-like `yolocpp::YOLO(...)` chainable C++ API.
+  Python-style chainable `yolocpp::YOLO(...)` C++ API.
 - **Group III (verification):** cross-backend `.pt`/`.onnx`/`.engine`
   parity assert; mAP small/medium/large breakdown.
 - **Group IV (features):** SAHI + tracker family
@@ -101,24 +101,24 @@ The codebase covers **only** these twelve YOLO versions and uses the
 single canonical filename / identifier convention `yolo<N>` everywhere
 (`yolo3`, `yolo4`, `yolo5`, `yolo6`, `yolo7`, `yolo8`, `yolo9`, `yolo10`,
 `yolo11`, `yolo12`, `yolo13`, `yolo26` — **no `v`**). When fetching legacy
-upstream Ultralytics weights for v3..v10, the resolver transparently maps
+upstream weights for v3..v10, the resolver transparently maps
 the canonical name back to the `yolov<N>...pt` URL. Versions outside this
 set (v1, v2, anything between v13 and v26) are intentionally not supported.
 
 | version | year | provenance | family / changes | status |
 |---------|------|------------|------------------|--------|
-| **yolo3**  | 2018 | Redmon & Farhadi (official Darknet)        | Darknet-53 backbone; ships in two head forms — original anchor-based (deferred) and Ultralytics' anchor-free `yolov3u` (v8-style DFL head, used here) | ✅ **predict / val / train / ONNX+TRT export (yolov3u)** — converted on first use (fp16 → fp32). 103M params; 7 dets on `bus.jpg`, top 0.94. v3 train via `TrainerT<Yolo3>` reuses `V8DetectionLoss`. v3 ONNX (415 MB) + TRT FP32 (483 MB) match C++ predict's 7-dets baseline exactly. |
+| **yolo3**  | 2018 | Redmon & Farhadi (official Darknet)        | Darknet-53 backbone; ships in two head forms — original anchor-based (deferred) and the upstream anchor-free `yolov3u` (v8-style DFL head, used here) | ✅ **predict / val / train / ONNX+TRT export (yolov3u)** — converted on first use (fp16 → fp32). 103M params; 7 dets on `bus.jpg`, top 0.94. v3 train via `TrainerT<Yolo3>` reuses `V8DetectionLoss`. v3 ONNX (415 MB) + TRT FP32 (483 MB) match C++ predict's 7-dets baseline exactly. |
 | **yolo4**  | 2020 | Bochkovskiy et al. (official Darknet)      | CSPDarknet-53 + SPP + PANet; Mish activations; v3-style anchor head | ✅ **predict / val / train / ONNX+TRT export** — Darknet `yolov4.weights` converted to our `yolo4.pt` on first use; default `imgsz=608` (anchor calibration). 6 dets on `bus.jpg`. v4 train via `V7DetectionLoss` (anchor-based with v4 scale_xy bias-fix + `exp()` wh decode). v4 ONNX (257 MB) + TRT FP32 (259 MB) match C++ baseline. |
-| **yolo5**  | 2020 | Ultralytics (official)                     | CSPNet + C3 blocks, originally anchor-based; the modern `*u.pt` files use the v8 anchor-free Detect head | ✅ end-to-end (predict / train / val / ONNX + TRT export) for all 5 scales via `yolo5*u.pt` |
+| **yolo5**  | 2020 | upstream (official)                        | CSPNet + C3 blocks, originally anchor-based; the modern `*u.pt` files use the v8 anchor-free Detect head | ✅ end-to-end (predict / train / val / ONNX + TRT export) for all 5 scales via `yolo5*u.pt` |
 | **yolo6**  | 2022 | Meituan (official open-source)             | EfficientRep backbone (RepBlock for n/s, BepC3 with BottleRep for m/l) + RepBiFPANNeck + CSPSPPF (n/s) / SimSPPF (m/l) + EffiDeHead. l uses SiLU. Plus MBLA variants (s/m/l/x_mbla) and P6 variants (n6/s6/m6/l6) | ✅ **predict + val + train + ONNX/TRT export for all 12 published variants** (n/s/m/l + 4×_mbla + n6/s6/m6/l6). m/l use BepC3 + DFL; MBLA uses MBLABlock (multi-branch BottleRep3); P6 uses the 6-stage backbone + 4-level head at imgsz=1280. **Train via `V6DetectionLoss`** (VFL + SIoU + TAL); finetune mAP@0.5:0.95=0.74 on coco8. bus.jpg TRT FP32 returns: P5 n/s/m/l = 4/5/5/6, MBLA s/m/l/x = 6/6/6/5, P6 n6/s6/m6/l6 = 5/6/5/8 dets — all matching libtorch. |
 | **yolo7**  | 2022 | Wang, Bochkovskiy & Liao (academic)        | ELAN backbone + ELAN-W neck + MP/DownC downsamples + SPPCSPC + (3-level IDetect for base/tiny/x; 4-level IDetect + ReOrg input for w6/e6/d6/e6e). e6e adds E-ELAN parallel ELAN sub-blocks summed via Yolo7Shortcut | ✅ **predict + val for all 7 variants**, **train + ONNX+TRT export** for the IDetect anchor-decode form. v7 train via `V7DetectionLoss` (scale_xy=2.0 + `(sigmoid*2)²` wh decode); base finetune mAP@0.5:0.95=0.72 on coco8. v7 ONNX walks the per-scale yaml via the public `yolo7_yaml_for(scale)` accessor. |
-| **yolo8**  | 2023 | Ultralytics (official)                     | CSP + C2f backbone, anchor-free DFL Detect, TAL assigner | ✅ **full** — train / val / predict / export across 5 scales × 5 tasks (detect / segment / classify / pose / OBB) |
+| **yolo8**  | 2023 | upstream (official)                        | CSP + C2f backbone, anchor-free DFL Detect, TAL assigner | ✅ **full** — train / val / predict / export across 5 scales × 5 tasks (detect / segment / classify / pose / OBB) |
 | **yolo9**  | 2024 | Wang, Yeh & Liao (academic)                | GELAN backbone (RepNCSPELAN4 + ADown/AConv + SPPELAN + ELAN1) + v8-style anchor-free Detect head; PGI auxiliary branch dropped at deploy. e adds CBLinear/CBFuse two-pass backbone | ✅ **predict + val + train + ONNX/TRT export for all 5 scales (t / s / m / c / e)**. e ONNX (added 0.20.0) emits the 43-layer two-pass graph: a primary backbone with 5 CBLinear taps, a secondary backbone that re-ingests the input image and pulls CBLinear branches via CBFuse (`Slice` + `Resize(mode=nearest)` + `Add`) at each downsample, plus the standard GELAN head. v9{c,e} TRT FP32 returns 5 dets on bus.jpg matching libtorch. PGI auxiliary branch is intentionally not wired (training-only upstream). |
-| **yolo10** | 2024 | Tsinghua MIG (academic, Ultralytics-hosted)| SCDown + C2f + C2fCIB + SPPF + PSA backbone; v10Detect (one2one head used at deploy → effectively NMS-free) | ✅ **predict + val + train + ONNX+TRT export for all 6 scales (n / s / m / b / l / x)**. Single-head training uses the deploy one2one head with `V8DetectionLoss`; paper §3.1 dual-head consistent assignment (added 0.22.0) trains a parallel one2many head (legacy=true cv3) with `V10DualLoss` = `V8DetectionLoss(o2m, topk=10)` + `V8DetectionLoss(o2o, topk=1)` — enable via `dual_head=true`. TRT FP32 disables TF32 per-version (the RepVGGDW 7×7 dwconv stack accumulates enough TF32 mantissa loss to saturate cls); after the fix every scale matches ORT (5 dets on bus.jpg, top conf 0.94–0.97). |
-| **yolo11** | 2024 | **Ultralytics (official)**                 | Refined CSP: C3k2 (kernel-tunable C3) + C2PSA (position-sensitive attention); v11 Detect head with depthwise-separable cv3 (DWConv→Conv) | ✅ **full** — train / val / predict / ONNX + TRT export across 5 scales × 5 tasks. Forward bit-exact vs Ultralytics Python through layer 22 (parity harness verified). Full-COCO val mAP@0.5:0.95 within 0.05% of Ultralytics' own `m.val(rect=False)` on n/s. |
-| **yolo12** | 2025 | Tian et al., Ultralytics-hosted            | Attention-centric: A2C2f (Area-Attention C2f) with windowed global attention, gamma-gated outer residual at l/x | ✅ **detect end-to-end** — train / val / predict / ONNX + TRT export across all 5 scales (n/s/m/l/x). Forward parity-clean (5/5/5/6/5 detections matching Python on bus.jpg). ONNX max\|Δ\| ≤ 1.8e-7 vs Python through onnxruntime. Task heads (segment / pose / obb / classify) ⏳ **planned future session** — Ultralytics ships only detect weights for v12, so we'll train our own task heads on COCO. |
+| **yolo10** | 2024 | Tsinghua MIG (academic, upstream-hosted)   | SCDown + C2f + C2fCIB + SPPF + PSA backbone; v10Detect (one2one head used at deploy → effectively NMS-free) | ✅ **predict + val + train + ONNX+TRT export for all 6 scales (n / s / m / b / l / x)**. Single-head training uses the deploy one2one head with `V8DetectionLoss`; paper §3.1 dual-head consistent assignment (added 0.22.0) trains a parallel one2many head (legacy=true cv3) with `V10DualLoss` = `V8DetectionLoss(o2m, topk=10)` + `V8DetectionLoss(o2o, topk=1)` — enable via `dual_head=true`. TRT FP32 disables TF32 per-version (the RepVGGDW 7×7 dwconv stack accumulates enough TF32 mantissa loss to saturate cls); after the fix every scale matches ORT (5 dets on bus.jpg, top conf 0.94–0.97). |
+| **yolo11** | 2024 | **upstream (official)**                    | Refined CSP: C3k2 (kernel-tunable C3) + C2PSA (position-sensitive attention); v11 Detect head with depthwise-separable cv3 (DWConv→Conv) | ✅ **full** — train / val / predict / ONNX + TRT export across 5 scales × 5 tasks. Forward bit-exact vs upstream Python through layer 22 (parity harness verified). Full-COCO val mAP@0.5:0.95 within 0.05% of upstream's own `m.val(rect=False)` on n/s. |
+| **yolo12** | 2025 | Tian et al., upstream-hosted               | Attention-centric: A2C2f (Area-Attention C2f) with windowed global attention, gamma-gated outer residual at l/x | ✅ **detect end-to-end** — train / val / predict / ONNX + TRT export across all 5 scales (n/s/m/l/x). Forward parity-clean (5/5/5/6/5 detections matching Python on bus.jpg). ONNX max\|Δ\| ≤ 1.8e-7 vs Python through onnxruntime. Task heads (segment / pose / obb / classify) ⏳ **planned future session** — upstream ships only detect weights for v12, so we'll train our own task heads on COCO. |
 | **yolo13** | 2025 | Lei et al. (iMoonLab fork)                 | HyperACE (hypergraph adaptive correlation enhancement) + FullPAD distribution + DSConv depthwise-separable variants + V13AAttn (separate qk/v convs, k=5 pe) | ✅ **detect end-to-end** — train / val / predict / ONNX + TRT export across n/s/l/x (iMoonLab does not ship `m`). Forward cls-channel max\|Δ\| ≤ 7.6e-10 vs iMoonLab Python on all 4 scales. ONNX max\|Δ\| ≤ 1.8e-7. Task heads ⏳ **planned future session** — iMoonLab ships only detect weights, so we'll train our own task heads on COCO. |
-| **yolo26** | 2025 | **Ultralytics (official, preview)**        | DFL-free Detect head, end-to-end NMS-free inference, ProgLoss + STAL assigner — edge/mobile-first | ✅ **full** — train / val / predict / ONNX + TRT export across 5 scales × 5 tasks |
+| **yolo26** | 2025 | **upstream (official, preview)**           | DFL-free Detect head, end-to-end NMS-free inference, ProgLoss + STAL assigner — edge/mobile-first | ✅ **full** — train / val / predict / ONNX + TRT export across 5 scales × 5 tasks |
 | RT-DETR    | 2023 | Baidu (official)                           | HGNetv2 + AIFI + deformable-attention decoder; transformer-based, NMS-free | 🟡 architecture probed (Phase 4 — transformers) |
 
 Stub status (🟡) means the header / source files exist with the right
@@ -191,7 +191,7 @@ The test suite covers every layer of the stack:
 Two argument styles, both supported:
 
 ```
-# Ultralytics-style (canonical)
+# kv-style (canonical, drop-in for upstream tooling)
 yolocpp task=detect mode=train   model=yolo8n.pt data=path/to/data.yaml epochs=100
 yolocpp task=detect mode=val     model=yolo8n.pt data=path/to/data.yaml
 yolocpp task=detect mode=predict model=yolo8n.pt source=bus.jpg
@@ -274,7 +274,7 @@ yolocpp/
   models/yolo8         Conv → C2f → SPPF → Detect (DFL)
                         scale variants n/s/m/l/x
   serialization/
-    pt_loader           Reads Ultralytics .pt zip + clean-room pickle parser
+    pt_loader           Reads upstream `.pt` zip + clean-room pickle parser
                         → state_dict {dotted_name → torch::Tensor}
   inference/
     letterbox           letterbox + image_to_tensor + scale_boxes
@@ -298,7 +298,7 @@ yolocpp/
   parser handles every opcode produced by `torch.save` and treats unknown
   GLOBALs as opaque object stubs while still extracting the underlying
   tensor data.
-- **Modules are constructed in the same order as Ultralytics' yaml**, so
+- **Modules are constructed in the same order as the upstream yaml**, so
   `named_parameters()` iteration order matches the checkpoint exactly.
 - **`-Wl,--disable-new-dtags`** so `libnvinfer.so`'s `dlopen` of its
   sm_120 resource library finds it via the executable's rpath. See CLAUDE.md.
@@ -344,7 +344,7 @@ output matches libtorch detections within 30 px box-center tolerance and
 The full deferred / pending list lives in **[TODO.md](TODO.md)**. Highlights:
 
 - **v12 / v13 task heads (segment / pose / obb / classify)** — neither
-  Ultralytics nor iMoonLab publishes task weights upstream (only detect
+  upstream nor iMoonLab publishes task weights upstream (only detect
   ships). Scaffolding exists in `src/models/yolo12_tasks.cpp`; we'll
   train our own task heads on COCO under task #60 (publish-weights
   initiative).

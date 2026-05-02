@@ -145,7 +145,7 @@ preemptively bump.
 
 ## Project goal
 
-A pure-C++ replacement for Ultralytics. **No Python at runtime.**
+A pure-C++ replacement for the upstream Python toolkit. **No Python at runtime.**
 LibTorch for training/eval, TensorRT for deployment, OpenCV for I/O.
 
 ### Supported YOLO versions (closed set)
@@ -228,9 +228,9 @@ These bit one or more cells when violated; they're already wired but
 preserve them through any forward/converter changes.
 
 - **BN epsilon**:
-  - Ultralytics yaml-built models (v8/v9/v10/v11/v12/v13/v26 detect /
+  - Upstream yaml-built models (v8/v9/v10/v11/v12/v13/v26 detect /
     seg / pose / obb): `BatchNorm2d.eps = 1e-3`.
-  - Ultralytics classify (`*-cls.pt`): PyTorch default `1e-5`.
+  - Upstream classify (`*-cls.pt`): PyTorch default `1e-5`.
     Threaded via the thread-local `BnEpsScope` in `yolo8.cpp`; pushed
     by each `Yolo*Classify` ctor.
   - Meituan v6 (every variant): saved `.pt` files have BN `eps=1e-3`
@@ -254,7 +254,7 @@ preserve them through any forward/converter changes.
   returns `[B, 4+nc, A]` xyxy + sigmoided cls — drop-in for
   `inference::nms`. Holds across v3/v5/v8/v9/v10/v11/v12/v13/v26
   (anchor-free) and v4/v7 (anchor-based, with version-specific decode).
-- **v11/v12/v13 m+l+x scale override**: Ultralytics' `parse_model`
+- **v11/v12/v13 m+l+x scale override**: the upstream `parse_model`
   forces `c3k=True` (or v12 `residual=True/mlp_ratio=1.2`, or v13
   `dsc3k=True`) at width≥1.0 regardless of YAML. Replicated in each
   v11/v12/v13 yaml-walker.
@@ -266,7 +266,7 @@ reuse:
 
 - `DWConvImpl`, `DWConvBlockImpl` (v11) — non-templated forward so
   Sequential can hold a Sequential without breaking AnyModule. Child
-  names `"0"`/`"1"` match Ultralytics' state-dict layout.
+  names `"0"`/`"1"` match the upstream state-dict layout.
 - `DetectImpl::legacy` flag: `true` for v3/v5/v8/v9 (cv3 = Conv → Conv
   → Conv2d), `false` for v11+ (cv3 = DWConvBlock×2 → Conv2d).
 - `infer_model_info` (in `cli/model_info.cpp`) disambiguates v8l vs
@@ -401,7 +401,7 @@ evaluation.
 ## Architecture commitments
 
 Directory layout under `src/` and `include/yolocpp/` mirrors
-Ultralytics: `models/`, `losses/`, `datasets/`, `engine/` (training
+the upstream Python layout: `models/`, `losses/`, `datasets/`, `engine/` (training
 loop), `serialization/` (ONNX + TRT + .pt converters), `inference/`
 (predictor + NMS + letterbox + TRT runtime), `core/` (device/version
 utility), `cli/` (CLI11 + kv-style entry).
@@ -433,7 +433,7 @@ extracted tree.
 
 ## Parity validation
 
-Numerical parity against Ultralytics is a hard requirement before any
+Numerical parity against the upstream Python forward is a hard requirement before any
 model ships. Reference dumps come from a one-off Python tool kept
 **outside the build** (dev-only, not in the runtime path) — uncommitted
 venv at `/tmp/yolocpp_parity/.venv`, dumps under
