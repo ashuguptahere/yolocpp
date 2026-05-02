@@ -88,7 +88,7 @@ void export_yolo13_onnx(models::Yolo13Detect& model,
                          const std::string&    path,
                          const OnnxExportConfig& cfg = {});
 
-// Export the given YOLO3 (Ultralytics yolov3u — anchor-free DFL) model.
+// Export the given YOLO3 (yolov3u — anchor-free DFL) model.
 // Same output contract: [N, 4 + nc, A]. Walker emits Conv + Bottleneck +
 // Upsample + Concat per the v3 yaml (29 layers); reuses emit_detect for
 // the legacy=true Detect head (reg_max=16).
@@ -96,7 +96,7 @@ void export_yolo3_onnx(models::Yolo3& model,
                        const std::string&    path,
                        const OnnxExportConfig& cfg = {});
 
-// Export the given YOLO5 (Ultralytics anchor-free `*u.pt`) model. Same
+// Export the given YOLO5 (anchor-free `*u.pt`) model. Same
 // output contract as export_yolo8_onnx — [N, 4 + nc, A] xyxy + sigmoided
 // cls. Architecture differs from v8 in two structural pieces handled
 // inside the emitter: a 6×6 stride-2 Conv stem at layer 0 and C3 blocks

@@ -1,6 +1,6 @@
 #pragma once
 //
-// Ultralytics / THU-MIG YOLOv10 `.pt` → our `.pt` converter.
+// THU-MIG YOLOv10 `.pt` → our `.pt` converter (consumes the upstream form).
 //
 // Two transformations:
 // 1. Drop the one2many `cv2`/`cv3` keys at `model.<head_idx>.cv2.*` /

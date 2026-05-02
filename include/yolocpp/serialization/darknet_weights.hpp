@@ -14,7 +14,7 @@
 // registered children visits conv blocks in the same order Darknet wrote
 // them. We walk the model, pull bytes per block, fill PyTorch tensors,
 // then write a state-dict via save_state_dict() that the existing
-// pt_loader can read back like any other Ultralytics weight file.
+// pt_loader can read back like any other upstream-format weight file.
 //
 
 #include <string>

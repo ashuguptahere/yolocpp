@@ -142,7 +142,7 @@ void render_confusion_matrix(const std::vector<std::vector<int>>& m,
   int max_v = 1;
   for (auto& row : m) for (int v : row) max_v = std::max(max_v, v);
 
-  // Cell color: per-row normalized (Ultralytics-style).
+  // Cell color: per-row normalized (upstream-style).
   for (int r = 0; r < n; ++r) {
     int row_sum = 0;
     for (int c = 0; c < n; ++c) row_sum += m[r][c];

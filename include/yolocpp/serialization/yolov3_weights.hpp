@@ -1,8 +1,8 @@
 #pragma once
 //
-// Ultralytics yolov3u.pt → our yolo3.pt converter.
+// yolov3u.pt → our yolo3.pt converter (consumes the upstream form).
 //
-// No fusion needed (Ultralytics' v3 deploy form has no RepConv branches).
+// No fusion needed (the v3 deploy form has no RepConv branches).
 // Just casts fp16 → fp32 and drops `num_batches_tracked` for a uniform
 // round-trip through our pt_save / pt_loader.
 //

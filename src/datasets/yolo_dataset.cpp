@@ -145,7 +145,7 @@ YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
 
   // Letterbox. `rect=true` (val convention) pads only to a multiple of 32
   // instead of squaring to imgsz×imgsz — fewer dead pixels, matches
-  // Ultralytics' val mAP path.
+  // the upstream val mAP path.
   auto lb = inference::letterbox(bgr, imgsz_,
                                   /*pad_color=*/cv::Scalar(114, 114, 114),
                                   /*scale_up=*/false,

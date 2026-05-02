@@ -54,7 +54,7 @@ DataYaml parse_data_yaml(const std::string& yaml_path) {
 
   // Resolve dataset root with fallback chain:
   //   1) absolute `path:`           — use as-is
-  //   2) <yaml_dir>/<path>          — Ultralytics-style sibling layout
+  //   2) <yaml_dir>/<path>          — upstream sibling layout
   //   3) <yaml_dir>                 — yaml lives inside the dataset
   //   4) <yaml_dir>/../<path>       — yaml in datasets/yamls/, data in datasets/<name>/
   // We pick the first candidate that looks like a YOLO dataset (has either

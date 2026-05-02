@@ -218,7 +218,13 @@ std::string build_data_pkl(
   w.op_mark();
   w.op_short_binunicode("model");
 
-  // Object stub: a class reference + NEWOBJ + BUILD.
+  // Object stub: a class reference + NEWOBJ + BUILD. The class name
+  // emitted here ("ultralytics.nn.tasks.DetectionModel") is a pickle
+  // wire-format token, not a branding statement — downstream tooling
+  // that consumes upstream-format `.pt` files looks for this exact
+  // string. Renaming would break interop with every existing reader,
+  // including our own (pt_loader treats the GLOBAL as opaque and
+  // extracts only the tensor data, but other readers don't).
   w.op_global("ultralytics.nn.tasks", "DetectionModel");
   w.op_empty_tuple();
   w.put_u8(0x81);  // NEWOBJ — calls cls(*args=()) — opcode for our parser

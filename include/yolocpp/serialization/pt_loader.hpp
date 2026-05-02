@@ -1,6 +1,6 @@
 #pragma once
 //
-// Reader for Ultralytics-style .pt checkpoints (Python torch.save output).
+// Reader for upstream-style `.pt` checkpoints (Python torch.save output).
 //
 // torch.save produces a zip archive containing:
 //   <prefix>/data.pkl       — the top-level Python pickle
@@ -36,11 +36,11 @@ struct StateDict {
   std::size_t   size() const { return entries.size(); }
 };
 
-// Loads an Ultralytics .pt and returns the model's state_dict.
+// Loads an upstream-style `.pt` and returns the model's state_dict.
 //
 //   pt_path:  absolute or relative path to the .pt file.
 //   submodel: dotted path inside the checkpoint to the actual nn.Module
-//             (default "model" — Ultralytics stores the model under that key).
+//             (default "model" — upstream stores the model under that key).
 //
 // Throws std::runtime_error on any error.
 StateDict load_state_dict(const std::string& pt_path,

@@ -5,9 +5,10 @@
 // The library is a small wrapper around c10d's ProcessGroupNCCL + TCPStore.
 // It implements the bare minimum needed for synchronous data-parallel training:
 //
-//   • init_from_env()            → rendezvous via env vars (Ultralytics /
-//                                   torchrun convention: RANK, WORLD_SIZE,
-//                                   LOCAL_RANK, MASTER_ADDR, MASTER_PORT)
+//   • init_from_env()            → rendezvous via env vars (the
+//                                   torchrun / upstream convention:
+//                                   RANK, WORLD_SIZE, LOCAL_RANK,
+//                                   MASTER_ADDR, MASTER_PORT)
 //   • broadcast_module()         → copy rank-0 weights to all ranks at start
 //   • all_reduce_grads(model)    → averages gradients across ranks after backward
 //   • barrier(), is_rank0()      → small helpers

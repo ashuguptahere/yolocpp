@@ -2,7 +2,7 @@
 //
 // YOLO-format dataset loader.
 //
-// Filesystem layout (Ultralytics-compatible):
+// Filesystem layout (matches the upstream YOLO dataset convention):
 //   <root>/images/<split>/<id>.jpg
 //   <root>/labels/<split>/<id>.txt
 // where each .txt line is "<cls> <cx> <cy> <w> <h>" with all coords
@@ -36,7 +36,7 @@ struct AugConfig {
   float  hsv_s   = 0.7f;
   float  hsv_v   = 0.4f;
   // If true, letterbox pads only enough to make each side a multiple of
-  // 32 (matches Ultralytics' val rect=True). Image sizes vary per sample;
+  // 32 (matches the upstream val `rect=True`). Image sizes vary per sample;
   // safe for batch_size=1 validation. Off by default for training.
   bool   rect    = false;
 };

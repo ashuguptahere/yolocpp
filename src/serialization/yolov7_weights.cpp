@@ -19,7 +19,7 @@ namespace {
 struct BNStat {
   at::Tensor weight, bias, running_mean, running_var;
   // WongKinYiu's RepConv branches use `nn.BatchNorm2d(c)` → PyTorch
-  // default eps=1e-5. Other v7 ConvBN modules use Ultralytics-style
+  // default eps=1e-5. Other v7 ConvBN modules use upstream-style
   // eps=1e-3 (see the `Conv` module in models/common.py); but those are
   // NOT fused — they're loaded directly with their BN.
   double     eps = 1e-5;

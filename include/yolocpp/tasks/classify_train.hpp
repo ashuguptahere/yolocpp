@@ -2,7 +2,7 @@
 //
 // Train + validate for image classification.
 //
-// Dataset layout (Ultralytics-compatible):
+// Dataset layout (matches the upstream image-folder convention):
 //   <root>/<split>/<class_name>/<img>.jpg
 // Class indices are assigned by sorted-string order of class subdirectories.
 //

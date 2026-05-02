@@ -9,7 +9,7 @@
 //   - Per-iteration logging (box / cls / dfl / total)
 //
 // Saves a checkpoint to <save_dir>/last.pt — note: written via libtorch's
-// Module::save (TorchScript-compatible archive), not Ultralytics' .pt
+// Module::save (TorchScript-compatible archive), not the upstream `.pt`
 // shape. To resume training in this codebase, use load_checkpoint_pt below.
 //
 

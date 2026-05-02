@@ -146,7 +146,7 @@ int convert_yolov4_weights(const std::string& weights_path,
   }
 
   // Snapshot named_parameters + named_buffers into a flat state-dict and
-  // save with the existing Ultralytics-compatible writer. We name the
+  // save with the existing upstream-compatible writer. We name the
   // tensors exactly as libtorch's named_parameters() does, so
   // load_from_state_dict can match by string.
   std::vector<std::pair<std::string, at::Tensor>> entries;

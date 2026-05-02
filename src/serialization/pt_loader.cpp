@@ -1,8 +1,8 @@
-// Clean-room reader for Ultralytics .pt files.
+// Clean-room reader for upstream-style `.pt` files.
 //
 // We deliberately don't use libtorch's torch::jit::Unpickler here — it's
 // designed for TorchScript modules and trips on the BUILD/__setstate__ paths
-// of arbitrary Python classes (e.g. ultralytics' DetectionModel).
+// of arbitrary Python classes (e.g. the upstream `DetectionModel`).
 //
 // The implementation is a permissive Python pickle interpreter that:
 //   • understands every opcode produced by torch.save (protocol 2),

@@ -402,7 +402,7 @@ FusedConv fuse_conv_bn(const at::Tensor& cw,
                        const at::Tensor& brm, const at::Tensor& brv,
                        double eps) {
   // eps must match what the BN was constructed with (read it via
-  // module->bn->options.eps() at the call site). Ultralytics uses 1e-3
+  // module->bn->options.eps() at the call site). Upstream uses 1e-3
   // for detect/seg/pose/obb and 1e-5 for the *cls models — passing the
   // wrong value silently re-introduces the ~3% per-BN scale drift bug
   // we fixed at the libtorch level.
@@ -1357,7 +1357,7 @@ std::string emit_kpt_decode(GraphBuilder& g, const std::string& raw,
   auto str_init = g.add_init_float(prefix + ".kpt.strides",
       str_per_a, {1, 1, 1, (int64_t)total_A});
 
-  // Ultralytics decode in pixel coords: (xy * 2 * stride) + (anchor_pix − 0.5*stride)
+  // Upstream decode in pixel coords: (xy * 2 * stride) + (anchor_pix − 0.5*stride)
   // (anchor_pix = (cell_idx + 0.5) * stride, so this evaluates to
   //  (xy*2 + cell_idx) * stride — matches kpts_decode().
   std::vector<float> two = {2.f};
@@ -1421,7 +1421,7 @@ std::string emit_obb_angle_decode(GraphBuilder& g, const std::string& raw,
 //
 // These mirror emit_detect / emit_detect_v11 / emit_detect_v26 but expect
 // an external `angle_in` tensor [N, A] (pre-decoded to [-π/4, 3π/4]) and
-// apply Ultralytics' rotated decode:
+// apply the upstream rotated decode:
 //   xf = (r - l)/2,  yf = (b - t)/2
 //   cx_feat = xf*cos − yf*sin + anchor_x_feat
 //   cy_feat = xf*sin + yf*cos + anchor_y_feat
@@ -4082,7 +4082,7 @@ void export_yolo3_onnx(models::Yolo3& model,
 
 // ─── YOLO5 emitter ──────────────────────────────────────────────────────
 //
-// yolo5{n,s,m,l,x}u (Ultralytics anchor-free v5 form). Architecture differs
+// yolo5{n,s,m,l,x}u (anchor-free v5 form). Architecture differs
 // from v8 in two structural pieces:
 //   - Layer 0: Conv k=6 s=2 p=2 stem (vs v8's 3×3).
 //   - Backbone uses C3 blocks (cv1 + N×Bottleneck → cat with cv2 → cv3)

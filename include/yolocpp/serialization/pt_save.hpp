@@ -2,7 +2,7 @@
 //
 // Write a state_dict to a .pt file in a layout our pt_loader can read back.
 //
-// The loader expects an Ultralytics-shape archive:
+// The loader expects an upstream-shape archive:
 //   data.pkl unpickles to GenericDict { "model": Object{ ... state ... } }
 // and the model state has _modules/_parameters/_buffers nested OrderedDicts
 // pointing at storage records data/<id>.
@@ -13,7 +13,7 @@
 //   • zip records: data.pkl + data/0..data/N
 //
 // This keeps the round-trip purely C++ and lets `Predictor` and `mode=val`
-// load trainer outputs the same way they load Ultralytics weights.
+// load trainer outputs the same way they load upstream weights.
 //
 
 #include <torch/torch.h>

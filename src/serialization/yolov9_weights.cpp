@@ -18,7 +18,7 @@ namespace {
 
 struct BNStat {
   at::Tensor weight, bias, running_mean, running_var;
-  // Ultralytics' Conv (and the BN inside RepConv's conv1/conv2 sub-Convs)
+  // Upstream's Conv (and the BN inside RepConv's conv1/conv2 sub-Convs)
   // uses eps=1e-3.
   double     eps = 1e-3;
 };
