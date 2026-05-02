@@ -271,7 +271,8 @@ int cmd_train(const std::string& root, const std::string& names_csv,
               const std::string& save_dir,
               const std::string& init_weights,
               int patience = 0,
-              std::vector<std::pair<std::string, std::string>> args_for_yaml = {}) {
+              std::vector<std::pair<std::string, std::string>> args_for_yaml = {},
+              uint64_t seed = 0) {
   auto names = split_csv(names_csv);
   if (names.empty()) names = yolocpp::inference::coco_names();
   int nc = (int)names.size();
@@ -295,6 +296,7 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   cfg.device     = std::move(device);
   cfg.save_dir   = save_dir;
   cfg.patience   = patience;
+  cfg.seed       = seed;
   cfg.args_for_yaml = std::move(args_for_yaml);
 
   // Auto-attach val split for best.pt tracking.
@@ -1120,6 +1122,7 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
     }
     if (task == "detect") {
       int patience = a.get_int("patience", 0);
+      uint64_t kv_seed = static_cast<uint64_t>(a.get_int("seed", 0));
       std::vector<std::pair<std::string, std::string>> yaml_args(
           a.kv().begin(), a.kv().end());
 
@@ -1184,7 +1187,7 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
       }
       return cmd_train(data, names_csv, imgsz, epochs, batch, lr0,
                        device, scale_s, save_dir, weights, patience,
-                       std::move(yaml_args));
+                       std::move(yaml_args), kv_seed);
     }
     if (task == "classify") {
       int sz = (imgsz == 640) ? 224 : imgsz;
@@ -1354,6 +1357,9 @@ int main(int argc, char** argv) {
     int legacy_patience = 0;
     t->add_option("--patience",   legacy_patience,
                   "stop if val mAP@0.5:0.95 doesn't improve for N epochs");
+    uint64_t cli_seed = 0;
+    t->add_option("--seed",       cli_seed,
+                  "deterministic-training seed (0 = non-deterministic)");
 
     auto* v = app.add_subcommand("val", "Validate (mAP)");
     v->add_option("--model,-m,--weights", weights, "weights `.pt` (alias: --weights)")->required();
@@ -1421,7 +1427,7 @@ int main(int argc, char** argv) {
     if (app.got_subcommand("train"))
       return cmd_train(root, names_csv, imgsz, epochs, batch_size, lr0,
                        device, scale_s, save_dir, init_weights,
-                       legacy_patience);
+                       legacy_patience, /*args_for_yaml=*/{}, cli_seed);
     if (app.got_subcommand("export"))
       return cmd_export(weights, export_fmt, out, imgsz, scale_s, nc,
                         export_input_name, export_fp16);

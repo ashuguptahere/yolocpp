@@ -63,6 +63,21 @@ struct TrainConfig {
   // Early stopping: stop training if best val mAP@0.5:0.95 doesn't improve
   // for `patience` consecutive validation passes. 0 disables.
   int        patience   = 0;
+  // Deterministic-training seed. 0 (default) → trainer uses a
+  // fixed-magic constant for its batch sampler and skips the
+  // torch-level seeding. Non-zero → seed all of:
+  //   - `torch::manual_seed`            (CPU generator)
+  //   - `torch::cuda::manual_seed_all`  (every CUDA device generator)
+  //   - the trainer's batch-sampler `std::mt19937`
+  //   - per-example augmentation RNGs (derived from sampler state)
+  // The seed is also written into `<save_dir>/args.yaml`.
+  // **Caveat:** even with --seed, GPU runs are not bit-deterministic
+  // by default — cuDNN heuristics + atomic adds in some kernels
+  // produce ≤ ~1% per-batch loss noise. The deterministic-algorithm
+  // flag (`torch::globalContext().setDeterministicAlgorithms(true)`)
+  // would close that gap at a ~10–30% throughput cost; tracked for a
+  // future opt-in flag (`--strict-deterministic`).
+  uint64_t   seed       = 0;
   // Free-form (key, value) pairs dumped to <save_dir>/args.yaml at run start
   // for reproducibility — typically the CLI args verbatim.
   std::vector<std::pair<std::string, std::string>> args_for_yaml;

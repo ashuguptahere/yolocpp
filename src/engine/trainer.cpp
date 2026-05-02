@@ -364,7 +364,7 @@ void TrainerT<M>::run() {
     emit("pretrained",  kv_lookup("model").empty() ? "true" : "true");
     emit("optimizer",   "auto");
     emit("verbose",     "true");
-    emit("seed",        "0");
+    emit("seed",        std::to_string(cfg_.seed));
     emit("deterministic","true");
     emit("single_cls",  "false");
     emit("rect",        "false");
@@ -522,7 +522,18 @@ void TrainerT<M>::run() {
   using Traits = LossTraits<M>;
   auto loss = Traits::make(model_->nc);
 
-  std::mt19937 rng(0x9E3779B9u);
+  // Seed every RNG when --seed is non-zero. Order: torch's CPU + CUDA
+  // generators (operator-level), then the trainer's batch-sampler RNG.
+  // Per-example augmentation RNGs are derived inside `train_.get(...)`
+  // from (epoch, idx) folded with this same seed (see sample_batch
+  // below).
+  if (cfg_.seed != 0) {
+    torch::manual_seed(static_cast<int64_t>(cfg_.seed));
+    if (torch::cuda::is_available()) {
+      torch::cuda::manual_seed_all(static_cast<int64_t>(cfg_.seed));
+    }
+  }
+  std::mt19937 rng(cfg_.seed != 0 ? cfg_.seed : 0x9E3779B9u);
   size_t       n      = train_.size();
   int          steps  = std::max<int>(1, (int)(n / cfg_.batch_size));
   int          total_steps   = steps * cfg_.epochs;
