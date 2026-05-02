@@ -30,6 +30,78 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.57.0] — 2026-05-02
+
+### Diagnosed — RF-DETR cls_logits fp32 matmul precision divergence (#65L slice 14)
+
+`tests/test_rfdetr_topk_probe.cpp` isolates the topk + refpoint
+subset comparisons in a standalone binary. Findings:
+
+```
+[probe-A] refpoint_embed[:Q]   max_abs_diff=0       ← BIT-EXACT
+[probe-B] boxes_ts             max_abs_diff=0.86
+[probe-B] topk_idx differences: 8/300  first_diff_at=53
+[probe-B] at 53: cpp_idx=614 py_idx=698
+          score@cpp_idx=-3.91558098793  bits=0xc07a98e1
+          score@py_idx =-3.91560268402  bits=0xc07a993c
+```
+
+The two indices are NOT tied — they have **slightly different
+fp32 cls_logits values** (differ by ~2.2e-5). At sort position 53,
+my code picks the larger score (614) while PyTorch picks the
+smaller (698). Means **PyTorch's `enc_out_class_embed[0]` Linear
+output differs from libtorch's at fp32 precision** despite:
+
+- `out_mem` (the input) matching at 1.2e-4 (within fp32 noise).
+- `enc_out_class_embed.0.weight` bit-exact (loader matches 100%).
+- `enc_out_class_embed.0.bias` bit-exact.
+
+**Root cause**: fp32 matmul accumulation order differs between
+PyTorch's CPU build and libtorch's CPU build. With 256-channel
+dot products accumulating ~256 multiplications per output cell,
+even minor reordering produces ~1e-5 round-off differences. This
+is the same class of issue as the `antialias=True` bicubic kernel
+divergence found in slice 6 — different ATen kernel paths picked
+at runtime by the two PyTorch builds (mkldnn vs eigen vs blas).
+
+### Switch to stable sort regardless
+
+Even though the diff isn't from topk's tie-breaking, switched
+`torch::topk` → `torch::sort(stable=true) + slice` since the
+stable-sort form is more deterministic and matches PyTorch's
+documented behavior on ties.
+
+### Status
+
+8 of 300 topk indices differ (2.7%). Decoder layers compound
+this minor selection diff into larger downstream divergence
+(layer 0 norm3 = 5.33 max diff). Predictions still 0 at
+conf=0.001 — the diff is small but compounds through 3 layers
+of self-attn + cross-attn + FFN.
+
+To close the gap fully, options:
+
+1. **Accept the topk-level divergence** and address the
+   downstream amplification. Train the decoder cross-attn to be
+   robust to small refpoint perturbations (this is what upstream
+   does — group_detr=13 + Hungarian matching trains the model to
+   tolerate tie-broken query selections).
+2. **Force matmul to use a specific path** via
+   `at::globalContext().setUserEnabledMkldnn(false)` / similar.
+3. **Compute cls_logits in fp64** before the cls_l comparison;
+   cast to fp32 only post-topk. Ensures deterministic output
+   ordering at the cost of ~10% slower encoder-output stage.
+
+ctest 42/42 (only pre-existing #64). All 7 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 14 done (root-cause-ed to matmul fp32 precision
+  in cls head). Slice 15 will try option 3 (fp64 in cls head)
+  and measure whether topk_idx becomes bit-exact.
+
+---
+
 ## [0.56.0] — 2026-05-02
 
 ### Diagnosed — RF-DETR encoder-output bit-exact, divergence below top-K (#65L slice 13)

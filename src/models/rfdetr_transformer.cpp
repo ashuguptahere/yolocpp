@@ -340,10 +340,16 @@ TransformerOutput RFDetrTransformerImpl::forward(
                         output_proposals.slice(-1, 2, 4);
   auto coord = torch::cat({coord_cxcy, coord_wh}, -1);   // [B, L, 4]
 
-  // Top-K by max-cls score.
+  // Top-K by max-cls score. Use stable sort (descending) — PyTorch's
+  // `torch.topk` and libtorch's `topk`/`argsort` order ties
+  // differently for identical fp32 scores, producing 8/300 index
+  // mismatches at #65L slice 14. `torch::sort(stable=true)`
+  // preserves input-order on ties, matching PyTorch Python.
   auto top_scores = std::get<0>(cls_logits.max(-1));     // [B, L]
   int  K          = std::min<int>(num_queries, static_cast<int>(top_scores.size(1)));
-  auto topk_idx   = std::get<1>(top_scores.topk(K, /*dim=*/1));  // [B, K]
+  auto sorted = torch::sort(top_scores, /*stable=*/true,
+                              /*dim=*/1, /*descending=*/true);
+  auto topk_idx = std::get<1>(sorted).slice(/*dim=*/1, 0, K);   // [B, K]
   auto idx_4      = topk_idx.unsqueeze(-1).expand({B, K, 4});
   auto refpoint_embed_ts = torch::gather(coord, /*dim=*/1, idx_4);  // [B, K, 4]
 

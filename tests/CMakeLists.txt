@@ -109,6 +109,7 @@ yolocpp_add_test(test_rfdetr_loss     test_rfdetr_loss.cpp)
 yolocpp_add_test(test_rfdetr_decode   test_rfdetr_decode.cpp)
 yolocpp_add_test(test_rfdetr_pt_load  test_rfdetr_pt_load.cpp)
 yolocpp_add_test(test_rfdetr_parity_dump test_rfdetr_parity_dump.cpp)
+yolocpp_add_test(test_rfdetr_topk_probe  test_rfdetr_topk_probe.cpp)
 yolocpp_add_test(test_v13_full      test_v13_full.cpp)
 set_tests_properties(test_v13_full PROPERTIES
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
