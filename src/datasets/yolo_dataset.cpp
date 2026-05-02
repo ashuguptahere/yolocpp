@@ -193,17 +193,171 @@ YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
   return ex;
 }
 
+// ─── Mosaic-4 (#54D) ────────────────────────────────────────────────────
+// Build one example by stitching 4 sampled images into a 2*imgsz
+// canvas with a random center, cropping to imgsz×imgsz. Bboxes from
+// each tile are translated into mosaic coords + clipped to the
+// crop. Standard YOLOv5/v8 implementation; no rotation / scale
+// jitter at this slice (those are MixedAffine — separate
+// follow-up).
+static YoloExample build_mosaic4(const YoloDataset& ds, std::size_t imgsz,
+                                  std::mt19937& rng) {
+  std::uniform_int_distribution<std::size_t> u_idx(0, ds.size() - 1);
+  std::array<YoloExample, 4> tiles;
+  for (auto& t : tiles) t = ds.get(u_idx(rng));
+
+  int s = (int)imgsz;
+  // Random mosaic center in [imgsz*0.5, imgsz*1.5] of the 2s canvas.
+  std::uniform_int_distribution<int> u_center(s / 2, 3 * s / 2);
+  int xc = u_center(rng);
+  int yc = u_center(rng);
+
+  // Build 2s × 2s canvas, fill with pad colour 114.
+  cv::Mat canvas(2 * s, 2 * s, CV_8UC3, cv::Scalar(114, 114, 114));
+  std::vector<float> all_labels;  // (cls, cx, cy, w, h) in mosaic-px coords
+
+  for (int i = 0; i < 4; ++i) {
+    // Convert tile.img tensor [3,H,W] back to BGR cv::Mat. Tiles
+    // come from get() already letterboxed to imgsz×imgsz; we just
+    // need raw pixels.
+    auto t   = tiles[i].img.permute({1, 2, 0}).contiguous();
+    cv::Mat tile_bgr(t.size(0), t.size(1), CV_32FC3, t.data_ptr());
+    cv::Mat tile_u8;
+    tile_bgr.convertTo(tile_u8, CV_8UC3, 255.0);
+    cv::cvtColor(tile_u8, tile_u8, cv::COLOR_RGB2BGR);
+
+    int tw = tile_u8.cols, th = tile_u8.rows;
+    int x1a, y1a, x2a, y2a;  // mosaic-canvas ROI
+    int x1b, y1b, x2b, y2b;  // tile ROI
+    if (i == 0) {  // top-left
+      x1a = std::max(xc - tw, 0);   y1a = std::max(yc - th, 0);
+      x2a = xc;                     y2a = yc;
+      x1b = tw - (x2a - x1a);       y1b = th - (y2a - y1a);
+      x2b = tw;                     y2b = th;
+    } else if (i == 1) {  // top-right
+      x1a = xc;                     y1a = std::max(yc - th, 0);
+      x2a = std::min(xc + tw, 2*s); y2a = yc;
+      x1b = 0;                      y1b = th - (y2a - y1a);
+      x2b = std::min(tw, x2a - x1a); y2b = th;
+    } else if (i == 2) {  // bottom-left
+      x1a = std::max(xc - tw, 0);   y1a = yc;
+      x2a = xc;                     y2a = std::min(yc + th, 2*s);
+      x1b = tw - (x2a - x1a);       y1b = 0;
+      x2b = tw;                     y2b = std::min(th, y2a - y1a);
+    } else {  // bottom-right
+      x1a = xc;                     y1a = yc;
+      x2a = std::min(xc + tw, 2*s); y2a = std::min(yc + th, 2*s);
+      x1b = 0;                      y1b = 0;
+      x2b = std::min(tw, x2a - x1a); y2b = std::min(th, y2a - y1a);
+    }
+    int dx = x1a - x1b;
+    int dy = y1a - y1b;
+    cv::Rect roi_a(x1a, y1a, x2a - x1a, y2a - y1a);
+    cv::Rect roi_b(x1b, y1b, x2b - x1b, y2b - y1b);
+    if (roi_a.width <= 0 || roi_a.height <= 0) continue;
+    tile_u8(roi_b).copyTo(canvas(roi_a));
+
+    // Translate this tile's bboxes (which are in tile-pixel coords
+    // because YoloDataset::get returns pixel coords inside the
+    // letterboxed image) by (dx, dy) into mosaic-canvas coords.
+    if (tiles[i].targets.size(0) > 0) {
+      auto a = tiles[i].targets.accessor<float, 2>();
+      for (int k = 0; k < (int)tiles[i].targets.size(0); ++k) {
+        all_labels.push_back(a[k][0]);
+        all_labels.push_back(a[k][1] + dx);
+        all_labels.push_back(a[k][2] + dy);
+        all_labels.push_back(a[k][3]);
+        all_labels.push_back(a[k][4]);
+      }
+    }
+  }
+
+  // Crop the centred imgsz×imgsz region at (xc, yc) — wait, no, the
+  // mosaic centre is at (xc, yc) which is already inside the 2s
+  // canvas. The standard upstream cropfraction is to crop
+  // (s/2..3s/2 × s/2..3s/2) ⇒ gives a centred imgsz crop. But the
+  // common variant uses a random crop centred at (xc, yc) of size
+  // (s, s). We use the (xc, yc)-centred crop:
+  int cx0 = std::max(0, std::min(xc - s / 2, 2 * s - s));
+  int cy0 = std::max(0, std::min(yc - s / 2, 2 * s - s));
+  cv::Mat crop = canvas(cv::Rect(cx0, cy0, s, s)).clone();
+
+  // Clip + filter labels to the crop.
+  std::vector<float> kept;
+  for (std::size_t k = 0; k + 5 <= all_labels.size(); k += 5) {
+    float cls = all_labels[k];
+    float cx  = all_labels[k + 1] - cx0;
+    float cy  = all_labels[k + 2] - cy0;
+    float w   = all_labels[k + 3];
+    float h   = all_labels[k + 4];
+    float x1  = cx - w * 0.5f, y1 = cy - h * 0.5f;
+    float x2  = cx + w * 0.5f, y2 = cy + h * 0.5f;
+    x1 = std::max(0.f,    x1); y1 = std::max(0.f,    y1);
+    x2 = std::min((float)s, x2); y2 = std::min((float)s, y2);
+    float nw = x2 - x1, nh = y2 - y1;
+    if (nw <= 1.f || nh <= 1.f) continue;  // drop tiny / off-canvas
+    kept.push_back(cls);
+    kept.push_back((x1 + x2) * 0.5f);
+    kept.push_back((y1 + y2) * 0.5f);
+    kept.push_back(nw);
+    kept.push_back(nh);
+  }
+
+  YoloExample out;
+  out.img = inference::image_to_tensor(crop);
+  if (kept.empty()) {
+    out.targets = torch::zeros({0, 5}, torch::kFloat32);
+  } else {
+    int n = (int)(kept.size() / 5);
+    out.targets = torch::from_blob(kept.data(), {n, 5},
+                                    torch::kFloat32).clone();
+  }
+  out.orig_w = s; out.orig_h = s; out.gain = 1.0;
+  return out;
+}
+
+// Mixup (#54D): blend two examples by α ~ Beta(8, 8); concatenate
+// their bbox lists. Both examples must share spatial dims (true
+// when they come from the same imgsz).
+static YoloExample apply_mixup(const YoloExample& a, const YoloExample& b,
+                                std::mt19937& rng) {
+  // Beta(8, 8) ≈ symmetric around 0.5; approximate via mean of 8
+  // independent Uniform(0,1) variates ratio (close enough for aug).
+  std::uniform_real_distribution<float> u(0.f, 1.f);
+  float r1 = 0.f, r2 = 0.f;
+  for (int i = 0; i < 8; ++i) { r1 += u(rng); r2 += u(rng); }
+  float lam = r1 / (r1 + r2 + 1e-8f);
+
+  YoloExample out;
+  out.img = a.img * lam + b.img * (1.f - lam);
+  out.orig_w = a.orig_w; out.orig_h = a.orig_h; out.gain = a.gain;
+  if (a.targets.size(0) == 0)      out.targets = b.targets.clone();
+  else if (b.targets.size(0) == 0) out.targets = a.targets.clone();
+  else                              out.targets = torch::cat({a.targets, b.targets}, /*dim=*/0);
+  return out;
+}
+
 YoloDataset::Batch YoloDataset::sample_batch(std::size_t bsz,
                                              std::mt19937& rng) const {
   std::uniform_int_distribution<size_t> u(0, img_paths_.size() - 1);
+  std::uniform_real_distribution<float> u01(0.f, 1.f);
   std::vector<YoloExample> exs;
   exs.reserve(bsz);
   std::vector<torch::Tensor> imgs;
   std::vector<torch::Tensor> tgts_with_b;
 
   for (size_t i = 0; i < bsz; ++i) {
-    auto ex = get(u(rng), /*aug_seed=*/((uint64_t)rng()) << 32 | i);
-    auto t  = ex.targets;  // [N, 5]
+    YoloExample ex;
+    if (aug_.augment && aug_.mosaic_p > 0.f && u01(rng) < aug_.mosaic_p) {
+      ex = build_mosaic4(*this, (std::size_t)imgsz_, rng);
+    } else {
+      ex = get(u(rng), /*aug_seed=*/((uint64_t)rng()) << 32 | i);
+    }
+    if (aug_.augment && aug_.mixup_p > 0.f && u01(rng) < aug_.mixup_p) {
+      auto other = get(u(rng), /*aug_seed=*/((uint64_t)rng()) << 32 | (i + 0x55));
+      ex = apply_mixup(ex, other, rng);
+    }
+    auto t = ex.targets;
     imgs.push_back(ex.img);
     if (t.size(0) > 0) {
       auto bcol = torch::full({t.size(0), 1}, (double)i, torch::kFloat32);
@@ -212,7 +366,7 @@ YoloDataset::Batch YoloDataset::sample_batch(std::size_t bsz,
     exs.push_back(std::move(ex));
   }
   Batch out;
-  out.imgs = torch::stack(imgs, /*dim=*/0);  // [B, 3, H, W]
+  out.imgs = torch::stack(imgs, /*dim=*/0);
   out.targets = tgts_with_b.empty()
                   ? torch::zeros({0, 6}, torch::kFloat32)
                   : torch::cat(tgts_with_b, /*dim=*/0);

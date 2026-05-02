@@ -39,6 +39,16 @@ struct AugConfig {
   // 32 (matches the upstream val `rect=True`). Image sizes vary per sample;
   // safe for batch_size=1 validation. Off by default for training.
   bool   rect    = false;
+  // Mosaic-4 + Mixup probabilities (#54D). Both default off so
+  // existing call sites are unaffected. Mosaic stitches 4 sampled
+  // images into a 2x2 grid + crops to imgsz×imgsz, translating
+  // bboxes; the upstream YOLO recipe enables it for the bulk of
+  // training and disables in the last ~10 epochs ("close_mosaic").
+  // Mixup blends two examples with alpha ~ Beta(8, 8) and
+  // concatenates their bbox lists. mosaic_p is checked first; mixup
+  // is applied to the resulting sample.
+  float  mosaic_p = 0.0f;
+  float  mixup_p  = 0.0f;
 };
 
 struct YoloExample {
