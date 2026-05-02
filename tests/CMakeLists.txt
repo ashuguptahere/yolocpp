@@ -19,6 +19,16 @@ set_target_properties(inspect_pt PROPERTIES
   INSTALL_RPATH "${_yolocpp_rpath}"
 )
 
+# Dev-only video synthesiser used as the fixture for #51C2 manual
+# smokes. Not a ctest.
+add_executable(make_test_video make_test_video.cpp)
+target_link_libraries(make_test_video PRIVATE yolocpp_core)
+target_link_options(make_test_video PRIVATE "LINKER:--disable-new-dtags")
+set_target_properties(make_test_video PROPERTIES
+  BUILD_RPATH   "${_yolocpp_rpath}"
+  INSTALL_RPATH "${_yolocpp_rpath}"
+)
+
 # Per-layer parity comparator. Reads dumps from /tmp/yolocpp_parity/ written
 # by the (uncommitted) Python harness; not a ctest.
 add_executable(parity_compare parity_compare.cpp)

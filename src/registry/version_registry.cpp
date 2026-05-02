@@ -40,6 +40,7 @@
 #include "yolocpp/engine/benchmark_internal.hpp"
 #include "yolocpp/engine/trainer.hpp"
 #include "yolocpp/engine/validator.hpp"
+#include "yolocpp/inference/frame_predictor.hpp"
 #include "yolocpp/inference/nms.hpp"
 #include "yolocpp/inference/predictor.hpp"
 #include "yolocpp/inference/task_predictors.hpp"
@@ -172,6 +173,37 @@ engine::BenchResult run_bench_pt_with(Holder& m,
                                     cfg.warmup_iters, cfg.iters);
 }
 
+// Long-lived frame predictor wrapping any holder. Reuses the
+// `engine::detail::GenericPredictor<Holder>` pipeline (letterbox →
+// forward_eval → NMS → scale_boxes) but holds the model + device
+// across many `predict(frame)` calls.
+template <typename Holder>
+class GenericFramePredictor : public inference::FramePredictor {
+ public:
+  GenericFramePredictor(Holder m, int imgsz, torch::Device dev)
+      : p_(std::move(m), imgsz, dev) {}
+  std::vector<inference::Detection>
+  predict(const cv::Mat& frame, inference::NMSConfig nm) override {
+    return p_.predict(frame, nm);
+  }
+ private:
+  engine::detail::GenericPredictor<Holder> p_;
+};
+
+// Build a `GenericFramePredictor<Holder>` with weights pre-loaded.
+// Each version's `make_frame_predictor` lambda calls this after
+// constructing its concrete holder.
+template <typename Holder>
+std::unique_ptr<inference::FramePredictor>
+make_frame_pred_with(Holder& m, const std::string& weights, int imgsz,
+                     const std::string& device) {
+  auto sd = serialization::load_state_dict(weights);
+  m->load_from_state_dict(sd.entries);
+  auto dev = engine::detail::pick_device(device);
+  return std::make_unique<GenericFramePredictor<Holder>>(std::move(m),
+                                                          imgsz, dev);
+}
+
 // Default imgsz lookups shared by multiple versions.
 int detect_imgsz_default(const std::string& /*scale*/,
                          const std::string& task) {
@@ -221,6 +253,11 @@ VersionAdapter make_v3() {
                       const std::string&) {
     models::Yolo3 m(models::kYolo3, cfg.nc);
     return run_bench_pt_with(m, cfg, img);
+  };
+  a.make_frame_predictor = [](const std::string& weights, const std::string&,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo3 m(models::kYolo3, nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
   };
   return a;
 }
@@ -274,6 +311,11 @@ VersionAdapter make_v4() {
     models::Yolo4 m(cfg.nc);
     return run_bench_pt_with(m, cfg, img);
   };
+  a.make_frame_predictor = [](const std::string& weights, const std::string&,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo4 m(nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
+  };
   return a;
 }
 
@@ -322,6 +364,11 @@ VersionAdapter make_v5() {
                       const std::string& scale) {
     models::Yolo5Detect m(models::yolo5_scale_from_letter(scale), cfg.nc);
     return run_bench_pt_with(m, cfg, img);
+  };
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo5Detect m(models::yolo5_scale_from_letter(scale), nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
   };
   return a;
 }
@@ -382,6 +429,13 @@ VersionAdapter make_v6() {
     models::Yolo6 m(cfg.nc, r.scale, /*reg_max=*/16, /*p6=*/r.p6);
     return run_bench_pt_with(m, cfg, img);
   };
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                              int nc, int imgsz, const std::string& device) {
+    auto r = resolve_v6(scale);
+    int v6_imgsz = (r.p6 && imgsz == 640) ? 1280 : imgsz;
+    models::Yolo6 m(nc, r.scale, /*reg_max=*/16, /*p6=*/r.p6);
+    return make_frame_pred_with(m, weights, v6_imgsz, device);
+  };
   return a;
 }
 
@@ -433,6 +487,11 @@ VersionAdapter make_v7() {
                       const std::string& scale) {
     models::Yolo7 m(models::yolo7_scale_from_letter(scale), cfg.nc);
     return run_bench_pt_with(m, cfg, img);
+  };
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo7 m(models::yolo7_scale_from_letter(scale), nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
   };
   return a;
 }
@@ -527,6 +586,11 @@ VersionAdapter make_v9() {
     models::Yolo9 m(models::yolo9_scale_from_letter(scale), cfg.nc);
     return run_bench_pt_with(m, cfg, img);
   };
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo9 m(models::yolo9_scale_from_letter(scale), nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
+  };
   return a;
 }
 
@@ -574,6 +638,11 @@ VersionAdapter make_v10() {
                       const std::string& scale) {
     models::Yolo10 m(models::yolo10_scale_from_letter(scale), cfg.nc);
     return run_bench_pt_with(m, cfg, img);
+  };
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo10 m(models::yolo10_scale_from_letter(scale), nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
   };
   return a;
 }
@@ -646,6 +715,11 @@ VersionAdapter make_v11() {
     models::Yolo11Detect m(models::yolo11_scale_from_letter(scale), cfg.nc);
     return run_bench_pt_with(m, cfg, img);
   };
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo11Detect m(models::yolo11_scale_from_letter(scale), nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
+  };
   return a;
 }
 
@@ -696,6 +770,11 @@ VersionAdapter make_v12() {
     models::Yolo12Detect m(models::yolo12_scale_from_letter(scale), cfg.nc);
     return run_bench_pt_with(m, cfg, img);
   };
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo12Detect m(models::yolo12_scale_from_letter(scale), nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
+  };
   return a;
 }
 
@@ -744,6 +823,11 @@ VersionAdapter make_v13() {
                       const std::string& scale) {
     models::Yolo13Detect m(models::yolo13_scale_from_letter(scale), cfg.nc);
     return run_bench_pt_with(m, cfg, img);
+  };
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo13Detect m(models::yolo13_scale_from_letter(scale), nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
   };
   return a;
 }
@@ -815,6 +899,11 @@ VersionAdapter make_v26() {
                       const std::string& scale) {
     models::Yolo26Detect m(models::yolo26_scale_from_letter(scale), cfg.nc);
     return run_bench_pt_with(m, cfg, img);
+  };
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                              int nc, int imgsz, const std::string& device) {
+    models::Yolo26Detect m(models::yolo26_scale_from_letter(scale), nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
   };
   return a;
 }

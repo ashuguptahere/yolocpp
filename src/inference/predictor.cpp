@@ -107,16 +107,10 @@ std::vector<Detection> Predictor::predict(const cv::Mat& bgr,
   return result;
 }
 
-std::vector<Detection> Predictor::predict_to_file(
-    const std::string& in_path, const std::string& out_path, NMSConfig conf,
-    const std::vector<std::string>& names) const {
-  cv::Mat img = cv::imread(in_path, cv::IMREAD_COLOR);
-  if (img.empty())
-    throw std::runtime_error("could not read image: " + in_path);
-
-  auto dets = predict(img, conf);
+void draw_detections(cv::Mat& img,
+                     const std::vector<Detection>& dets,
+                     const std::vector<std::string>& names) {
   const auto& nm = names.empty() ? coco_names() : names;
-
   for (const auto& d : dets) {
     cv::Scalar color{
         (double)((d.cls * 41) % 256),
@@ -125,8 +119,9 @@ std::vector<Detection> Predictor::predict_to_file(
     };
     cv::rectangle(img, {(int)d.x1, (int)d.y1}, {(int)d.x2, (int)d.y2},
                   color, 2);
-    std::string label = (d.cls >= 0 && d.cls < (int)nm.size() ? nm[d.cls]
-                                                              : std::to_string(d.cls));
+    std::string label = (d.cls >= 0 && d.cls < (int)nm.size()
+                            ? nm[d.cls]
+                            : std::to_string(d.cls));
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%s %.2f", label.c_str(), d.conf);
     int baseline = 0;
@@ -137,6 +132,17 @@ std::vector<Detection> Predictor::predict_to_file(
     cv::putText(img, buf, {(int)d.x1 + 2, yt - 2},
                 cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
   }
+}
+
+std::vector<Detection> Predictor::predict_to_file(
+    const std::string& in_path, const std::string& out_path, NMSConfig conf,
+    const std::vector<std::string>& names) const {
+  cv::Mat img = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (img.empty())
+    throw std::runtime_error("could not read image: " + in_path);
+
+  auto dets = predict(img, conf);
+  draw_detections(img, dets, names);
   if (!cv::imwrite(out_path, img))
     throw std::runtime_error("could not write image: " + out_path);
   return dets;

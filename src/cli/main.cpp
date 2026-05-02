@@ -16,6 +16,7 @@
 
 #include <CLI11.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/videoio.hpp>
 
 #include <filesystem>
 #include <regex>
@@ -41,6 +42,7 @@
 #include "yolocpp/engine/trainer.hpp"
 #include "yolocpp/engine/validator.hpp"
 #include "yolocpp/inference/predictor.hpp"
+#include "yolocpp/inference/frame_predictor.hpp"
 #include "yolocpp/inference/task_predictors.hpp"
 #include "yolocpp/inference/trt_predictor.hpp"
 #include "yolocpp/models/yolo11.hpp"
@@ -752,23 +754,101 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     if (!fs_scale.empty()) scale_s = fs_scale;
   }
 
-  // Classify the source. Image / Dir / Glob fan out to a list of image
-  // paths and run inference per-image. Video / URL / Webcam are filed
-  // under TODO #51C2 (needs a frame-level adapter hook + VideoCapture
-  // loop) — surface a clear error instead of silently routing through
-  // cv::imread which would fail with an unhelpful "image not found".
+  // Classify the source. Image / Dir / Glob fan out to a per-image
+  // loop. Video / URL / Webcam open `cv::VideoCapture`, run frames
+  // through a long-lived `FramePredictor`, and write annotated frames
+  // via `cv::VideoWriter` (closed in #51C2).
   auto kind = classify_source(source);
   if (kind == SourceKind::Video || kind == SourceKind::Url ||
       kind == SourceKind::Webcam) {
-    std::cerr << "[error] --source='" << source
-              << "' is a "
-              << (kind == SourceKind::Video  ? "video file"
-                : kind == SourceKind::Url    ? "URL stream"
-                                              : "webcam index")
-              << " — frame-level inference not yet wired (TODO #51C2). "
-                 "Workaround: split to frames first (e.g. `ffmpeg -i "
-                 "input.mp4 frames/%06d.jpg`) and pass `--source=frames/`.\n";
-    return 2;
+    if (task != "detect") {
+      std::cerr << "[error] --task=" << task
+                << " not yet wired for video/URL/webcam frame loop "
+                   "(only detect is). Filed as a follow-up to #51C2.\n";
+      return 2;
+    }
+    auto version = version_hint.empty()
+                       ? yolocpp::cli::version_from_filename(weights)
+                       : version_hint;
+    yolocpp::registry::register_all_versions();
+    const auto* adapter =
+        yolocpp::registry::Registry::instance().find(version);
+    std::unique_ptr<yolocpp::inference::FramePredictor> pred;
+    if (adapter && adapter->make_frame_predictor) {
+      pred = adapter->make_frame_predictor(weights, scale_s, nc, imgsz, device);
+    } else {
+      // v8 fallback path: wrap the unified Predictor so we can call
+      // predict(cv::Mat) per-frame without re-loading weights.
+      class V8FramePredictor : public yolocpp::inference::FramePredictor {
+       public:
+        V8FramePredictor(const std::string& w, int sz, std::string dev,
+                          int nc, std::string scale)
+            : p_(w, sz, std::move(dev), nc, parse_scale(scale)) {}
+        std::vector<yolocpp::inference::Detection>
+        predict(const cv::Mat& f, yolocpp::inference::NMSConfig nm) override {
+          return p_.predict(f, nm);
+        }
+       private:
+        yolocpp::inference::Predictor p_;
+      };
+      pred = std::make_unique<V8FramePredictor>(weights, imgsz, device,
+                                                  nc, scale_s);
+    }
+
+    cv::VideoCapture cap;
+    if (kind == SourceKind::Webcam) cap.open(std::stoi(source));
+    else                            cap.open(source);
+    if (!cap.isOpened()) {
+      std::cerr << "[error] could not open source: " << source << "\n";
+      return 2;
+    }
+
+    // Default output: runs/predict/<stem>.mp4. Webcam stems into
+    // `webcam<idx>` since `<source>` is just an integer.
+    std::string out_path;
+    if (!out.empty()) {
+      out_path = out;
+    } else {
+      std::filesystem::create_directories("runs/predict");
+      auto stem = (kind == SourceKind::Webcam)
+                      ? ("webcam" + source)
+                      : std::filesystem::path(source).stem().string();
+      if (stem.empty()) stem = "out";
+      out_path = "runs/predict/" + stem + ".mp4";
+    }
+
+    cv::VideoWriter writer;
+    yolocpp::inference::NMSConfig nm;
+    nm.conf_thresh = conf;
+    nm.iou_thresh  = iou;
+    int n_frames = 0;
+    std::size_t total_dets = 0;
+    cv::Mat frame;
+    while (cap.read(frame) && !frame.empty()) {
+      auto dets = pred->predict(frame, nm);
+      yolocpp::inference::draw_detections(frame, dets);
+      if (!writer.isOpened()) {
+        double fps = cap.get(cv::CAP_PROP_FPS);
+        if (fps <= 1.0 || std::isnan(fps)) fps = 25.0;  // webcams often report 0
+        int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+        if (!writer.open(out_path, fourcc, fps, frame.size())) {
+          std::cerr << "[error] could not open output writer: "
+                    << out_path << "\n";
+          return 2;
+        }
+      }
+      writer.write(frame);
+      ++n_frames;
+      total_dets += dets.size();
+      // Webcams have no natural EOF — cap at a generous frame budget
+      // so a forgotten Ctrl-C doesn't fill the disk. Override with
+      // an explicit `--iters` (unused today; future #51C3).
+      if (kind == SourceKind::Webcam && n_frames >= 600) break;
+    }
+    std::cout << "[predict] (" << version << "/video) " << n_frames
+              << " frames, " << total_dets << " total dets, wrote "
+              << out_path << "\n";
+    return 0;
   }
   if (kind == SourceKind::Unknown) {
     std::cerr << "[error] --source='" << source

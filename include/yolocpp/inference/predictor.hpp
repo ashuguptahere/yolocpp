@@ -69,6 +69,15 @@ class Predictor {
 // 80 standard COCO names (canonical YOLO ordering).
 const std::vector<std::string>& coco_names();
 
+// Render bounding boxes + class/conf labels onto `img` in-place. Each
+// class gets a deterministic colour. `names` is optional — empty
+// means render the integer class index. Used by both image-mode
+// predict (`predict_to_file`) and the video-mode frame loop in the
+// CLI (#51C2).
+void draw_detections(cv::Mat& img,
+                     const std::vector<Detection>& dets,
+                     const std::vector<std::string>& names = {});
+
 // Predict with a YOLO3 (the anchor-free yolov3u variant — Darknet-53
 // backbone + v8-style DFL Detect head). Weights are converted from
 // the upstream `yolov3u.pt` via `convert_yolov3_pt` (fp16 → fp32).

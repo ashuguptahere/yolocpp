@@ -41,6 +41,7 @@ struct OnnxExportConfig;
 }
 namespace yolocpp::inference {
 struct NMSConfig;
+class  FramePredictor;
 }
 namespace yolocpp::datasets {
 class YoloDataset;
@@ -145,6 +146,19 @@ struct VersionAdapter {
                                              const cv::Mat& img,
                                              const std::string& scale)>
       benchmark_pt;
+
+  // Build a long-lived frame predictor (#51C2). Used by the CLI's
+  // video / URL / webcam frame loop — loads weights once, then runs
+  // many frames through `predict(frame, nm)`. Every non-v8 version
+  // wires this; v8 has its own dedicated path via
+  // `inference::Predictor::predict(cv::Mat)`.
+  std::function<std::unique_ptr<yolocpp::inference::FramePredictor>(
+      const std::string& weights,
+      const std::string& scale,
+      int nc,
+      int imgsz,
+      const std::string& device)>
+      make_frame_predictor;
 };
 
 class Registry {
