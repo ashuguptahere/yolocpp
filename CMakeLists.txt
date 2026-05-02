@@ -141,7 +141,9 @@ add_library(yolocpp_core
   src/inference/letterbox.cpp
   src/inference/nms.cpp
   src/inference/predictor.cpp
+  src/datasets/coco_dataset.cpp
   src/datasets/flat_dataset.cpp
+  src/datasets/voc_dataset.cpp
   src/datasets/yolo_dataset.cpp
   src/losses/yolo8_loss.cpp
   src/losses/yolo26_loss.cpp
