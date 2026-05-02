@@ -75,6 +75,57 @@ Yolo8Scale parse_scale(const std::string& s) {
   throw std::runtime_error("unknown YOLO8 scale: " + s);
 }
 
+// Normalise + validate a `--device` spec. Accepted forms:
+//   ""           → leave empty (callers pick CUDA when available, else CPU)
+//   "auto"       → same as ""
+//   "cpu"        → CPU
+//   "cuda"       → first CUDA device
+//   "cuda:N"     → CUDA device N (validated against torch::cuda::device_count())
+//   "cuda:a,b"   → multi-device DDP launch (only the first index is honoured
+//                  by the inference path; trainer's DDP launcher consumes
+//                  the full list)
+//   "mps"        → Apple Metal (returns the literal "mps" — torch CPU
+//                  fallback handles routing on non-Apple platforms with
+//                  a warning)
+// Returns the canonicalised string. Throws on unparseable input or an
+// out-of-range CUDA index.
+std::string normalise_device(std::string d) {
+  // strip whitespace
+  while (!d.empty() && std::isspace((unsigned char)d.front())) d.erase(0, 1);
+  while (!d.empty() && std::isspace((unsigned char)d.back()))  d.pop_back();
+  if (d.empty() || d == "auto") return "";
+  if (d == "cpu" || d == "mps") return d;
+  if (d == "cuda") {
+    if (!torch::cuda::is_available())
+      throw std::runtime_error("--device=cuda requested but CUDA isn't available");
+    return "cuda";
+  }
+  if (d.rfind("cuda:", 0) == 0) {
+    auto idx_str = d.substr(5);
+    if (idx_str.empty()) throw std::runtime_error("--device=cuda: missing device index");
+    if (!torch::cuda::is_available())
+      throw std::runtime_error("--device=" + d + " requested but CUDA isn't available");
+    auto count = torch::cuda::device_count();
+    // Validate every comma-separated index.
+    std::stringstream ss(idx_str);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) {
+      try {
+        int idx = std::stoi(tok);
+        if (idx < 0 || idx >= (int)count)
+          throw std::runtime_error("--device=" + d + ": index " + tok +
+                                    " out of range (have " + std::to_string(count) + ")");
+      } catch (const std::invalid_argument&) {
+        throw std::runtime_error("--device=" + d + ": '" + tok + "' is not an integer");
+      }
+    }
+    return d;
+  }
+  throw std::runtime_error(
+      "--device='" + d +
+      "' not recognised; expected cpu | cuda | cuda:N | cuda:0,1,... | mps | auto");
+}
+
 std::vector<std::string> split_csv(const std::string& s) {
   std::vector<std::string> out;
   std::stringstream ss(s);
@@ -441,6 +492,16 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     out = "runs/predict/" + stem + "_" + task + ".jpg";
   }
 
+  // Auto-resolve scale from the weights filename when the caller
+  // didn't pass --scale. The registry's per-version `predict_to_file`
+  // hooks need a scale letter (`yolo11s.pt` → "s") to construct the
+  // right holder; without this the legacy CLI11 subcommand path errors
+  // with "unknown scale letter ''" on every non-v8 model.
+  if (scale_s.empty()) {
+    auto fs_scale = yolocpp::cli::scale_from_filename(weights);
+    if (!fs_scale.empty()) scale_s = fs_scale;
+  }
+
   if (task == "detect") {
     // .trt engines are version-agnostic — the serialized graph already
     // bakes in the architecture, so any task=detect TRT engine routes
@@ -650,7 +711,7 @@ int dispatch_kv(const yolocpp::cli::Args& a) {
   float  conf    = (float)a.get_double("conf", 0.25);
   float  iou     = (float)a.get_double("iou",  0.45);
   bool   fp16    = a.get_bool ("fp16",   true);
-  std::string device     = a.get_str("device", "");
+  std::string device     = normalise_device(a.get_str("device", ""));
   std::string scale_s    = a.get_str("scale",  "n");
   std::string source     = a.get_str("source", "");
   std::string data       = a.get_str("data",   "");
@@ -1070,71 +1131,89 @@ int main(int argc, char** argv) {
     double lr0   = 0.01;
     float  conf  = 0.25f, iou = 0.45f;
 
-    auto* t = app.add_subcommand("train", "Train a YOLO8 model");
-    t->add_option("--data",    root)->required();
-    t->add_option("--names",   names_csv);
-    t->add_option("--imgsz",   imgsz);
-    t->add_option("--epochs",  epochs);
-    t->add_option("--batch",   batch_size);
-    t->add_option("--lr0",     lr0);
-    t->add_option("--device",  device);
-    t->add_option("--scale",   scale_s);
-    t->add_option("--save",    save_dir);
-    t->add_option("--weights", init_weights);
+    // Every subcommand below registers short + long flags. The
+    // canonical name is `--model` (taking a `.pt` weights path); the
+    // legacy `--weights` form is kept as a CLI11 alias on every
+    // subcommand that accepts it. Short forms follow upstream
+    // convention where unambiguous: -m model, -d data, -s source,
+    // -D device, -e epochs, -b batch, -i imgsz, -o out, -c conf,
+    // -n nc.
+    auto* t = app.add_subcommand("train", "Train a YOLO model");
+    t->add_option("--data,-d",    root, "dataset root (or data.yaml path)")->required();
+    t->add_option("--names",      names_csv, "comma-separated class names");
+    t->add_option("--imgsz,-i",   imgsz, "input image size (default 640)");
+    t->add_option("--epochs,-e",  epochs, "number of epochs");
+    t->add_option("--batch,-b",   batch_size, "batch size");
+    t->add_option("--lr0",        lr0, "initial LR (default 0.01)");
+    t->add_option("--device,-D",  device, "cpu | cuda | cuda:N | cuda:0,1,... | mps | auto");
+    t->add_option("--scale",      scale_s, "model scale letter (n/s/m/l/x; auto from filename)");
+    t->add_option("--save",       save_dir, "output directory under runs/");
+    t->add_option("--model,-m,--weights", init_weights, "init weights `.pt` (alias: --weights)");
     int legacy_patience = 0;
-    t->add_option("--patience", legacy_patience,
+    t->add_option("--patience",   legacy_patience,
                   "stop if val mAP@0.5:0.95 doesn't improve for N epochs");
 
     auto* v = app.add_subcommand("val", "Validate (mAP)");
-    v->add_option("--weights", weights)->required();
-    v->add_option("--data",    root)->required();
-    v->add_option("--names",   names_csv);
-    v->add_option("--imgsz",   imgsz);
-    v->add_option("--device",  device);
-    v->add_option("--scale",   scale_s);
+    v->add_option("--model,-m,--weights", weights, "weights `.pt` (alias: --weights)")->required();
+    v->add_option("--data,-d",    root, "dataset root (or data.yaml path)")->required();
+    v->add_option("--names",      names_csv, "comma-separated class names");
+    v->add_option("--imgsz,-i",   imgsz, "input image size");
+    v->add_option("--device,-D",  device, "cpu | cuda | cuda:N | mps | auto");
+    v->add_option("--scale",      scale_s, "model scale letter (auto from filename)");
 
     auto* p = app.add_subcommand("predict", "Run inference");
-    p->add_option("--weights", weights)->required();
-    p->add_option("--source",  source)->required();
-    p->add_option("--out",     out);
-    p->add_option("--imgsz",   imgsz);
-    p->add_option("--device",  device);
-    p->add_option("--scale",   scale_s);
-    p->add_option("--nc",      nc);
-    p->add_option("--conf",    conf);
-    p->add_option("--iou",     iou);
+    p->add_option("--model,-m,--weights", weights, "weights `.pt` / `.trt` (alias: --weights)")->required();
+    p->add_option("--source,-s",  source, "image, video, dir, glob, URL, or webcam index")->required();
+    p->add_option("--out,-o",     out, "output path (default: runs/predict/<stem>.jpg)");
+    p->add_option("--imgsz,-i",   imgsz, "input image size");
+    p->add_option("--device,-D",  device, "cpu | cuda | cuda:N | mps | auto");
+    p->add_option("--scale",      scale_s, "model scale letter");
+    p->add_option("--nc,-n",      nc, "number of classes (default 80 = COCO)");
+    p->add_option("--conf,-c",    conf, "confidence threshold (default 0.25)");
+    p->add_option("--iou",        iou, "NMS IoU threshold (default 0.45)");
 
     auto* e = app.add_subcommand("export", "Export to ONNX / TRT");
     std::string export_fmt, export_input_name = "images";
     bool   export_fp16 = true;
-    e->add_option("--format",     export_fmt)->required();
-    e->add_option("--weights",    weights)->required();
-    e->add_option("--out",        out);
-    e->add_option("--imgsz",      imgsz);
-    e->add_option("--scale",      scale_s);
-    e->add_option("--nc",         nc);
-    e->add_option("--input-name", export_input_name);
-    e->add_flag  ("--fp16,!--no-fp16", export_fp16);
+    e->add_option("--format,-f",  export_fmt, "onnx | trt")->required();
+    e->add_option("--model,-m,--weights", weights, "weights `.pt` (alias: --weights)")->required();
+    e->add_option("--out,-o",     out, "output path");
+    e->add_option("--imgsz,-i",   imgsz, "input image size");
+    e->add_option("--scale",      scale_s, "model scale letter");
+    e->add_option("--nc,-n",      nc, "number of classes");
+    e->add_option("--input-name", export_input_name, "ONNX graph input tensor name");
+    e->add_flag  ("--fp16,!--no-fp16", export_fp16, "TRT FP16 (default on)");
 
     auto* b = app.add_subcommand("benchmark", "Latency / throughput benchmark");
     std::string cache = "build/bench_cache";
     int warmup = 10, iters = 100;
-    b->add_option("--weights", weights)->required();
-    b->add_option("--source",  source)->required();
-    b->add_option("--imgsz",   imgsz);
-    b->add_option("--warmup",  warmup);
-    b->add_option("--iters",   iters);
-    b->add_option("--cache",   cache);
-    b->add_option("--device",  device);
+    b->add_option("--model,-m,--weights", weights, "weights `.pt` (alias: --weights)")->required();
+    b->add_option("--source,-s",  source, "image / video / URL / webcam index")->required();
+    b->add_option("--imgsz,-i",   imgsz, "input image size");
+    b->add_option("--warmup",     warmup, "warmup iterations");
+    b->add_option("--iters",      iters, "timed iterations");
+    b->add_option("--cache",      cache, "TRT engine cache directory");
+    b->add_option("--device,-D",  device, "cpu | cuda | cuda:N");
 
     auto* i = app.add_subcommand("info", "Build / device info");
     (void)i;
 
     CLI11_PARSE(app, argc, argv);
 
+    // Validate / canonicalise --device once, before any subcommand
+    // dispatch. Throws with a clear message on bad input (caught by
+    // the outer try/catch and reported via stderr + exit 1).
+    device = normalise_device(device);
+
     if (app.got_subcommand("info"))    return cmd_info();
-    if (app.got_subcommand("predict"))
-      return cmd_predict(weights, source, out, imgsz, device, scale_s, nc, conf, iou);
+    if (app.got_subcommand("predict")) {
+      // Route through cmd_predict_task so the registry's per-version
+      // `predict_to_file` hook handles non-v8 models. cmd_predict
+      // (the v8-only Yolo8Detect Predictor path) is reachable as the
+      // fallback inside cmd_predict_task.
+      return cmd_predict_task(/*task=*/"detect", weights, source, out,
+                              imgsz, device, scale_s, nc, conf, iou);
+    }
     if (app.got_subcommand("val"))
       return cmd_val(weights, root, names_csv, imgsz, device, scale_s);
     if (app.got_subcommand("train"))

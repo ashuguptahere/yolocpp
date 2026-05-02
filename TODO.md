@@ -228,14 +228,14 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | # | scope | priority | session-cost estimate | blockers |
 |---|-------|----------|------------------------|----------|
 | #51  | CLI overhaul — clean, intuitive, both long + short forms | high | 2 sessions | depends on #49 (legacy strings) |
-| #51A | Long + short flags everywhere (`--model/-m`, `--data/-d`, `--source/-s`, `--device/-D`, `--epochs/-e`, `--imgsz/-i`, `--batch/-b`, …) | — | within #51 | — |
+| #51A | ✅ closed — every CLI11 subcommand now registers long+short forms: `-m/--model` (alias `--weights`), `-d/--data`, `-s/--source`, `-o/--out`, `-D/--device`, `-i/--imgsz`, `-e/--epochs`, `-b/--batch`, `-n/--nc`, `-c/--conf`, `-f/--format`. Help text now describes every flag. Legacy `--weights` kept as a CLI11 alias on every subcommand. Verified: `yolocpp predict -m data/yolo11s.pt -s data/bus.jpg -D auto` writes 5-dets jpg; `yolocpp benchmark -m ... -s ... -D auto` produces full PT+TRT timing. | — | landed | — |
 | #51B | Legacy kv-style CLI removal (or formal deprecation with one-release grace window) | — | within #51 | — |
 | #51C | `--source` accepts: image file, video file, directory, glob, RTSP/HTTP(S) URL, webcam index, stdin pipe | — | within #51 | — |
 | #51D | `--seed` plumbed through trainer + dataset shuffle + augmentation RNG (deterministic train) | — | within #51 | — |
 | #51E | `yolocpp download <dataset>` subcommand (coco, coco8, voc, imagenet, dota, etc.) | — | within #51 | — |
 | #51F | `yolocpp export format=onnx\|trt precision=fp32\|fp16\|int8\|int4\|nvfp4` unified CLI shape | — | within #51 | — |
 | #51G | `--export-onnx-after-train` (auto-export best.pt at end of train) | — | within #51 | — |
-| #51H | `--device` accepting `cpu`, `cuda:N`, `cuda:0,1,…`, `mps`, `auto` | — | within #51 | — |
+| #51H | ✅ closed — centralised `normalise_device(d)` helper validates `cpu`, `cuda`, `cuda:N`, `cuda:0,1,…`, `mps`, `auto` (empty / `auto` → "" so callers pick CUDA-when-available). Bad indices and unrecognised forms throw with a clear message before any subcommand body runs. Wired into both the kv-style and CLI11 paths. Smoke verified: `--device=cuda:99 → "[error] --device=cuda:99: index 99 out of range (have 1)"`. | — | landed | — |
 | #51I | Clean CLI UX pass — consistent help text, examples, error messages, exit codes | — | within #51 | — |
 | #52  | First-class C++ API surface (Python-style chainable ergonomics, no Python at runtime) | high | 2 sessions | depends on #46 (modular base) |
 | #52A | `yolocpp::YOLO("model.pt").train(...)/.val()/.predict()/.export_(...)` chainable, header-only entry point | — | within #52 | — |
