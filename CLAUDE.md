@@ -450,6 +450,23 @@ in `src/cli/main.cpp`; error messages follow the form
 `[error] --mode=<X> needs --<flag>`. The per-version dispatch within
 each mode goes through the registry (see #46).
 
+**Dataset format dispatch.** `--data` accepts five forms, all funnelled
+through `cli::make_dataset` → `YoloDataset`'s pre-loaded ctor (so
+trainer + validator stay typed on a single dataset class without
+virtual dispatch):
+
+| `--data` value                     | loader        | source                        |
+|------------------------------------|---------------|-------------------------------|
+| `coco/` (`images/<split>` + `labels/<split>`) | `YoloDataset` | existing YOLO layout |
+| `dataset.csv` / `.tsv`             | `FlatDataset` | single-file format with `split` column |
+| `instances.json`                   | `CocoDataset` | COCO 2017 schema |
+| `VOC2012/` (`JPEGImages` + `Annotations` + `ImageSets/Main`) | `VocDataset` | Pascal VOC layout |
+| `data.yaml` / `.yml`               | resolved      | upstream-style yaml; root is the resolved dir |
+
+The dispatcher decides by extension (`.csv` / `.tsv` / `.json` /
+`.yaml`) or by directory layout (`JPEGImages/Annotations` ⇒ VOC, else
+YOLO).
+
 **Task routing.** `--task` defaults to `detect` and accepts `detect |
 classify | segment | pose | obb`. Detect routes through the registry
 for every supported YOLO version; the four non-detect tasks route
