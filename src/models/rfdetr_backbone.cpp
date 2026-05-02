@@ -218,25 +218,31 @@ const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch,
   cfg.num_heads    = backbone_embed / 64;   // 6 for 384, 12 for 768
   cfg.patch_size   = patch;
   cfg.pretrain_grid = pretrain_grid;
-  // Per-variant windowed-attn partitioning + tap blocks (verified
-  // via Python `RFDETR<X>().model.model.backbone[0].encoder.encoder.config`).
+  // Per-variant windowed-attn partitioning + tap blocks. Note:
+  // upstream's `out_features = ['stage2', 'stage5', 'stage8', 'stage11']`
+  // uses 1-indexed stage names where `'stage2'` corresponds to
+  // layer index 1 (0-indexed), since `stage_names = ['stem',
+  // 'stage1', 'stage2', ..., 'stage12']` and `hidden_states[0]` is
+  // the embeddings output. So the Python tap blocks for n/s/m/b
+  // are 0-indexed `[1, 4, 7, 10]`, NOT `[2, 5, 8, 11]`. (Earlier
+  // versions of this code had the off-by-one wrong.)
   if (upstream_id == "nano" || upstream_id == "small" ||
       upstream_id == "medium") {
     cfg.num_windows = 2;
     cfg.window_block_indexes = {0, 1, 3, 4, 6, 7, 9, 10};
-    cfg.tap_blocks = {2, 5, 8, 11};
+    cfg.tap_blocks = {1, 4, 7, 10};
   } else if (upstream_id == "base") {
     cfg.num_windows = 4;
     cfg.window_block_indexes = {0, 1, 3, 4, 6, 7, 9, 10};
-    cfg.tap_blocks = {2, 5, 8, 11};   // upstream `out_features=['stage2','stage5','stage8','stage11']` → 0-indexed
+    cfg.tap_blocks = {1, 4, 7, 10};
   } else if (upstream_id == "large") {
     cfg.num_windows = 2;
     cfg.window_block_indexes = {0, 1, 2, 4, 5, 7, 8, 10, 11};
-    cfg.tap_blocks = {3, 6, 9, 11};   // out_features=stage3,6,9,12 → 0-indexed
+    cfg.tap_blocks = {2, 5, 8, 11};   // out_features=stage3,6,9,12 → 0-indexed = [2,5,8,11]
   } else {
     cfg.num_windows = 2;
     cfg.window_block_indexes = {0, 1, 3, 4, 6, 7, 9, 10};
-    cfg.tap_blocks = {2, 5, 8, 11};
+    cfg.tap_blocks = {1, 4, 7, 10};
   }
   return cfg;
 }

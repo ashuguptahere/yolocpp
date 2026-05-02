@@ -233,13 +233,20 @@ int main() {
                 << "  py_sum="  << py.sum().item<float>() << "\n";
     }
   }
-  // Probe the 4 taps fed to the projector.
+  // Compare per-tap against Python's `proj_input_*`.
   {
-    auto taps = dmodel.forward(inp);  // [B, C, Hg, Wg] × 4 (layernormed + un-windowed)
+    auto taps = dmodel.forward(inp);   // [B, C, Hg, Wg] × 4
     for (size_t i = 0; i < taps.size(); ++i) {
-      std::cout << "[stage] tap" << i << "  shape=" << taps[i].sizes()
-                << "  sum=" << taps[i].sum().item<float>()
-                << "  abs.max=" << taps[i].abs().max().item<float>() << "\n";
+      char name[32]; std::snprintf(name, sizeof(name), "proj_input_%zu", i);
+      auto py = load_dump(d, name);
+      if (py.defined()) {
+        float diff = max_abs_diff(taps[i].to(torch::kFloat).contiguous(),
+                                    py.to(torch::kFloat).contiguous());
+        std::cout << "[stage] tap" << i << "  shape=" << taps[i].sizes()
+                  << "  cpp_sum=" << taps[i].sum().item<float>()
+                  << "  py_sum=" << py.sum().item<float>()
+                  << "  max_abs_diff=" << diff << "\n";
+      }
     }
   }
 

@@ -30,6 +30,62 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.51.0] — 2026-05-02
+
+### Fixed — RF-DETR tap-block off-by-one (#65L slice 8) → backbone+projector bit-exact
+
+**Root cause**: upstream's `out_features = ['stage2', 'stage5',
+'stage8', 'stage11']` uses 1-indexed stage names where `'stage2'`
+corresponds to layer index **1** (0-indexed). This is because
+`stage_names = ['stem', 'stage1', 'stage2', ..., 'stage12']` has
+13 entries — `stem` covers the embeddings output (`hidden_states[0]`)
+and each subsequent stage covers one transformer block. So
+`'stage2'` zips with `hidden_states[2]` which is layer 1 output,
+not layer 2.
+
+The C++ code had `tap_blocks = {2, 5, 8, 11}` — taking the WRONG
+layers. Fixed to `{1, 4, 7, 10}` for nano/small/medium/base, and
+left as `{2, 5, 8, 11}` for large (whose `out_features` is
+`['stage3', 'stage6', 'stage9', 'stage12']`).
+
+### Result
+
+```
+                  BEFORE         AFTER
+tap0   max_abs_diff  20.40   →   3.0e-5
+tap1   max_abs_diff  29.69   →   2.7e-4
+tap2   max_abs_diff  16.92   →   1.0e-4
+tap3   max_abs_diff   6.50   →   4.2e-5
+backbone_feat_0      2.40   →   4.6e-4
+```
+
+**Backbone + projector now bit-exact across all 4 taps and the
+final feature map**, matching upstream within fp32 noise floor
+(~5e-4). Predictions still 0 — the remaining bugs are
+transformer-side (encoder-output + decoder + heads).
+
+### Diagnostic harness
+
+`/tmp/yolocpp_parity/dump_rfdetr_forward.py` now also captures:
+- `proj_input_<i>` — un-windowed taps fed to the projector
+- `proj_c2f_cv1_out / m<j>_out / cv2_out` — projector internals
+- `proj_stage_0_0_out / proj_stage_0_1_out`
+- `dec_layer<i>_out`, `dec_norm_out`, `class_embed_out`,
+  `bbox_embed_last_out`, `transformer_out_<k>` (forward hooks)
+
+`tests/test_rfdetr_parity_dump.cpp` reports per-tap diffs.
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 8 done (tap off-by-one + backbone+projector
+  fully bit-exact). Slice 9 dives into the transformer:
+  enc_output[0] outputs, top-K selection, decoder layer 0
+  self-attn, cross-attn (deformable).
+
+---
+
 ## [0.50.0] — 2026-05-02
 
 ### Fixed — RF-DETR projector ConvX bn=LayerNorm + per-tap layernorm (#65L slice 7)
