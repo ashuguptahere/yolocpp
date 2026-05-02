@@ -30,6 +30,96 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.43.0] — 2026-05-02
+
+### Added — RF-DETR real-arch forward + projector LayerNorm fix (#65F2 partial)
+
+`RFDetrImpl::forward_eval` now routes through the real RF-DETR
+pipeline: backbone+projector → flatten to memory tokens → two-stage
+encoder-output → top-K query selection → iterative-refinement
+decoder → bbox_reparam → xyxy in pixel coords + sigmoided cls
+(YOLO contract).
+
+New forward implementations:
+
+- `MSDeformAttn1L::forward(query, refpts, memory, H, W)` — single-
+  level deformable cross-attention. Computes per-head sampling
+  offsets, applies bbox_reparam-style sample location formula
+  (`ref_xy + offset/n_points × ref_wh × 0.5`), bilinear `grid_sample`
+  on the memory feature map, weighted-sum across points, output
+  projection.
+- `RFDetrDecoderLayer::forward(tgt, query_pos, refpts, memory, H, W)` —
+  post-LN style: self-attn(tgt+query_pos) + residual + LN1 → cross-
+  attn(tgt+query_pos, refpts, memory) + residual + LN2 → ReLU FFN
+  + residual + LN3.
+- `RFDetrDecoder::forward` — generates `query_pos` once via
+  sinusoidal-embed of refpoints + `ref_point_head` MLP
+  (`lite_refpoint_refine=True` mode); loops layers; final LN.
+- `RFDetrTransformer::forward(memory_2d, query_feat_first_group, Q)`
+  — two-stage encoder-output (enc_output[0] + enc_output_norm[0] +
+  cls/bbox heads on memory tokens), `gen_encoder_output_proposals_1l`
+  to produce per-token cxcywh proposals on a regular grid with
+  fixed wh prior, top-K=Q by max-cls-score, decoder forward.
+- Helpers `gen_sineembed_for_position` (4D pos → 4·dim sinusoidal
+  embed) and `gen_encoder_output_proposals_1l` exposed publicly so
+  follow-up parity tests can pin them.
+
+### Fixed — projector uses ChannelLastLN, BN with track_running_stats=False
+
+The upstream RF-DETR projector uses a custom channels-last
+LayerNorm at `stages.<i>.1` (not BatchNorm2d) and
+`track_running_stats=False` BN inside the C2f bottleneck convs
+(per the `get_norm` helper in `projector.py`). This resolves why
+the saved `.pth` files have no `running_mean`/`running_var`/
+`num_batches_tracked` buffers — they don't exist in the upstream
+model. Our projector now matches.
+
+`ChannelLastLN(channels)` — new helper module with `weight`/`bias`
+parameters, permutes NCHW→NHWC for `F::layer_norm` and back.
+Same param shapes `[C]` as BN so weight binding stays at 100%.
+
+### Status
+
+```
+nano:    matched=465  unmatched=0  shape_mismatch=0  missing=163  (100%)
+small:   matched=487  unmatched=0  shape_mismatch=0  missing=193  (100%)
+medium:  matched=509  unmatched=0  shape_mismatch=0  missing=223  (100%)
+base:    matched=487  unmatched=0  shape_mismatch=0  missing=193  (100%)
+large:   matched=499  unmatched=20 shape_mismatch=14 missing=207  (93.6%)
+seg-*:   ~92-94% (pending #65K2 segment head)
+```
+
+`--mode predict -m rf-detr-base.pth -s data/bus.jpg` runs end-to-end
+through the full real architecture without errors and produces a
+YOLO-shaped `[B, 4+nc, Q]` tensor. **Bit-exact numerical parity
+with upstream is NOT yet achieved** — the forward shape contract
+holds, but actual detections at default conf threshold come back
+empty (0 detections at conf=0.05). The remaining mismatch likely
+lives in:
+- Sinusoidal positional embedding interleave order
+- DINOv2 windowed-attention block partitioning (currently runs
+  full self-attn; upstream uses windowed attn on most blocks)
+- Decoder self-attn value tensor (we use v=tgt+pos, upstream
+  v=tgt)
+- Position-embedding interpolation (bicubic edge handling)
+
+These are tracked under #65L (parity smokes) — bit-exact verification
+against `/tmp/yolocpp_parity/.venv` Python reference outputs.
+
+`tests/test_rfdetr_forward.cpp` rewritten to verify the new
+`forward_eval` shape contract (cls in [0,1], finite output, correct
+`[1, 84, num_queries]` shape).
+
+ctest 41/42 (only pre-existing #64).
+
+### Tracked
+
+- TODO #65F2 partial: shape contract + real arch wired; numerical
+  parity remains under #65L. #65C2-large (4-level cross-attn) and
+  #65K2 (segment head) still pending.
+
+---
+
 ## [0.42.0] — 2026-05-02
 
 ### Added — RF-DETR transformer (#65C2 + #65D2)

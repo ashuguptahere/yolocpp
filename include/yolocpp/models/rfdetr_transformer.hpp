@@ -74,11 +74,21 @@ TORCH_MODULE(FusedMHA);
 class MSDeformAttn1LImpl : public torch::nn::Module {
  public:
   MSDeformAttn1LImpl(int hidden, int num_heads, int num_points);
-  // Forward not implemented yet — placeholder for #65F2.
+  // query: [B, Q, C]; reference_points: [B, Q, 4] (cxcywh in [0,1]);
+  // memory: [B, L, C] flattened; spatial_h/w: scalar feature-map dims.
+  torch::Tensor forward(torch::Tensor query,
+                         torch::Tensor reference_points,
+                         torch::Tensor memory,
+                         int spatial_h, int spatial_w);
   torch::nn::Linear sampling_offsets{nullptr};   // [H·L·P·2, hidden]
   torch::nn::Linear attention_weights{nullptr};  // [H·L·P,   hidden]
   torch::nn::Linear value_proj{nullptr};
   torch::nn::Linear output_proj{nullptr};
+ private:
+  int hidden_;
+  int num_heads_;
+  int num_points_;
+  int head_dim_;
 };
 TORCH_MODULE(MSDeformAttn1L);
 
@@ -97,6 +107,10 @@ class RFDetrDecoderLayerImpl : public torch::nn::Module {
  public:
   RFDetrDecoderLayerImpl(int hidden, int sa_nheads, int ca_nheads,
                           int dec_n_points, int ffn_dim);
+  // Post-LN style: tgt → self-attn → cross-attn → FFN with residuals.
+  torch::Tensor forward(torch::Tensor tgt, torch::Tensor query_pos,
+                         torch::Tensor reference_points,
+                         torch::Tensor memory, int spatial_h, int spatial_w);
   FusedMHA             self_attn{nullptr};
   torch::nn::LayerNorm norm1{nullptr};
   MSDeformAttn1L       cross_attn{nullptr};
@@ -111,13 +125,14 @@ class RFDetrDecoderImpl : public torch::nn::Module {
  public:
   RFDetrDecoderImpl(int n_layers, int hidden, int sa_nheads, int ca_nheads,
                      int dec_n_points, int ffn_dim);
+  // tgt: [B, Q, C] initial query feats; refpoints: [B, Q, 4] cxcywh in [0,1].
+  // memory: [B, L, C] flattened single-level feature; spatial_h/w: dims.
+  // Returns last-layer output [B, Q, C] after final LN.
+  torch::Tensor forward(torch::Tensor tgt, torch::Tensor refpoints,
+                         torch::Tensor memory, int spatial_h, int spatial_w);
   torch::nn::ModuleList layers{nullptr};
   torch::nn::LayerNorm  norm{nullptr};
-  // Embeds the 4D refpoints into hidden-dim feature space. Two
-  // Linear layers: input is `2·hidden` (sin/cos sinusoidal embed of
-  // (cx, cy, w, h)) → hidden → hidden. Path:
-  // `transformer.decoder.ref_point_head.layers.{0,1}.{weight,bias}`.
-  RFDetrMLP ref_point_head{nullptr};
+  RFDetrMLP             ref_point_head{nullptr};
 };
 TORCH_MODULE(RFDetrDecoder);
 
@@ -134,22 +149,51 @@ class RFDetrEncOutputImpl : public torch::nn::Module {
 };
 TORCH_MODULE(RFDetrEncOutput);
 
-// Top-level transformer: owns the decoder + the enc-output stack.
-// Acts purely as a parameter container at #65C2 (forward not wired).
+// Output of the transformer at eval time.
+struct TransformerOutput {
+  torch::Tensor decoder_out;   // [B, Q, C] after final LN
+  torch::Tensor refpoints;     // [B, Q, 4] cxcywh in [0,1]
+};
+
 class RFDetrTransformerImpl : public torch::nn::Module {
  public:
   RFDetrTransformerImpl(int hidden, int n_dec_layers, int sa_nheads,
                          int ca_nheads, int dec_n_points, int ffn_dim,
                          int group_detr, int n_classes_with_bg);
+  // Two-stage encoder-output → top-K query selection → iterative
+  // decoder refinement. `memory_2d`: [B, C, Hg, Wg] from projector.
+  // `query_feat_first_group`: [Q, C] pre-sliced learned query feats
+  // (= query_feat[:Q] from the top-level Parameter at eval).
+  // Returns the last-layer query output + the final refined refpoints.
+  TransformerOutput forward(torch::Tensor memory_2d,
+                              torch::Tensor query_feat_first_group,
+                              int num_queries);
   RFDetrDecoder    decoder{nullptr};
-  // Encoder-output siblings — flattened directly under
-  // `transformer.*` (NOT wrapped in a sub-module) to match upstream's
-  // `transformer.enc_output.<k>` paths.
   torch::nn::ModuleList enc_output{nullptr};
   torch::nn::ModuleList enc_output_norm{nullptr};
   torch::nn::ModuleList enc_out_class_embed{nullptr};
   torch::nn::ModuleList enc_out_bbox_embed{nullptr};
+ private:
+  int hidden_;
 };
 TORCH_MODULE(RFDetrTransformer);
+
+// Helpers (also useful for tests).
+//
+// gen_sineembed_for_position(refpoints, dim) — refpoints [B, Q, 4]
+// → [B, Q, 4*2*dim/2] = [B, Q, 4*dim] sinusoidal embedding.
+torch::Tensor gen_sineembed_for_position(const torch::Tensor& pos_tensor,
+                                           int dim);
+
+// Generates the dense per-token bbox proposals + masked memory for
+// the two-stage encoder. Matches upstream's
+// `gen_encoder_output_proposals` for a single feature level with
+// `unsigmoid=False` (bbox_reparam mode).
+struct EncoderProposals {
+  torch::Tensor output_memory;     // [B, L, C]
+  torch::Tensor output_proposals;  // [B, L, 4] cxcywh in [0,1]
+};
+EncoderProposals gen_encoder_output_proposals_1l(const torch::Tensor& memory,
+                                                  int H, int W);
 
 }  // namespace yolocpp::models::rfdetr

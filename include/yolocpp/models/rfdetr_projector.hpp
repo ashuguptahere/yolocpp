@@ -38,7 +38,8 @@
 
 namespace yolocpp::models::rfdetr {
 
-// Conv2d + BatchNorm2d with no conv bias (BN absorbs). Submodules
+// Conv2d + BatchNorm2d (track_running_stats=False, matching upstream's
+// `get_norm` default for `layer_norm=False`) + SiLU. Submodules
 // `conv` and `bn` named to match upstream.
 class ConvBNImpl : public torch::nn::Module {
  public:
@@ -48,6 +49,20 @@ class ConvBNImpl : public torch::nn::Module {
   torch::nn::BatchNorm2d bn{nullptr};
 };
 TORCH_MODULE(ConvBN);
+
+// Channels-last LayerNorm over a 4D NCHW tensor. Matches upstream's
+// custom `LayerNorm` (permute → F.layer_norm → permute back). Used
+// for `projector.stages.<i>.1` and similar.
+class ChannelLastLNImpl : public torch::nn::Module {
+ public:
+  explicit ChannelLastLNImpl(int channels);
+  torch::Tensor forward(torch::Tensor x);
+  torch::Tensor weight;
+  torch::Tensor bias;
+ private:
+  int64_t channels_;
+};
+TORCH_MODULE(ChannelLastLN);
 
 // Bottleneck: two 3×3 ConvBN. No residual (RF-DETR's projector m
 // blocks are "without shortcut" per upstream `Bottleneck(shortcut=False)`).

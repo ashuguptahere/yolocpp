@@ -13,10 +13,30 @@ ConvBNImpl::ConvBNImpl(int in_ch, int out_ch, int kernel, int padding) {
       torch::nn::Conv2d(torch::nn::Conv2dOptions(in_ch, out_ch, kernel)
                             .padding(padding)
                             .bias(false)));
-  bn   = register_module("bn", torch::nn::BatchNorm2d(out_ch));
+  // Upstream uses `track_running_stats=False` (the saved
+  // checkpoints have no running_mean/running_var buffers). At eval,
+  // BN with track_running_stats=False still computes batch statistics
+  // — effectively InstanceNorm-by-channel for B=1.
+  bn = register_module(
+      "bn",
+      torch::nn::BatchNorm2d(
+          torch::nn::BatchNorm2dOptions(out_ch).track_running_stats(false)));
 }
 torch::Tensor ConvBNImpl::forward(torch::Tensor x) {
   return torch::silu(bn->forward(conv->forward(x)));
+}
+
+ChannelLastLNImpl::ChannelLastLNImpl(int channels) : channels_(channels) {
+  weight = register_parameter("weight", torch::ones({channels}));
+  bias   = register_parameter("bias",   torch::zeros({channels}));
+}
+torch::Tensor ChannelLastLNImpl::forward(torch::Tensor x) {
+  // [B, C, H, W] → [B, H, W, C] → LN(C) → [B, C, H, W]
+  x = x.permute({0, 2, 3, 1});
+  x = torch::nn::functional::layer_norm(
+      x, torch::nn::functional::LayerNormFuncOptions({channels_})
+              .weight(weight).bias(bias).eps(1e-5));
+  return x.permute({0, 3, 1, 2});
 }
 
 ProjBottleneckImpl::ProjBottleneckImpl(int channels) {
@@ -65,19 +85,21 @@ ProjectorImpl::ProjectorImpl(int n_stages, int tap_concat_ch, int hidden,
     auto stage_pair = torch::nn::ModuleList();
     int in_ch = (s == 0) ? tap_concat_ch : hidden;
     stage_pair->push_back(ProjStage0(in_ch, hidden, n_bottlenecks));
-    stage_pair->push_back(torch::nn::BatchNorm2d(hidden));
+    // `stages.<i>.1` is upstream's custom channels-last LayerNorm
+    // (NOT BatchNorm2d) — same `[hidden]` weight + bias shape, but
+    // semantics are 1D LN over the channel dim per spatial cell.
+    stage_pair->push_back(ChannelLastLN(hidden));
     stages->push_back(stage_pair);
   }
   register_module("stages", stages);
 }
 
 torch::Tensor ProjectorImpl::forward(const std::vector<torch::Tensor>& taps) {
-  // Concat all taps along the channel dim.
   auto x = torch::cat(taps, /*dim=*/1);
   for (int s = 0; s < static_cast<int>(stages->size()); ++s) {
     auto sp = stages[s]->as<torch::nn::ModuleList>();
     x = (*sp)[0]->as<ProjStage0Impl>()->forward(x);
-    x = (*sp)[1]->as<torch::nn::BatchNorm2dImpl>()->forward(x);
+    x = (*sp)[1]->as<ChannelLastLNImpl>()->forward(x);
   }
   return x;
 }
