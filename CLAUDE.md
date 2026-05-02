@@ -418,30 +418,41 @@ utility), `cli/` (CLI11 + kv-style entry).
 
 ## CLI surface
 
-Three parsers, three audiences, one set of `cmd_*` bodies:
+**Single canonical parser: flag-style with `--mode`** (see #51J / #51K).
 
-1. **Flat flag-style (canonical, #51J).**
-   `yolocpp --mode <train|predict|val|export|benchmark|info|download>`
-   followed by top-level flags (`-m/--model`, `-s/--source`, `-d/--data`,
-   `-D/--device`, `-i/--imgsz`, `-e/--epochs`, `-b/--batch`, `--seed`,
-   `-p/--precision`, `--export-after-train`, …). All options sit at
-   the top level; `--mode` selects the action; per-mode required-flag
-   validation lives in `cmd_dispatch_flag_style`.
+```
+yolocpp --mode <train|predict|val|export|benchmark|info|download> [flags...]
+```
 
-2. **kv-style (`task=detect mode=predict model=...`).**
-   Drop-in for upstream Python tooling — lets users port pipelines
-   verbatim without rewriting CLI args. Routed through
-   `yolocpp::cli::Args::parse` + `dispatch_kv`.
+Every option sits at the top level. Common flags:
 
-3. **Legacy subcommand-style (`yolocpp predict -m ... -s ...`).**
-   Deprecated; emits a one-line warning and still routes to the same
-   `cmd_*` bodies. Will be removed under #51B2 once a release window
-   has passed.
+| short | long                  | scope          |
+|-------|-----------------------|----------------|
+| -m    | --model / --weights   | every mode     |
+| -s    | --source              | predict, benchmark |
+| -d    | --data                | train, val     |
+| -o    | --out                 | predict, export |
+| -D    | --device              | every mode     |
+| -i    | --imgsz               | every mode     |
+| -e    | --epochs              | train          |
+| -b    | --batch               | train          |
+| -n    | --nc                  | predict, export|
+| -c    | --conf                | predict        |
+| -f    | --format              | export         |
+| -p    | --precision           | export         |
+|       | --seed                | train          |
+|       | --export-after-train  | train          |
+|       | --dataset             | download       |
 
-Routing precedence in `main()`: kv-style → flag-style → legacy
-subcommand-style → top-level help. Entry point is `src/cli/main.cpp`;
-the per-version dispatch within each mode goes through the registry
-(see #46).
+Per-mode required-flag validation lives in `cmd_dispatch_flag_style`
+in `src/cli/main.cpp`; error messages follow the form
+`[error] --mode=<X> needs --<flag>`. The per-version dispatch within
+each mode goes through the registry (see #46).
+
+The previous kv-style parser (`task=detect mode=predict ...`) and the
+legacy subcommand-style parser (`yolocpp predict -m ... -s ...`) were
+removed under #51K (maintainer's request: one canonical parser only).
+Don't add them back without a maintainer green-light.
 
 ## Editing third_party/
 

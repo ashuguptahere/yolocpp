@@ -1,19 +1,18 @@
-// yolocpp CLI — supports two argument styles, dispatched automatically:
+// yolocpp CLI — single canonical parser (flag-style with `--mode`):
 //
-// 1. kv-style key=value args (canonical, drop-in for upstream tooling):
-//      yolocpp task=detect mode=train  model=yolo8n.pt data=coco/ epochs=100
-//      yolocpp task=detect mode=val    model=yolo8n.pt data=coco/
-//      yolocpp task=detect mode=predict model=yolo8n.pt source=bus.jpg
-//      yolocpp task=detect mode=export model=yolo8n.pt format=trt
-//      yolocpp mode=benchmark model=yolo8n.pt source=bus.jpg
+//   yolocpp --mode train     -m yolo11s.pt -d coco/data.yaml -e 100 -b 16
+//   yolocpp --mode val       -m yolo11s.pt -d coco/data.yaml
+//   yolocpp --mode predict   -m yolo11s.pt -s bus.jpg
+//   yolocpp --mode export    -m yolo11s.pt -f onnx -p fp16
+//   yolocpp --mode benchmark -m yolo11s.pt -s bus.jpg
+//   yolocpp --mode download  --dataset coco8
+//   yolocpp --mode info
+//   yolocpp --version
 //
-// 2. Legacy subcommand style:
-//      yolocpp predict --weights=yolo8n.pt --source=bus.jpg
-//      yolocpp train   --data=...
-//      yolocpp info
-//
-// Style is auto-detected: if any arg has the form "key=value" and there is
-// no leading flag-style subcommand, we use the new parser.
+// Removed under #51K (maintainer request): the kv-style parser
+// (`task=detect mode=train ...`) and the legacy subcommand-style
+// parser (`yolocpp train --data ...`). Flag-style is now the only
+// entry point.
 
 #include <CLI11.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -31,7 +30,6 @@
 
 #include <yolocpp/config.hpp>
 
-#include "yolocpp/cli/args.hpp"
 #include "yolocpp/registry/version_adapter.hpp"
 #include "yolocpp/cli/data_yaml.hpp"
 #include "yolocpp/cli/model_info.hpp"
@@ -471,14 +469,6 @@ int cmd_benchmark(const std::string& weights, const std::string& source,
 
 // ── New-style (kv) parser dispatcher ─────────────────────────────────────
 
-constexpr const char* kSupportedTasks[] = {"detect", "classify", "segment", "pose", "obb"};
-constexpr const char* kSupportedModes[] = {"train", "val", "predict", "export", "benchmark", "info"};
-
-bool task_implemented(const std::string& task) {
-  return task == "detect" || task == "classify" || task == "segment" ||
-         task == "pose"   || task == "obb";
-}
-
 // ─── --source classification ─────────────────────────────────────────────
 // The predict pipeline accepts a much broader `--source` spec than just a
 // single image path. Classification rules (in order; first match wins):
@@ -872,420 +862,11 @@ int predict_one_image(const std::string& task, const std::string& weights,
   return 2;
 }
 
-int dispatch_kv(const yolocpp::cli::Args& a) {
-  static const std::vector<std::string> kCanonical = {
-      "task", "mode", "model", "weights", "source", "data", "format",
-      "imgsz", "epochs", "batch", "lr0", "device", "scale", "names", "nc",
-      "conf", "iou", "out", "save", "input_name", "fp16",
-      "warmup", "iters", "cache", "patience", "version",
-  };
-  a.warn_unknown(kCanonical);
-
-  std::string task = a.get_str("task", "detect");
-  std::string mode = a.get_str("mode", "");
-  // "model" is the canonical kv-style name; we also accept "weights".
-  std::string weights = a.get_str("model", a.get_str("weights", ""));
-
-  // Default mode if absent: predict if model+source given; info otherwise.
-  if (mode.empty()) {
-    if (!weights.empty() && !a.get_str("source").empty()) mode = "predict";
-    else                                                  mode = "info";
-  }
-  if (std::find(std::begin(kSupportedTasks), std::end(kSupportedTasks), task)
-        == std::end(kSupportedTasks)) {
-    std::cerr << "[error] unknown task: " << task << "\n";
-    return 2;
-  }
-  if (std::find(std::begin(kSupportedModes), std::end(kSupportedModes), mode)
-        == std::end(kSupportedModes)) {
-    std::cerr << "[error] unknown mode: " << mode << "\n";
-    return 2;
-  }
-  if (!task_implemented(task) && mode != "info") {
-    std::cerr << "[error] task='" << task << "' is not yet supported.\n";
-    return 2;
-  }
-
-  // Common args.
-  int    imgsz   = a.get_int   ("imgsz",   640);
-  int    epochs  = a.get_int   ("epochs",  100);
-  int    batch   = a.get_int   ("batch",   16);
-  double lr0     = a.get_double("lr0",     0.01);
-  int    nc      = a.get_int   ("nc",      80);
-  float  conf    = (float)a.get_double("conf", 0.25);
-  float  iou     = (float)a.get_double("iou",  0.45);
-  bool   fp16    = a.get_bool ("fp16",   true);
-  std::string device     = normalise_device(a.get_str("device", ""));
-  std::string scale_s    = a.get_str("scale",  "n");
-  std::string source     = a.get_str("source", "");
-  std::string data       = a.get_str("data",   "");
-  std::string names_csv  = a.get_str("names",  "");
-  std::string out        = a.get_str("out",    "");
-  std::string save_dir   = a.get_str("save",   "runs/train");
-  std::string input_name = a.get_str("input_name", "images");
-  std::string format     = a.get_str("format", "");
-
-  // Auto-resolve weights (search cwd / data / cache, download upstream
-  // assets if recognised) and datasets (cwd / data; setup coco/coco8 if
-  // recognised).
-  if (!weights.empty()) weights = yolocpp::cli::resolve_weights(weights);
-
-  // `data=` is yaml-only. resolve_dataset performs auto-download via the
-  // yaml's `download:` URL when the dataset is missing locally.
-  if (!data.empty()) {
-    std::string yaml_spec = data;
-    data = yolocpp::cli::resolve_dataset(yaml_spec);
-    // Pull `names:` from the yaml when the user didn't pass names= explicitly.
-    if (names_csv.empty()) {
-      try {
-        auto dy = yolocpp::cli::parse_data_yaml(yaml_spec);
-        if (!dy.names.empty()) {
-          std::ostringstream oss;
-          for (size_t i = 0; i < dy.names.size(); ++i) {
-            if (i) oss << ',';
-            oss << dy.names[i];
-          }
-          names_csv = oss.str();
-        }
-      } catch (const std::exception& e) {
-        std::cerr << "[warn] yaml names parse failed: " << e.what() << "\n";
-      }
-    }
-  }
-
-  // Auto-infer (version, scale, nc) from the .pt's actual layer shapes —
-  // works for renamed checkpoints (best.pt, last.pt) where filename carries
-  // no version letter. User can still override with version=/scale=/nc=.
-  std::string inferred_version;
-  if (!weights.empty()) {
-    // For v4/v6/v7 the filename hint is authoritative — those models have
-    // their own state-dict layouts that infer_model_info (which probes for
-    // upstream-shaped keys) will mis-classify as v8.
-    auto v_hint_pre = yolocpp::cli::version_from_filename(weights);
-    bool legacy_pre = (v_hint_pre == "v3" || v_hint_pre == "v4" ||
-                       v_hint_pre == "v6" || v_hint_pre == "v7" ||
-                       v_hint_pre == "v9" || v_hint_pre == "v10");
-    if (legacy_pre) {
-      inferred_version = v_hint_pre;
-      // For v10 specifically, the filename scale letter is authoritative —
-      // infer_model_info shares stem channels between e.g. v10b and v10l
-      // (both ch=64 with width=1.0) and will mis-classify b as l.
-      // Prefer the filename's scale before infer_model_info gets called.
-      if (v_hint_pre == "v10" && !a.has("scale")) {
-        auto fs_scale = yolocpp::cli::scale_from_filename(weights);
-        if (!fs_scale.empty()) scale_s = fs_scale;
-      }
-    }
-    try {
-      auto mi = yolocpp::cli::infer_model_info(weights);
-      if (!a.has("version") && inferred_version.empty()) inferred_version = mi.version;
-      // Don't let state-dict-derived scale override v10's filename hint —
-      // mi.scale comes from the v8/v11 stem-channel table which doesn't
-      // know about v10's `b` scale.
-      bool keep_filename_scale_for_v10 =
-          (inferred_version == "v10" && !a.has("scale") && !scale_s.empty());
-      if (!a.has("scale") && !mi.scale.empty() && !keep_filename_scale_for_v10) {
-        if (mi.scale != scale_s)
-          std::cerr << "[hint] inferred scale=" << mi.scale
-                    << " from " << weights << " (pass scale=... to override)\n";
-        scale_s = mi.scale;
-      }
-      if (!a.has("nc") && mi.nc > 0) nc = mi.nc;
-      std::cerr << "[hint] inferred " << (inferred_version.empty()
-                                          ? a.get_str("version", "?")
-                                          : inferred_version)
-                << "/" << scale_s << " nc=" << nc
-                << " from " << weights << "\n";
-    } catch (const std::exception& e) {
-      // v4 has a single architecture (no scales) and no upstream-style
-      // marker keys, so infer_model_info will throw — silence that case.
-      auto v_hint = yolocpp::cli::version_from_filename(weights);
-      if (v_hint != "v3" && v_hint != "v4" && v_hint != "v6"
-          && v_hint != "v7" && v_hint != "v9" && v_hint != "v10") {
-        std::cerr << "[warn] auto-inference failed: " << e.what() << "\n";
-      } else {
-        inferred_version = v_hint;
-      }
-    }
-  }
-
-  // Auto finetune-LR: if user supplies pretrained weights AND didn't set
-  // lr0 explicitly, drop lr0 to 0.001 (upstream finetune default).
-  // Without this, lr0=0.01 destroys pretrained features in <100 steps.
-  bool lr_explicit = a.has("lr0");
-  if (!lr_explicit && !weights.empty() && mode == "train") {
-    lr0 = 0.001;
-    std::cerr << "[hint] using finetune lr0=0.001 (model=*.pt supplied);"
-              << " pass lr0=... to override\n";
-  }
-
-  if (mode == "info")      return cmd_info();
-  if (mode == "predict") {
-    if (weights.empty() || source.empty()) {
-      std::cerr << "[error] predict needs model=... source=...\n";
-      return 2;
-    }
-    std::string ver = a.has("version") ? a.get_str("version")
-                                       : inferred_version;
-    return cmd_predict_task(task, weights, source, out, imgsz, device,
-                            scale_s, nc, conf, iou, ver);
-  }
-  if (mode == "val") {
-    if (data.empty()) {
-      std::cerr << "[error] val needs data=...\n";
-      return 2;
-    }
-    if (task == "detect") {
-      if (weights.empty()) {
-        std::cerr << "[error] val needs model=...\n"; return 2;
-      }
-      // The kv-style val path used to reimplement per-version
-      // dispatch (v3..v11/v26 each rebuilt the holder + dataset +
-      // validator inline). Since #46E that logic lives in
-      // `cmd_val()` which routes through the registry's `run_val`
-      // hook for every version. One call replaces ~170 lines.
-      return cmd_val(weights, data, names_csv, imgsz, device, scale_s);
-    }
-    if (task == "classify") {
-      int sz = (imgsz == 640) ? 224 : imgsz;
-      yolocpp::tasks::ClassifyDataset ds(data, "val", sz, /*augment=*/false);
-      yolocpp::models::Yolo8Classify m(parse_scale(scale_s), ds.num_classes());
-      if (!weights.empty()) {
-        auto sd = yolocpp::serialization::load_state_dict(weights);
-        m->load_from_state_dict(sd.entries);
-      }
-      auto dev = (device.empty() && torch::cuda::is_available()) ?
-                  torch::Device(torch::kCUDA) :
-                  (device.empty() ? torch::Device(torch::kCPU)
-                                  : torch::Device(device));
-      auto r = yolocpp::tasks::validate_classify(m, ds, dev);
-      std::cout << "top1=" << r.top1_acc << " top5=" << r.top5_acc
-                << " (n=" << r.n_total << ")\n";
-      return 0;
-    }
-    if (task == "segment") {
-      auto names = split_csv(names_csv);
-      if (names.empty()) names = yolocpp::inference::coco_names();
-      yolocpp::tasks::SegDataset ds(data, "val", imgsz, names, /*augment=*/false);
-      yolocpp::models::Yolo8Segment m(parse_scale(scale_s), ds.num_classes());
-      if (!weights.empty()) {
-        auto sd = yolocpp::serialization::load_state_dict(weights);
-        m->load_from_state_dict(sd.entries);
-      }
-      auto dev = device.empty()
-                     ? (torch::cuda::is_available() ? torch::Device(torch::kCUDA)
-                                                    : torch::Device(torch::kCPU))
-                     : torch::Device(device);
-      auto r = yolocpp::tasks::validate_segment(m, ds, dev);
-      std::cout << "mask mAP@0.5=" << r.map_50
-                << " (pred=" << r.n_predictions
-                << " gt=" << r.n_ground_truths << ")\n";
-      return 0;
-    }
-    if (task == "pose") {
-      yolocpp::tasks::PoseDataset ds(data, "val", imgsz, /*num_kpts=*/17, /*kpt_dim=*/3,
-                                      /*augment=*/false);
-      yolocpp::models::Yolo8Pose m(parse_scale(scale_s), /*nc=*/1, 17, 3);
-      if (!weights.empty()) {
-        auto sd = yolocpp::serialization::load_state_dict(weights);
-        m->load_from_state_dict(sd.entries);
-      }
-      auto dev = device.empty()
-                     ? (torch::cuda::is_available() ? torch::Device(torch::kCUDA)
-                                                    : torch::Device(torch::kCPU))
-                     : torch::Device(device);
-      auto r = yolocpp::tasks::validate_pose(m, ds, dev);
-      std::cout << "OKS mAP@0.5=" << r.oks_map_50 << "\n";
-      return 0;
-    }
-    if (task == "obb") {
-      auto names = split_csv(names_csv);
-      if (names.empty()) names = yolocpp::inference::dota_names();
-      yolocpp::tasks::OBBDataset ds(data, "val", imgsz, names, /*augment=*/false);
-      yolocpp::models::Yolo8OBB m(parse_scale(scale_s), ds.num_classes(), /*ne=*/1);
-      if (!weights.empty()) {
-        auto sd = yolocpp::serialization::load_state_dict(weights);
-        m->load_from_state_dict(sd.entries);
-      }
-      auto dev = device.empty()
-                     ? (torch::cuda::is_available() ? torch::Device(torch::kCUDA)
-                                                    : torch::Device(torch::kCPU))
-                     : torch::Device(device);
-      auto r = yolocpp::tasks::validate_obb(m, ds, dev);
-      std::cout << "rotated mAP@0.5=" << r.map_50 << "\n";
-      return 0;
-    }
-  }
-  if (mode == "train") {
-    if (data.empty()) {
-      std::cerr << "[error] train needs data=...\n"; return 2;
-    }
-    if (task == "detect") {
-      int patience = a.get_int("patience", 0);
-      uint64_t kv_seed = static_cast<uint64_t>(a.get_int("seed", 0));
-      std::vector<std::pair<std::string, std::string>> yaml_args(
-          a.kv().begin(), a.kv().end());
-
-      // The kv-style train path used to reimplement per-version dispatch
-      // (v5/v26/v11/v9/v3/v6/v4/v7 each rebuilt the holder + dataset +
-      // TrainerT inline). Since #46F that logic lives in `cmd_train()`
-      // which routes through the registry's `run_train_detect` hook for
-      // every non-v8 version. The v10 dual-head case below stays inline
-      // because its (scale, nc, dual_head) ctor isn't on the standard
-      // adapter signature — could be promoted to a `dual_head` arg in a
-      // future #46Fx if more versions need ctor variants.
-      auto version = a.has("version") ? a.get_str("version")
-                                       : inferred_version;
-      if (version == "v10") {
-        // v10 train modes:
-        //   default (dual_head=false) — trains the deploy one2one head
-        //   only with V8DetectionLoss (legacy=false matches v11's cv3
-        //   form). Used when finetuning from upstream's converted .pt
-        //   (which strips the one2many keys at conversion time).
-        //   `dual_head=true` — paper §3.1 consistent assignment: builds
-        //   a parallel v8-style one2many head (legacy=true cv3) and
-        //   sums V8DetectionLoss(o2m, topk=10) + V8DetectionLoss(o2o,
-        //   topk=1) via Yolo10LossAdapter. Use for from-scratch
-        //   training; loading upstream's pretrained one2many keys
-        //   into the parallel head requires a converter pass that
-        //   preserves `model.<head>.cv2/cv3.*` (currently dropped).
-        bool v10_dual = a.get_bool("dual_head", false);
-        auto names = split_csv(names_csv);
-        if (names.empty()) names = yolocpp::inference::coco_names();
-        int nc_v10 = (int)names.size();
-        yolocpp::datasets::YoloDataset train_ds(data, "train", imgsz, names);
-        auto v10_scale = yolocpp::models::yolo10_scale_from_letter(scale_s);
-        yolocpp::models::Yolo10 model(v10_scale, nc_v10, v10_dual);
-        if (v10_dual) {
-          std::cout << "[train] (v10) dual-head training enabled — "
-                       "running V10DualLoss (one2many topk=10 + "
-                       "one2one topk=1).\n";
-        }
-        if (!weights.empty()) {
-          auto sd = yolocpp::serialization::load_state_dict(weights);
-          int copied = model->load_from_state_dict(sd.entries);
-          std::cout << "[train] (v10) loaded " << copied
-                    << " weights from " << weights << "\n";
-        }
-        yolocpp::engine::TrainConfig cfg;
-        cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
-        cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
-        cfg.patience = patience; cfg.args_for_yaml = std::move(yaml_args);
-        std::string val_dir = data + "/images/val";
-        if (std::filesystem::exists(val_dir) &&
-            !std::filesystem::is_empty(val_dir)) {
-          yolocpp::datasets::AugConfig vaug; vaug.augment = false;
-          cfg.val_dataset = std::make_shared<yolocpp::datasets::YoloDataset>(
-              data, "val", imgsz, names, vaug);
-          cfg.val_every = 1;
-          std::cout << "[train] val split detected (" << cfg.val_dataset->size()
-                    << " imgs); will track best.pt by mAP@0.5:0.95\n";
-        }
-        yolocpp::engine::TrainerV10 trainer(model, train_ds, cfg);
-        trainer.run();
-        return 0;
-      }
-      return cmd_train(data, names_csv, imgsz, epochs, batch, lr0,
-                       device, scale_s, save_dir, weights, patience,
-                       std::move(yaml_args), kv_seed);
-    }
-    if (task == "classify") {
-      int sz = (imgsz == 640) ? 224 : imgsz;
-      yolocpp::tasks::ClassifyDataset tr(data, "train", sz, /*augment=*/true);
-      yolocpp::models::Yolo8Classify m(parse_scale(scale_s), tr.num_classes());
-      if (!weights.empty()) {
-        auto sd = yolocpp::serialization::load_state_dict(weights);
-        m->load_from_state_dict(sd.entries);
-      }
-      yolocpp::tasks::ClassifyTrainConfig cfg;
-      cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = sz;
-      cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
-      yolocpp::tasks::train_classify(m, tr, /*val=*/nullptr, cfg);
-      return 0;
-    }
-    if (task == "segment") {
-      auto names = split_csv(names_csv);
-      if (names.empty()) names = yolocpp::inference::coco_names();
-      yolocpp::tasks::SegDataset tr(data, "train", imgsz, names, /*augment=*/true);
-      yolocpp::models::Yolo8Segment m(parse_scale(scale_s), tr.num_classes());
-      if (!weights.empty()) {
-        auto sd = yolocpp::serialization::load_state_dict(weights);
-        m->load_from_state_dict(sd.entries);
-      }
-      yolocpp::tasks::SegTrainConfig cfg;
-      cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
-      cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
-      yolocpp::tasks::train_segment(m, tr, /*val=*/nullptr, cfg);
-      return 0;
-    }
-    if (task == "pose") {
-      yolocpp::tasks::PoseDataset tr(data, "train", imgsz, 17, 3, /*augment=*/true);
-      yolocpp::models::Yolo8Pose m(parse_scale(scale_s), /*nc=*/1, 17, 3);
-      if (!weights.empty()) {
-        auto sd = yolocpp::serialization::load_state_dict(weights);
-        m->load_from_state_dict(sd.entries);
-      }
-      yolocpp::tasks::PoseTrainConfig cfg;
-      cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
-      cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
-      yolocpp::tasks::train_pose(m, tr, /*val=*/nullptr, cfg);
-      return 0;
-    }
-    if (task == "obb") {
-      auto names = split_csv(names_csv);
-      if (names.empty()) names = yolocpp::inference::dota_names();
-      yolocpp::tasks::OBBDataset tr(data, "train", imgsz, names, /*augment=*/true);
-      yolocpp::models::Yolo8OBB m(parse_scale(scale_s), tr.num_classes(), /*ne=*/1);
-      if (!weights.empty()) {
-        auto sd = yolocpp::serialization::load_state_dict(weights);
-        m->load_from_state_dict(sd.entries);
-      }
-      yolocpp::tasks::OBBTrainConfig cfg;
-      cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
-      cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
-      yolocpp::tasks::train_obb(m, tr, /*val=*/nullptr, cfg);
-      return 0;
-    }
-  }
-  if (mode == "export") {
-    if (weights.empty() || format.empty()) {
-      std::cerr << "[error] export needs model=... format=onnx|trt\n";
-      return 2;
-    }
-    return cmd_export(weights, format, out, imgsz, scale_s, nc, input_name, fp16,
-                      a.has("version") ? a.get_str("version") : inferred_version,
-                      task);
-  }
-  if (mode == "benchmark") {
-    if (weights.empty() || source.empty()) {
-      std::cerr << "[error] benchmark needs model=... source=...\n";
-      return 2;
-    }
-    int warmup = a.get_int("warmup", 10);
-    int iters  = a.get_int("iters",  100);
-    std::string cache = a.get_str("cache", "build/bench_cache");
-    return cmd_benchmark(weights, source, imgsz, warmup, iters, cache, device);
-  }
-  return 2;
-}
-
-// True if the user passed `--mode <X>` (or `--mode=X`) anywhere on
-// the command line. The flag-style is the canonical entry point —
-// every argument is a top-level flag and the action is selected by
-// `--mode`. See `cmd_dispatch_flag_style`.
-bool looks_like_mode_style(int argc, char** argv) {
-  for (int i = 1; i < argc; ++i) {
-    std::string s = argv[i];
-    if (s == "--mode" || s.rfind("--mode=", 0) == 0) return true;
-  }
-  return false;
-}
 
 // Flag-style dispatcher: every option is a top-level flag, `--mode`
-// picks the action. This is the canonical CLI shape; the kv-style
-// (`mode=train task=detect ...`) survives as a drop-in for upstream
-// tooling, and the legacy subcommand-style (`yolocpp train ...`)
-// remains as a deprecated fallback for one release.
+// picks the action. This is the only CLI parser as of #51K — the
+// kv-style and legacy subcommand-style parsers were removed by the
+// maintainer's request.
 int cmd_dispatch_flag_style(int argc, char** argv) {
   CLI::App app{"yolocpp — pure C++ computer vision suite"};
 
@@ -1467,17 +1048,6 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   return 2;
 }
 
-bool looks_like_kv_style(int argc, char** argv) {
-  for (int i = 1; i < argc; ++i) {
-    std::string s = argv[i];
-    if (!s.empty() && s.find('=') != std::string::npos &&
-        s[0] != '-') {
-      return true;
-    }
-  }
-  return false;
-}
-
 }  // anonymous namespace
 
 int main(int argc, char** argv) {
@@ -1511,12 +1081,6 @@ int main(int argc, char** argv) {
       "  yolocpp --mode info\n"
       "  yolocpp --version\n"
       "\n"
-      "Usage (kv-style, drop-in for upstream tooling):\n"
-      "  yolocpp task=detect mode=train  model=yolo11s.pt data=DATA epochs=100\n"
-      "  yolocpp task=detect mode=predict model=yolo11s.pt source=IMG\n"
-      "  yolocpp mode=export model=yolo11s.pt format=trt\n"
-      "  yolocpp mode=benchmark model=yolo11s.pt source=IMG\n"
-      "\n"
       "Tasks  : detect (default), classify, segment, pose, obb\n"
       "Modes  : train, val, predict, export, benchmark, info, download\n"
       "Formats: onnx, trt\n"
@@ -1524,236 +1088,17 @@ int main(int argc, char** argv) {
       "Devices: cpu, cuda, cuda:N, cuda:0,1,..., mps, auto\n"
       "Source : single image / directory / glob (e.g. 'frames/*.jpg').\n"
       "         Video / RTSP / HTTP / webcam-index — frame loop is\n"
-      "         tracked under #51C2 in TODO.md.\n"
-      "\n"
-      "The legacy subcommand-style (`yolocpp predict -m ...`) still works\n"
-      "but is deprecated; pass `--mode predict` instead.\n";
+      "         tracked under #51C2 in TODO.md.\n";
     return 0;
   }
 
   try {
-    // Routing precedence:
-    //   1. kv-style                — drop-in for upstream tooling.
-    //   2. flag-style (--mode=...) — canonical entry point as of #51J.
-    //   3. legacy subcommand-style — kept as a deprecated fallback for
-    //      one release; emits a one-line warning.
-    if (looks_like_kv_style(argc, argv)) {
-      auto a = yolocpp::cli::Args::parse(argc, argv);
-      return dispatch_kv(a);
-    }
-    if (looks_like_mode_style(argc, argv)) {
-      return cmd_dispatch_flag_style(argc, argv);
-    }
+    // Single canonical CLI parser: flag-style.
+    //   yolocpp --mode <action> [-m model] [-s source] ...
+    // The kv-style and legacy subcommand-style parsers were
+    // removed under #51K — flag-style is now the only entry point.
+    return cmd_dispatch_flag_style(argc, argv);
 
-    // Legacy subcommand style (CLI11). Deprecated — prefer
-    // `yolocpp --mode <action> ...` (canonical) or
-    // `yolocpp action=value ...` (kv-style, drop-in for upstream).
-    std::cerr << "[deprecation] subcommand-style CLI is deprecated; "
-                 "use `yolocpp --mode <action> ...` instead. "
-                 "See `yolocpp --help`.\n";
-    CLI::App app{"yolocpp"};
-    app.require_subcommand(1);
-
-    // scale_s default is empty — cmd_predict/cmd_val/cmd_export auto-resolve
-    // from the weights filename when not passed explicitly. Defaulting to
-    // "n" here silently mis-classifies non-n scales (`yolo10s.pt` exports
-    // as scale=N → mismatched-shape weights → garbage ONNX/TRT).
-    std::string weights, source, out, root, names_csv, device, scale_s,
-                save_dir = "runs/train", init_weights;
-    int    imgsz = 640, epochs = 100, batch_size = 16, nc = 80;
-    double lr0   = 0.01;
-    float  conf  = 0.25f, iou = 0.45f;
-
-    // Every subcommand below registers short + long flags. The
-    // canonical name is `--model` (taking a `.pt` weights path); the
-    // legacy `--weights` form is kept as a CLI11 alias on every
-    // subcommand that accepts it. Short forms follow upstream
-    // convention where unambiguous: -m model, -d data, -s source,
-    // -D device, -e epochs, -b batch, -i imgsz, -o out, -c conf,
-    // -n nc.
-    auto* t = app.add_subcommand("train", "Train a YOLO model");
-    t->add_option("--data,-d",    root, "dataset root (or data.yaml path)")->required();
-    t->add_option("--names",      names_csv, "comma-separated class names");
-    t->add_option("--imgsz,-i",   imgsz, "input image size (default 640)");
-    t->add_option("--epochs,-e",  epochs, "number of epochs");
-    t->add_option("--batch,-b",   batch_size, "batch size");
-    t->add_option("--lr0",        lr0, "initial LR (default 0.01)");
-    t->add_option("--device,-D",  device, "cpu | cuda | cuda:N | cuda:0,1,... | mps | auto");
-    t->add_option("--scale",      scale_s, "model scale letter (n/s/m/l/x; auto from filename)");
-    t->add_option("--save",       save_dir, "output directory under runs/");
-    t->add_option("--model,-m,--weights", init_weights, "init weights `.pt` (alias: --weights)");
-    int legacy_patience = 0;
-    t->add_option("--patience",   legacy_patience,
-                  "stop if val mAP@0.5:0.95 doesn't improve for N epochs");
-    uint64_t cli_seed = 0;
-    t->add_option("--seed",       cli_seed,
-                  "deterministic-training seed (0 = non-deterministic)");
-    std::string export_after_train;
-    t->add_option("--export-after-train", export_after_train,
-                  "post-train, export best.pt as 'onnx', 'trt', or 'onnx,trt'");
-
-    auto* v = app.add_subcommand("val", "Validate (mAP)");
-    v->add_option("--model,-m,--weights", weights, "weights `.pt` (alias: --weights)")->required();
-    v->add_option("--data,-d",    root, "dataset root (or data.yaml path)")->required();
-    v->add_option("--names",      names_csv, "comma-separated class names");
-    v->add_option("--imgsz,-i",   imgsz, "input image size");
-    v->add_option("--device,-D",  device, "cpu | cuda | cuda:N | mps | auto");
-    v->add_option("--scale",      scale_s, "model scale letter (auto from filename)");
-
-    auto* p = app.add_subcommand("predict", "Run inference");
-    p->add_option("--model,-m,--weights", weights, "weights `.pt` / `.trt` (alias: --weights)")->required();
-    p->add_option("--source,-s",  source, "image, video, dir, glob, URL, or webcam index")->required();
-    p->add_option("--out,-o",     out, "output path (default: runs/predict/<stem>.jpg)");
-    p->add_option("--imgsz,-i",   imgsz, "input image size");
-    p->add_option("--device,-D",  device, "cpu | cuda | cuda:N | mps | auto");
-    p->add_option("--scale",      scale_s, "model scale letter");
-    p->add_option("--nc,-n",      nc, "number of classes (default 80 = COCO)");
-    p->add_option("--conf,-c",    conf, "confidence threshold (default 0.25)");
-    p->add_option("--iou",        iou, "NMS IoU threshold (default 0.45)");
-
-    auto* e = app.add_subcommand("export", "Export to ONNX / TRT");
-    std::string export_fmt, export_input_name = "images";
-    bool   export_fp16 = true;
-    std::string export_precision;
-    e->add_option("--format,-f",  export_fmt, "onnx | trt")->required();
-    e->add_option("--model,-m,--weights", weights, "weights `.pt` (alias: --weights)")->required();
-    e->add_option("--out,-o",     out, "output path");
-    e->add_option("--imgsz,-i",   imgsz, "input image size");
-    e->add_option("--scale",      scale_s, "model scale letter");
-    e->add_option("--nc,-n",      nc, "number of classes");
-    e->add_option("--input-name", export_input_name, "ONNX graph input tensor name");
-    e->add_flag  ("--fp16,!--no-fp16", export_fp16, "TRT FP16 (legacy alias for --precision=fp16/fp32)");
-    e->add_option("--precision,-p", export_precision,
-                  "fp32 | fp16 | int8 | int4 | nvfp4 (only fp32/fp16 wired today)");
-
-    auto* b = app.add_subcommand("benchmark", "Latency / throughput benchmark");
-    std::string cache = "build/bench_cache";
-    int warmup = 10, iters = 100;
-    b->add_option("--model,-m,--weights", weights, "weights `.pt` (alias: --weights)")->required();
-    b->add_option("--source,-s",  source, "image / video / URL / webcam index")->required();
-    b->add_option("--imgsz,-i",   imgsz, "input image size");
-    b->add_option("--warmup",     warmup, "warmup iterations");
-    b->add_option("--iters",      iters, "timed iterations");
-    b->add_option("--cache",      cache, "TRT engine cache directory");
-    b->add_option("--device,-D",  device, "cpu | cuda | cuda:N");
-
-    auto* i = app.add_subcommand("info", "Build / device info");
-    (void)i;
-
-    // `yolocpp download <name|url>` — fetch a known dataset (coco8,
-    // coco128, dota8, VOC, xView, …) into ./data/<name>/, or any
-    // direct .zip URL into ./data/<stem>/. Prints the resolved
-    // directory on success so it can be piped into `--data`.
-    std::string dl_target;
-    auto* dl = app.add_subcommand("download",
-        "Download a known dataset (coco8, coco128, VOC, dota8, xView, ...) or a direct URL");
-    dl->add_option("name", dl_target,
-                    "dataset short-name or .zip URL")->required();
-
-    CLI11_PARSE(app, argc, argv);
-
-    // Validate / canonicalise --device once, before any subcommand
-    // dispatch. Throws with a clear message on bad input (caught by
-    // the outer try/catch and reported via stderr + exit 1).
-    device = normalise_device(device);
-
-    if (app.got_subcommand("info"))    return cmd_info();
-    if (app.got_subcommand("predict")) {
-      // Route through cmd_predict_task so the registry's per-version
-      // `predict_to_file` hook handles non-v8 models. cmd_predict
-      // (the v8-only Yolo8Detect Predictor path) is reachable as the
-      // fallback inside cmd_predict_task.
-      return cmd_predict_task(/*task=*/"detect", weights, source, out,
-                              imgsz, device, scale_s, nc, conf, iou);
-    }
-    if (app.got_subcommand("val"))
-      return cmd_val(weights, root, names_csv, imgsz, device, scale_s);
-    if (app.got_subcommand("train")) {
-      // Pre-resolve scale + version from init_weights filename so they
-      // are available to BOTH cmd_train and the post-train auto-export
-      // below. Without this, `--export-after-train=onnx` on a
-      // `yolo11s.pt`-init run would see `scale_s=""` and `best.pt`'s
-      // filename would resolve to `v8` (the default) — causing
-      // shape-mismatch on load.
-      std::string train_version_hint;
-      if (!init_weights.empty()) {
-        if (scale_s.empty()) {
-          auto fs_scale = yolocpp::cli::scale_from_filename(init_weights);
-          if (!fs_scale.empty()) scale_s = fs_scale;
-        }
-        train_version_hint = yolocpp::cli::version_from_filename(init_weights);
-      }
-      int rc = cmd_train(root, names_csv, imgsz, epochs, batch_size, lr0,
-                          device, scale_s, save_dir, init_weights,
-                          legacy_patience, /*args_for_yaml=*/{}, cli_seed);
-      if (rc != 0) return rc;
-      // Post-train auto-export: walks `--export-after-train`'s
-      // comma-separated formats. Looks for `<save_dir>/best.pt`
-      // first, falls back to `<save_dir>/last.pt`.
-      if (!export_after_train.empty()) {
-        std::filesystem::path src = std::filesystem::path(save_dir) / "best.pt";
-        if (!std::filesystem::exists(src)) {
-          src = std::filesystem::path(save_dir) / "last.pt";
-        }
-        if (!std::filesystem::exists(src)) {
-          std::cerr << "[warn] --export-after-train: no best.pt or last.pt under "
-                    << save_dir << "; skipping export\n";
-        } else {
-          for (const auto& fmt : split_csv(export_after_train)) {
-            if (fmt != "onnx" && fmt != "trt") {
-              std::cerr << "[error] --export-after-train='" << fmt
-                        << "' not recognised (expected: onnx, trt)\n";
-              return 2;
-            }
-            // Place the exported artefact next to the source `best.pt`
-            // (e.g. `<save_dir>/best.onnx`, `<save_dir>/best.trt`). The
-            // default `runs/export/<base>.onnx` location wouldn't tie the
-            // exported file to the train run that produced it.
-            std::filesystem::path out_path = src;
-            out_path.replace_extension("." + fmt);
-            int xrc = cmd_export(src.string(), fmt, out_path.string(),
-                                  imgsz, scale_s, nc,
-                                  /*input_name=*/"images",
-                                  /*fp16=*/true, train_version_hint);
-            if (xrc != 0) return xrc;
-          }
-        }
-      }
-      return 0;
-    }
-    if (app.got_subcommand("export")) {
-      // --precision wins over --fp16 when both are given. fp32 and
-      // fp16 are wired through the existing `TrtBuildConfig.fp16`
-      // toggle; int8 / int4 / nvfp4 are not yet implemented and
-      // surface a clear error pointing at the gap.
-      if (!export_precision.empty()) {
-        if (export_precision == "fp32") {
-          export_fp16 = false;
-        } else if (export_precision == "fp16") {
-          export_fp16 = true;
-        } else if (export_precision == "int8" ||
-                   export_precision == "int4" ||
-                   export_precision == "nvfp4") {
-          std::cerr << "[error] --precision=" << export_precision
-                    << " not yet wired (TODO #51F2: add INT8 calibration "
-                       "+ INT4/NVFP4 routing through TrtBuildConfig)\n";
-          return 2;
-        } else {
-          std::cerr << "[error] unknown --precision='" << export_precision
-                    << "' (expected fp32 | fp16 | int8 | int4 | nvfp4)\n";
-          return 2;
-        }
-      }
-      return cmd_export(weights, export_fmt, out, imgsz, scale_s, nc,
-                        export_input_name, export_fp16);
-    }
-    if (app.got_subcommand("benchmark"))
-      return cmd_benchmark(weights, source, imgsz, warmup, iters, cache, device);
-    if (app.got_subcommand("download")) {
-      auto path = yolocpp::cli::download_known_dataset(dl_target);
-      std::cout << path << "\n";
-      return 0;
-    }
   } catch (const std::exception& e) {
     std::cerr << "[error] " << e.what() << "\n";
     return 1;
