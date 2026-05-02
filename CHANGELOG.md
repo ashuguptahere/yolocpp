@@ -30,6 +30,49 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.33.0] — 2026-05-02
+
+### Added — RF-DETR multi-scale deformable encoder (#65B)
+
+`include/yolocpp/models/rfdetr_encoder.hpp` +
+`src/models/rfdetr_encoder.cpp`. The encoder takes the multi-scale
+ViT taps, projects each level to `hidden_dim` via 1×1 conv, flattens
++ concatenates into a single `[B, ΣHi·Wi, hidden]` token sequence,
+adds 2D sine positional embedding, and runs N pre-norm transformer
+layers using **MSDeformAttn** (Zhu et al., 2020) instead of vanilla
+self-attention.
+
+`MSDeformAttn` is a portable composition of standard ops:
+`sampling_offsets / attention_weights / value_proj / output_proj`
+linears + per-level `grid_sample` for bilinear value gathering. No
+custom CUDA kernel — ONNX export (#65I) decomposes into the same op
+graph. Per-query cost is `H · L · P` samples, not the `Lq · Lv`
+quadratic of full attention, so the 4800-token sequence on n/s is
+manageable end-to-end.
+
+`RFDetrImpl` now constructs + registers the encoder in the ctor and
+exposes `forward_encoder(x)` which runs backbone+encoder. Per-scale
+encoder depth: n=3, s=4, b=6, m=6, l=6 layers (from
+`RFDetrScale::num_encoder_layers`). `forward_eval` runs both stages
+before throwing on the decoder boundary (#65C).
+
+`tests/test_rfdetr_encoder.cpp` exercises full backbone+encoder
+forward at the configured `cfg.img_size` (640 for LW-DETR n/s) and
+asserts the output shapes (memory `[1, 4800, hidden]`,
+spatial_shapes `[3, 2]`). b/m/l skipped in this test on memory; full
+parity smokes land under #65L.
+
+ctest count goes 38 → 39.
+
+### Tracked
+
+- TODO #65B marked landed; #65C (decoder + object-query head) is
+  the next slice. After #65C the predict path's
+  `[B, 4+nc, num_queries]` shape contract holds end-to-end without
+  weights — #65D's converter slots in next.
+
+---
+
 ## [0.32.0] — 2026-05-02
 
 ### Added — RF-DETR backbones (#65A)

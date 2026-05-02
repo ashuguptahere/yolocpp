@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "yolocpp/models/rfdetr_backbone.hpp"
+#include "yolocpp/models/rfdetr_encoder.hpp"
 
 namespace yolocpp::models {
 
@@ -105,15 +106,21 @@ class RFDetrImpl : public torch::nn::Module {
   const RFDetrScale& scale()        const { return scale_; }
 
   // #65A — backbone runs end-to-end and returns multi-scale feature
-  // maps. Used directly by `forward_eval` once #65B (encoder) lands;
+  // maps. Used directly by `forward_eval` once the head (#65C) lands;
   // exposed publicly so unit tests can pin the backbone shape
   // without going through the throwing forward path.
   std::vector<torch::Tensor> forward_backbone(torch::Tensor x);
 
+  // #65B — backbone + encoder run end-to-end. Returns the full
+  // encoder output (memory + multi-scale helpers) which the decoder
+  // (#65C) consumes via cross-attn.
+  yolocpp::models::rfdetr::EncoderOutput forward_encoder(torch::Tensor x);
+
  private:
-  RFDetrScale                       scale_;
-  int                               nc_;
+  RFDetrScale                          scale_;
+  int                                  nc_;
   yolocpp::models::rfdetr::ViTBackbone backbone_{nullptr};
+  yolocpp::models::rfdetr::Encoder     encoder_{nullptr};
 };
 
 TORCH_MODULE(RFDetr);

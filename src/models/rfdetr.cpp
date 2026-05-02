@@ -42,24 +42,38 @@ int rfdetr_default_imgsz(const RFDetrScale& scale) {
 // ─── Detect ──────────────────────────────────────────────────────────────
 
 RFDetrImpl::RFDetrImpl(RFDetrScale scale, int nc) : scale_(scale), nc_(nc) {
-  // #65A landed: backbone is constructed + registered. #65B encoder,
-  // #65C decoder/head, #65F loss heads still pending — `forward_eval`
-  // and `forward_train` throw on the encoder boundary below.
-  const auto& cfg =
+  // #65A + #65B landed: backbone + encoder are constructed and
+  // registered. #65C decoder/head, #65F loss surface still pending
+  // — `forward_eval` and `forward_train` throw on the decoder
+  // boundary below.
+  const auto& bcfg =
       yolocpp::models::rfdetr::backbone_cfg_from_name(scale.backbone);
   backbone_ = register_module(
-      "backbone", yolocpp::models::rfdetr::ViTBackbone(cfg));
+      "backbone", yolocpp::models::rfdetr::ViTBackbone(bcfg));
+  std::vector<int> in_channels(bcfg.tap_blocks.size(), bcfg.embed_dim);
+  encoder_ = register_module(
+      "encoder",
+      yolocpp::models::rfdetr::Encoder(
+          in_channels, scale.hidden_dim, scale.num_heads,
+          scale.num_encoder_layers, /*num_points=*/4));
 }
 
 std::vector<torch::Tensor> RFDetrImpl::forward_backbone(torch::Tensor x) {
   return backbone_->forward_features(std::move(x));
 }
 
+yolocpp::models::rfdetr::EncoderOutput
+RFDetrImpl::forward_encoder(torch::Tensor x) {
+  auto feats = forward_backbone(std::move(x));
+  return encoder_->forward(feats);
+}
+
 torch::Tensor RFDetrImpl::forward_eval(torch::Tensor x) {
-  // Backbone runs (real shapes), then we hit the encoder boundary.
-  (void)forward_backbone(std::move(x));
-  unimplemented("forward_eval (encoder→decoder→head)",
-                "#65B (encoder) + #65C (decoder/head)");
+  // Backbone + encoder run with real shapes; decoder/head still
+  // throws.
+  (void)forward_encoder(std::move(x));
+  unimplemented("forward_eval (decoder→head)",
+                "#65C (decoder + object-query head)");
 }
 
 std::vector<torch::Tensor> RFDetrImpl::forward_train(torch::Tensor /*x*/) {

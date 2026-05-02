@@ -350,7 +350,7 @@ segment.
 |---|-------|----------|------------------------|----------|
 | #65   | Top-level RF-DETR family (umbrella for #65A..#65L). Scaffold landed 0.31.0; all entry points throw with slice tags. | high | many sessions | — |
 | ~~#65A~~  | ~~Backbones: DINOv2 (ViT-L) + LW-DETR-{tiny,small,base,medium}.~~ Landed 0.32.0 — `models/rfdetr_backbone.{hpp,cpp}` shared `PatchEmbed`/`Attention`/`ViTBlock`/`ViTBackbone`; submodule names match upstream so the #65D converter is a prefix rename. `tests/test_rfdetr_backbone.cpp` pins the n/s/b/m forward shapes (DINOv2-large skipped on memory). | done | — | — |
-| #65B  | Transformer encoder (multi-scale deformable attention, sine pos-emb, dropout-free at eval). | high | 1 session | #65A |
+| ~~#65B~~  | ~~Transformer encoder (multi-scale deformable attention, sine pos-emb).~~ Landed 0.33.0 — `rfdetr_encoder.{hpp,cpp}` MSDeformAttn as a portable grid_sample composition + per-level 1×1 input proj + 2D sine pos-embed. `tests/test_rfdetr_encoder.cpp` pins n/s output shapes (b/m/l skipped on memory). | done | — | — |
 | #65C  | Decoder + object-query head (cross-attn → query refinement → cls + bbox MLPs; NMS-free `[B, Q, 4+nc]` output, sigmoided cls). Wire `RFDetrImpl::forward_eval`. | high | 1 session | #65B |
 | #65D  | `.pt` converter: `rfdetr-<scale>.pt` (upstream pickled state-dict from Roboflow's `rf-detr` repo) → our format. Reuse `serialization/pt_loader.cpp` + add a per-key remapping table in `src/serialization/rfdetr_weights.cpp`. Wire `RFDetrImpl::load_from_state_dict`. | high | 1 session | #65A,B,C |
 | #65E  | Predict path: `inference::FramePredictor`-style decoder with no NMS (top-Q queries, score threshold, area filter). Wire `predict_to_file` adapter hook. | high | 0.5 session | #65C,D |

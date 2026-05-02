@@ -104,6 +104,7 @@ yolocpp_add_test(test_yolo11        test_yolo11.cpp)
 yolocpp_add_test(test_yolo26_train  test_yolo26_train.cpp)
 yolocpp_add_test(test_v13_ada       test_v13_ada.cpp)
 yolocpp_add_test(test_rfdetr_backbone test_rfdetr_backbone.cpp)
+yolocpp_add_test(test_rfdetr_encoder  test_rfdetr_encoder.cpp)
 yolocpp_add_test(test_v13_full      test_v13_full.cpp)
 set_tests_properties(test_v13_full PROPERTIES
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
