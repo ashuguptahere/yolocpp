@@ -30,6 +30,77 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.62.0] — 2026-05-02
+
+### Fixed — segment variant patch_size + resolution to match real checkpoints
+
+Verifying `RFDetrScale` defaults against the actual saved
+checkpoints (`patch_embeddings.projection.weight` shape and
+`position_embeddings` size) caught **incorrect patch_size and
+resolution** for 4 of the 7 segment variants:
+
+```
+                actual              previous (WRONG)
+seg-nano    patch=12  res=312    patch=14  res=368   ← shape_mismatch=1 on conv
+seg-small   patch=12  res=384    patch=16  res=512   ← shape_mismatch=1
+seg-medium  patch=12  res=432    patch=16  res=576   ← shape_mismatch=1
+seg-large   patch=12  res=504    patch=16  res=672   ← shape_mismatch=1
+seg-xlarge  patch=12  res=624    patch=12  res=624   ✓
+seg-xxlarge patch=12  res=768    patch=12  res=768   ✓
+seg-preview patch=12  res=432    patch=12  res=432   ✓
+```
+
+All 7 segment variants share the **same patch_size=12**
+(verified from each `.pt`'s saved
+`backbone.0.encoder.encoder.embeddings.patch_embeddings.projection.weight`
+having shape `[384, 3, 12, 12]`), and resolution = saved
+`pretrain_grid × 12`.
+
+### Result
+
+```
+                BEFORE                   AFTER
+seg-nano        loader  shape_mismatch=1   shape_mismatch=0  ✓
+                predict skipped (broken)   4 detections at conf=0.5
+seg-small       shape_mismatch=1           shape_mismatch=0  ✓ 4 dets
+seg-medium      shape_mismatch=1           shape_mismatch=0  ✓ 4 dets
+seg-large       shape_mismatch=1           shape_mismatch=0  ✓ 4 dets
+seg-xlarge      shape_mismatch=0           shape_mismatch=0  ✓ 4 dets
+seg-xxlarge     shape_mismatch=0           shape_mismatch=0  ✓ 4 dets
+seg-preview     shape_mismatch=0           shape_mismatch=0  ✓ 4 dets
+```
+
+**All 12 RF-DETR variants now produce real detections** from
+their upstream `.pth` / `.pt` weights, using each variant's own
+pretrained input resolution.
+
+The remaining 35-47 unmatched keys per seg variant are the
+`segmentation_head.*` mask-head parameters (#65K2) — not loaded
+because the C++ side only has the detect head wired so far. The
+detect-equivalent path through the seg architecture still produces
+plausible bounding-box detections, just no per-instance masks.
+
+### CLI behaviour summary (entire codebase)
+
+- `--imgsz N` **and** `--imgsz=N` both supported by CLI11 (default).
+- `imgsz==640` triggers fallback to `adapter->default_imgsz(scale, task)`
+  for every model family (yolo3..yolo13, yolo26, rfdetr) — all 13
+  versions hook this.
+- For RF-DETR specifically, an additional divisibility check
+  enforces `imgsz % (patch × num_windows) == 0`; invalid sizes warn
+  + fall back to the variant's pretrained resolution.
+
+ctest 42/42 (only pre-existing #64). All 7 rfdetr tests pass.
+
+### Tracked
+
+- All 12 RF-DETR variants produce predictions; their full per-
+  variant defaults (resolution, patch, num_windows, num_queries)
+  now match the upstream Python configs and saved checkpoint
+  shapes.
+
+---
+
 ## [0.61.0] — 2026-05-02
 
 ### Changed — RF-DETR honours per-variant `--imgsz` with validation

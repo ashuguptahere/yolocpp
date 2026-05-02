@@ -93,14 +93,20 @@ constexpr RFDetrScale kRfdetrBase   {300, 256, 3, 8, 16, 2, 90, 13, 560, 14, 384
 constexpr RFDetrScale kRfdetrLarge  {300, 384, 3, 8, 16, 2, 90, 13, 704, 14, 768, 37, false,
                                        "dinov2_windowed_base", "large"};
 
-// Segment: 7 variants.
-constexpr RFDetrScale kRfdetrSegNano    {100, 256, 4, 8, 16, 2, 90, 13, 368, 14, 384, 26, true,
+// Segment: 7 variants. **All seg variants use patch_size=12**
+// (verified from `patch_embeddings.projection.weight` shape in
+// each `rf-detr-seg-*.pt`). resolution = grid × patch_size from
+// the saved `position_embeddings` size, matching what the model
+// expects for no-interpolation inference. Earlier scale entries
+// had wrong patch_size values for n/s/m/l (would have been 14/16
+// → shape mismatch on weight load); fixed now.
+constexpr RFDetrScale kRfdetrSegNano    {100, 256, 4, 8, 16, 2, 90, 13, 312, 12, 384, 26, true,
                                           "dinov2_windowed_small", "seg-nano"};
-constexpr RFDetrScale kRfdetrSegSmall   {100, 256, 4, 8, 16, 2, 90, 13, 512, 16, 384, 32, true,
+constexpr RFDetrScale kRfdetrSegSmall   {100, 256, 4, 8, 16, 2, 90, 13, 384, 12, 384, 32, true,
                                           "dinov2_windowed_small", "seg-small"};
-constexpr RFDetrScale kRfdetrSegMedium  {200, 256, 5, 8, 16, 2, 90, 13, 576, 16, 384, 36, true,
+constexpr RFDetrScale kRfdetrSegMedium  {200, 256, 5, 8, 16, 2, 90, 13, 432, 12, 384, 36, true,
                                           "dinov2_windowed_small", "seg-medium"};
-constexpr RFDetrScale kRfdetrSegLarge   {300, 256, 5, 8, 16, 2, 90, 13, 672, 16, 384, 42, true,
+constexpr RFDetrScale kRfdetrSegLarge   {300, 256, 5, 8, 16, 2, 90, 13, 504, 12, 384, 42, true,
                                           "dinov2_windowed_small", "seg-large"};
 constexpr RFDetrScale kRfdetrSegXLarge  {300, 256, 6, 8, 16, 2, 90, 13, 624, 12, 384, 52, true,
                                           "dinov2_windowed_small", "seg-xlarge"};
