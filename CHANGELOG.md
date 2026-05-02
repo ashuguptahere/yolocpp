@@ -30,6 +30,44 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.36.0] — 2026-05-02
+
+### Added — RF-DETR predict path / NMS-free decode (#65E)
+
+`include/yolocpp/inference/rfdetr_predictor.hpp` +
+`src/inference/rfdetr_predictor.cpp`. Two entry points:
+
+- `rfdetr_decode(out, imgsz, conf, max_det)` — pure tensor → struct
+  conversion. Per-query best class, threshold by `conf`, sort/top-K
+  by score, convert sigmoided cxcywh in `[0, 1]` to letterbox-pixel
+  xyxy. NMS-free by construction (each query is one prediction);
+  `max_det=300` matches RF-DETR's upstream default.
+- `rfdetr_predict_image(model, bgr, ...)` — letterbox →
+  `forward_eval` → decode → `scale_boxes` unscale. Mirrors
+  `Predictor::predict` so the registry's `predict_to_file` hook
+  routes through it once #65D loads weights.
+
+The registry hooks still throw at the converter (#65D) — without
+real weights, predictions are noise — but the decode logic is now
+landed and unit-tested independently. `tests/test_rfdetr_decode.cpp`
+drives it with a hand-crafted `[1, 4+5, 4]` synthetic forward
+tensor and verifies:
+- Confidence threshold drops sub-`conf` queries.
+- Sort by score (top-K ordering).
+- `cxcywh × imgsz` → xyxy is bit-exact (q0 cx=0.5,cy=0.5,w=h=0.2 at
+  imgsz=640 → (256, 256, 384, 384)).
+- `max_det` caps the result correctly.
+
+ctest count goes 41 → 42.
+
+### Tracked
+
+- TODO #65E marked landed; #65D (`rfdetr-*.pt` converter) is still
+  the gate before the registry's `predict_to_file` hook produces
+  meaningful detections.
+
+---
+
 ## [0.35.0] — 2026-05-02
 
 ### Added — RF-DETR Hungarian set loss (#65F)
