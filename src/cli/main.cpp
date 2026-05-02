@@ -1360,6 +1360,9 @@ int main(int argc, char** argv) {
     uint64_t cli_seed = 0;
     t->add_option("--seed",       cli_seed,
                   "deterministic-training seed (0 = non-deterministic)");
+    std::string export_after_train;
+    t->add_option("--export-after-train", export_after_train,
+                  "post-train, export best.pt as 'onnx', 'trt', or 'onnx,trt'");
 
     auto* v = app.add_subcommand("val", "Validate (mAP)");
     v->add_option("--model,-m,--weights", weights, "weights `.pt` (alias: --weights)")->required();
@@ -1383,6 +1386,7 @@ int main(int argc, char** argv) {
     auto* e = app.add_subcommand("export", "Export to ONNX / TRT");
     std::string export_fmt, export_input_name = "images";
     bool   export_fp16 = true;
+    std::string export_precision;
     e->add_option("--format,-f",  export_fmt, "onnx | trt")->required();
     e->add_option("--model,-m,--weights", weights, "weights `.pt` (alias: --weights)")->required();
     e->add_option("--out,-o",     out, "output path");
@@ -1390,7 +1394,9 @@ int main(int argc, char** argv) {
     e->add_option("--scale",      scale_s, "model scale letter");
     e->add_option("--nc,-n",      nc, "number of classes");
     e->add_option("--input-name", export_input_name, "ONNX graph input tensor name");
-    e->add_flag  ("--fp16,!--no-fp16", export_fp16, "TRT FP16 (default on)");
+    e->add_flag  ("--fp16,!--no-fp16", export_fp16, "TRT FP16 (legacy alias for --precision=fp16/fp32)");
+    e->add_option("--precision,-p", export_precision,
+                  "fp32 | fp16 | int8 | int4 | nvfp4 (only fp32/fp16 wired today)");
 
     auto* b = app.add_subcommand("benchmark", "Latency / throughput benchmark");
     std::string cache = "build/bench_cache";
@@ -1434,13 +1440,85 @@ int main(int argc, char** argv) {
     }
     if (app.got_subcommand("val"))
       return cmd_val(weights, root, names_csv, imgsz, device, scale_s);
-    if (app.got_subcommand("train"))
-      return cmd_train(root, names_csv, imgsz, epochs, batch_size, lr0,
-                       device, scale_s, save_dir, init_weights,
-                       legacy_patience, /*args_for_yaml=*/{}, cli_seed);
-    if (app.got_subcommand("export"))
+    if (app.got_subcommand("train")) {
+      // Pre-resolve scale + version from init_weights filename so they
+      // are available to BOTH cmd_train and the post-train auto-export
+      // below. Without this, `--export-after-train=onnx` on a
+      // `yolo11s.pt`-init run would see `scale_s=""` and `best.pt`'s
+      // filename would resolve to `v8` (the default) — causing
+      // shape-mismatch on load.
+      std::string train_version_hint;
+      if (!init_weights.empty()) {
+        if (scale_s.empty()) {
+          auto fs_scale = yolocpp::cli::scale_from_filename(init_weights);
+          if (!fs_scale.empty()) scale_s = fs_scale;
+        }
+        train_version_hint = yolocpp::cli::version_from_filename(init_weights);
+      }
+      int rc = cmd_train(root, names_csv, imgsz, epochs, batch_size, lr0,
+                          device, scale_s, save_dir, init_weights,
+                          legacy_patience, /*args_for_yaml=*/{}, cli_seed);
+      if (rc != 0) return rc;
+      // Post-train auto-export: walks `--export-after-train`'s
+      // comma-separated formats. Looks for `<save_dir>/best.pt`
+      // first, falls back to `<save_dir>/last.pt`.
+      if (!export_after_train.empty()) {
+        std::filesystem::path src = std::filesystem::path(save_dir) / "best.pt";
+        if (!std::filesystem::exists(src)) {
+          src = std::filesystem::path(save_dir) / "last.pt";
+        }
+        if (!std::filesystem::exists(src)) {
+          std::cerr << "[warn] --export-after-train: no best.pt or last.pt under "
+                    << save_dir << "; skipping export\n";
+        } else {
+          for (const auto& fmt : split_csv(export_after_train)) {
+            if (fmt != "onnx" && fmt != "trt") {
+              std::cerr << "[error] --export-after-train='" << fmt
+                        << "' not recognised (expected: onnx, trt)\n";
+              return 2;
+            }
+            // Place the exported artefact next to the source `best.pt`
+            // (e.g. `<save_dir>/best.onnx`, `<save_dir>/best.trt`). The
+            // default `runs/export/<base>.onnx` location wouldn't tie the
+            // exported file to the train run that produced it.
+            std::filesystem::path out_path = src;
+            out_path.replace_extension("." + fmt);
+            int xrc = cmd_export(src.string(), fmt, out_path.string(),
+                                  imgsz, scale_s, nc,
+                                  /*input_name=*/"images",
+                                  /*fp16=*/true, train_version_hint);
+            if (xrc != 0) return xrc;
+          }
+        }
+      }
+      return 0;
+    }
+    if (app.got_subcommand("export")) {
+      // --precision wins over --fp16 when both are given. fp32 and
+      // fp16 are wired through the existing `TrtBuildConfig.fp16`
+      // toggle; int8 / int4 / nvfp4 are not yet implemented and
+      // surface a clear error pointing at the gap.
+      if (!export_precision.empty()) {
+        if (export_precision == "fp32") {
+          export_fp16 = false;
+        } else if (export_precision == "fp16") {
+          export_fp16 = true;
+        } else if (export_precision == "int8" ||
+                   export_precision == "int4" ||
+                   export_precision == "nvfp4") {
+          std::cerr << "[error] --precision=" << export_precision
+                    << " not yet wired (TODO #51F2: add INT8 calibration "
+                       "+ INT4/NVFP4 routing through TrtBuildConfig)\n";
+          return 2;
+        } else {
+          std::cerr << "[error] unknown --precision='" << export_precision
+                    << "' (expected fp32 | fp16 | int8 | int4 | nvfp4)\n";
+          return 2;
+        }
+      }
       return cmd_export(weights, export_fmt, out, imgsz, scale_s, nc,
                         export_input_name, export_fp16);
+    }
     if (app.got_subcommand("benchmark"))
       return cmd_benchmark(weights, source, imgsz, warmup, iters, cache, device);
     if (app.got_subcommand("download")) {
