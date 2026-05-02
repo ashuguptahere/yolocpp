@@ -964,11 +964,18 @@ VersionAdapter make_rfdetr() {
     m->load_from_state_dict({});  // throws via #65D
     return VersionAdapter::ValResult{};
   };
-  a.run_train_detect = [](const std::string&, const std::string& scale,
-                           int nc, datasets::YoloDataset,
-                           const engine::TrainConfig&) {
+  a.run_train_detect = [](const std::string& weights, const std::string& scale,
+                           int nc, datasets::YoloDataset ds,
+                           const engine::TrainConfig& tc) {
     models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
-    m->forward_train(torch::zeros({1, 3, 32, 32}));  // throws via #65F
+    if (!weights.empty()) {
+      // #65D pending: throws with a slice tag.
+      m->load_from_state_dict({});
+    }
+    // Random-init training is meaningful (Hungarian loss runs);
+    // it just won't converge in a single session.
+    engine::TrainerRFDetr t(m, std::move(ds), tc);
+    t.run();
   };
   a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat&,
                       const std::string& scale) {

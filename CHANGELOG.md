@@ -30,6 +30,53 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.37.0] — 2026-05-02
+
+### Added — RF-DETR trainer integration (#65G)
+
+`engine::TrainerRFDetr = TrainerT<RFDetr>` lands. The existing
+templated trainer scaffold is reused — only a `LossTraits<RFDetr>`
+specialization in `src/engine/trainer.cpp` is needed to:
+
+- De-interleave `forward_train`'s flat `[cls0, bbox0, …]` output
+  into per-layer cls/bbox lists.
+- Convert the trainer's flat YOLO target tensor `[N, 6]` (`batch_idx,
+  class, cx, cy, w, h`) into per-image `vector<RFDetrTarget>` lists.
+- Call `rfdetr_set_loss` (#65F) and pack the result into the
+  trainer's expected `LossOutput` (mapping l1→box, giou→dfl for
+  logging compatibility).
+
+`RFDetrImpl` / `RFDetrSegmentImpl` API simplified to expose
+`scale`, `nc`, `stride` as plain fields (matching the YOLO model
+convention used by the trainer template). `stride{1.0}` is fake
+(set prediction has no FPN strides; LossTraits ignores it).
+
+### Changed — `RFDetrImpl::forward_eval` contract
+
+Now returns `[B, 4+nc, Q]` with **xyxy in pixel coords** + sigmoided
+cls — drop-in compatible with `inference::nms` and `Validator`,
+matching the YOLO contract documented in CLAUDE.md. `rfdetr_decode`
++ `test_rfdetr_decode` updated to read xyxy directly. The conversion
+from sigmoided cxcywh-in-`[0,1]` to xyxy-in-pixels happens inside
+`forward_eval` using the input image's H/W.
+
+`engine::validate<RFDetr>` + `validate_with_records<RFDetr>`
+explicitly instantiated so the trainer's optional `val_every`
+hook compiles for RF-DETR.
+
+The registry's `run_train_detect` hook now calls
+`TrainerRFDetr::run()` instead of throwing. Train without weights
+runs (random init); with `-m rfdetr-*.pt` it still hits the #65D
+converter throw on `load_from_state_dict`.
+
+### Tracked
+
+- TODO #65G marked landed; #65D (converter), #65H (per-area mAP +
+  task-aware val), #65I (ONNX export), #65J (TRT pipeline), #65K
+  (segment), #65L (parity smokes) still pending.
+
+---
+
 ## [0.36.0] — 2026-05-02
 
 ### Added — RF-DETR predict path / NMS-free decode (#65E)

@@ -41,12 +41,11 @@ int rfdetr_default_imgsz(const RFDetrScale& scale) {
 
 // ─── Detect ──────────────────────────────────────────────────────────────
 
-RFDetrImpl::RFDetrImpl(RFDetrScale scale, int nc) : scale_(scale), nc_(nc) {
-  // #65A + #65B + #65C landed: backbone, encoder, decoder/head are
-  // constructed and registered. forward_eval now runs end-to-end
-  // and produces YOLO-shaped `[B, 4+nc, num_queries]` output.
-  // forward_train still throws because the per-layer auxiliary
-  // outputs need the Hungarian loss surface (#65F).
+RFDetrImpl::RFDetrImpl(RFDetrScale scale_in, int nc_in)
+    : scale(scale_in), nc(nc_in) {
+  // #65A..C landed; train integration (#65G) reads `scale`, `nc`,
+  // and `stride` directly as fields (mirrors the YOLO model
+  // convention).
   const auto& bcfg =
       yolocpp::models::rfdetr::backbone_cfg_from_name(scale.backbone);
   backbone_ = register_module(
@@ -75,9 +74,24 @@ RFDetrImpl::forward_encoder(torch::Tensor x) {
 }
 
 torch::Tensor RFDetrImpl::forward_eval(torch::Tensor x) {
+  // Capture the input spatial dims before the encoder consumes it
+  // — the head emits sigmoided cxcywh in [0, 1], we need to return
+  // xyxy in pixel coords to match YOLO's `forward_eval` contract
+  // (so `inference::nms` is drop-in compatible).
+  int64_t H = x.size(2), W = x.size(3);
   auto enc = forward_encoder(std::move(x));
-  return head_->forward_eval(enc.memory, enc.spatial_shapes,
-                              enc.level_start_index);
+  auto out = head_->forward_eval(enc.memory, enc.spatial_shapes,
+                                   enc.level_start_index);
+  // out: [B, 4+nc, Q] cxcywh in [0,1] + sigmoided cls.
+  auto cx = out.select(1, 0) * static_cast<double>(W);
+  auto cy = out.select(1, 1) * static_cast<double>(H);
+  auto w  = out.select(1, 2) * static_cast<double>(W);
+  auto h  = out.select(1, 3) * static_cast<double>(H);
+  auto x1 = cx - 0.5 * w, y1 = cy - 0.5 * h;
+  auto x2 = cx + 0.5 * w, y2 = cy + 0.5 * h;
+  auto xyxy = torch::stack({x1, y1, x2, y2}, /*dim=*/1);
+  auto cls  = out.slice(1, 4);
+  return torch::cat({xyxy, cls}, /*dim=*/1);
 }
 
 std::vector<torch::Tensor> RFDetrImpl::forward_train(torch::Tensor x) {
@@ -103,8 +117,8 @@ int RFDetrImpl::load_from_state_dict(
 
 // ─── Segment ─────────────────────────────────────────────────────────────
 
-RFDetrSegmentImpl::RFDetrSegmentImpl(RFDetrScale scale, int nc)
-    : scale_(scale), nc_(nc) {
+RFDetrSegmentImpl::RFDetrSegmentImpl(RFDetrScale scale_in, int nc_in)
+    : scale(scale_in), nc(nc_in) {
   const auto& cfg =
       yolocpp::models::rfdetr::backbone_cfg_from_name(scale.backbone);
   backbone_ = register_module(

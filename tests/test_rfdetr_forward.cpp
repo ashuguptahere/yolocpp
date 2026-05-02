@@ -36,12 +36,20 @@ void check_forward(const std::string& letter) {
               << scale.num_queries << "]\n";
     std::exit(1);
   }
-  // Bbox channels (0..3) sigmoided so values in [0, 1]; cls (4..) too.
-  auto b_lo = out.slice(1, 0, 4).min().item<float>();
-  auto b_hi = out.slice(1, 0, 4).max().item<float>();
-  if (b_lo < 0.0f || b_hi > 1.0f) {
-    std::cerr << "[FAIL] " << letter << " bbox out of [0,1]: "
-              << b_lo << ", " << b_hi << "\n";
+  // forward_eval matches the YOLO contract: bbox is xyxy in PIXEL
+  // coords (caller's input H/W); cls is sigmoided in [0, 1].
+  auto cls_slice = out.slice(1, 4);
+  auto c_lo = cls_slice.min().item<float>();
+  auto c_hi = cls_slice.max().item<float>();
+  if (c_lo < 0.0f || c_hi > 1.0f) {
+    std::cerr << "[FAIL] " << letter << " cls out of [0,1]: "
+              << c_lo << ", " << c_hi << "\n";
+    std::exit(1);
+  }
+  // bbox channels: x1,y1 in [-imgsz, imgsz]; x2,y2 too. Just check
+  // finiteness; range will be tight once weights load.
+  if (!std::isfinite(out.slice(1, 0, 4).abs().sum().item<float>())) {
+    std::cerr << "[FAIL] " << letter << " bbox non-finite\n";
     std::exit(1);
   }
 

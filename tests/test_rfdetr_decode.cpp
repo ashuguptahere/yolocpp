@@ -19,12 +19,12 @@ int main() {
   // Query 1: cls=4 score=0.3 (below threshold 0.5)
   // Query 2: cls=0 score=0.7, box=(0.1, 0.1, 0.05, 0.05)
   // Query 3: cls=1 score=0.85, box=(0.9, 0.9, 0.05, 0.05)
+  // Boxes in xyxy pixel coords (matching forward_eval's YOLO contract).
   auto t = torch::zeros({B, 4 + nc, Q});
-  // boxes
-  t[0][0][0] = 0.5; t[0][1][0] = 0.5; t[0][2][0] = 0.2; t[0][3][0] = 0.2;
-  t[0][0][1] = 0.0; t[0][1][1] = 0.0; t[0][2][1] = 0.0; t[0][3][1] = 0.0;
-  t[0][0][2] = 0.1; t[0][1][2] = 0.1; t[0][2][2] = 0.05; t[0][3][2] = 0.05;
-  t[0][0][3] = 0.9; t[0][1][3] = 0.9; t[0][2][3] = 0.05; t[0][3][3] = 0.05;
+  t[0][0][0] = 256; t[0][1][0] = 256; t[0][2][0] = 384; t[0][3][0] = 384;
+  t[0][0][1] = 0;   t[0][1][1] = 0;   t[0][2][1] = 0;   t[0][3][1] = 0;
+  t[0][0][2] = 32;  t[0][1][2] = 32;  t[0][2][2] = 96;  t[0][3][2] = 96;
+  t[0][0][3] = 560; t[0][1][3] = 560; t[0][2][3] = 624; t[0][3][3] = 624;
   // cls scores
   t[0][4 + 2][0] = 0.9;
   t[0][4 + 4][1] = 0.3;
@@ -55,8 +55,7 @@ int main() {
     std::cerr << "[FAIL] det[2] cls expected 0 got " << dets[2].cls << "\n";
     return 1;
   }
-  // Verify cxcywh → xyxy on q0: (0.5, 0.5, 0.2, 0.2) at imgsz=640
-  // → cx=320, cy=320, w=128, h=128 → (256, 256, 384, 384).
+  // Verify q0's box passes through unchanged (xyxy in pixel coords).
   if (std::abs(dets[0].x1 - 256.0f) > 1e-3f ||
       std::abs(dets[0].y1 - 256.0f) > 1e-3f ||
       std::abs(dets[0].x2 - 384.0f) > 1e-3f ||
@@ -74,6 +73,6 @@ int main() {
     return 1;
   }
 
-  std::cout << "[PASS] rfdetr decode: threshold + top-K + cxcywh→xyxy\n";
+  std::cout << "[PASS] rfdetr decode: threshold + top-K + xyxy passthrough\n";
   return 0;
 }

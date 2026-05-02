@@ -102,9 +102,15 @@ class RFDetrImpl : public torch::nn::Module {
   // Stride is conceptual for DETR-family models (output is per-query
   // not per-anchor); `nc` + `num_queries` are the meaningful shape
   // accessors.
-  int                nc()           const { return nc_; }
-  int                num_queries()  const { return scale_.num_queries; }
-  const RFDetrScale& scale()        const { return scale_; }
+  int                num_queries()  const { return scale.num_queries; }
+
+  // Trainer template (`engine::TrainerT<M>`) reads these as plain
+  // fields, matching the YOLO model convention. `stride` is fake
+  // for RF-DETR (set prediction has no FPN strides) — the
+  // LossTraits specialization ignores it.
+  RFDetrScale         scale;
+  int                 nc;
+  std::vector<double> stride{1.0};
 
   // #65A — backbone runs end-to-end and returns multi-scale feature
   // maps. Used directly by `forward_eval` once the head (#65C) lands;
@@ -118,8 +124,6 @@ class RFDetrImpl : public torch::nn::Module {
   yolocpp::models::rfdetr::EncoderOutput forward_encoder(torch::Tensor x);
 
  private:
-  RFDetrScale                          scale_;
-  int                                  nc_;
   yolocpp::models::rfdetr::ViTBackbone backbone_{nullptr};
   yolocpp::models::rfdetr::Encoder     encoder_{nullptr};
   yolocpp::models::rfdetr::DetrHead    head_{nullptr};
@@ -143,14 +147,13 @@ class RFDetrSegmentImpl : public torch::nn::Module {
   int load_from_state_dict(
       const std::vector<std::pair<std::string, at::Tensor>>& entries);
 
-  int                nc()    const { return nc_; }
-  const RFDetrScale& scale() const { return scale_; }
+  RFDetrScale         scale;
+  int                 nc;
+  std::vector<double> stride{1.0};
 
   std::vector<torch::Tensor> forward_backbone(torch::Tensor x);
 
  private:
-  RFDetrScale                       scale_;
-  int                               nc_;
   yolocpp::models::rfdetr::ViTBackbone backbone_{nullptr};
 };
 

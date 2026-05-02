@@ -57,15 +57,15 @@ std::vector<std::vector<Detection>> rfdetr_decode(const torch::Tensor& out,
     auto& dets = result[b];
     dets.reserve(cands.size());
     for (auto& c : cands) {
-      float cx = a[b][0][c.q] * imgsz;
-      float cy = a[b][1][c.q] * imgsz;
-      float w  = a[b][2][c.q] * imgsz;
-      float h  = a[b][3][c.q] * imgsz;
+      // forward_eval emits xyxy in pixel coords already (YOLO
+      // contract); imgsz unused for box conversion but kept for API
+      // symmetry with `Predictor::predict`.
+      (void)imgsz;
       Detection d;
-      d.x1 = cx - 0.5f * w;
-      d.y1 = cy - 0.5f * h;
-      d.x2 = cx + 0.5f * w;
-      d.y2 = cy + 0.5f * h;
+      d.x1 = a[b][0][c.q];
+      d.y1 = a[b][1][c.q];
+      d.x2 = a[b][2][c.q];
+      d.y2 = a[b][3][c.q];
       d.conf = c.score;
       d.cls  = c.cls;
       dets.push_back(d);
