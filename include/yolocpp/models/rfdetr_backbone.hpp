@@ -188,6 +188,8 @@ class Dinov2EncoderImpl : public torch::nn::Module {
   // `[B*W², N_w+1, C]`. Caller is responsible for unwindowing back
   // to the full grid.
   std::vector<torch::Tensor> forward(torch::Tensor x);
+  // #65L parity: capture EVERY block's hidden state for bisection.
+  std::vector<torch::Tensor> forward_all_blocks(torch::Tensor x);
   torch::nn::ModuleList layer{nullptr};
  private:
   std::vector<int>             taps_;

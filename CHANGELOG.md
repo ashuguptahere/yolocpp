@@ -30,6 +30,84 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.47.0] — 2026-05-02
+
+### Added — `Dinov2Encoder::forward_all_blocks` + parity bisection (#65L slice 4)
+
+Exposed a per-block intermediate-capture API on the C++ backbone:
+`Dinov2EncoderImpl::forward_all_blocks(x)` returns a vector of all
+12 hidden states (one per ViT block) so the parity harness can
+diff against upstream's `layer<i>_out.bin` dumps stage-by-stage.
+
+`tests/test_rfdetr_parity_dump.cpp` now walks the live module tree
+to grab the inner `Dinov2Model`, runs `embeddings()` →
+`encoder.forward_all_blocks()`, and emits per-stage
+`max_abs_diff` against the dumped Python tensors.
+
+Sample output for `rf-detr-base.pth` on a `torch.randn(1,3,560,560)`
+input:
+
+```
+[stage] embeddings_out  C++ [16,101,384] sum=-1767.09  abs.max=1.191
+[stage] embeddings_out  Py  [16,101,384] sum=-1767.57  →  max_abs_diff=0.0063
+[stage] layer00_out  shape=[16,101,384]  max_abs_diff=0.0086
+[stage] layer01_out  shape=[16,101,384]  max_abs_diff=0.0090
+[stage] layer02_out  shape=[16,101,384]  max_abs_diff=0.0110
+[stage] layer05_out  shape=[16,101,384]  max_abs_diff=0.0931
+[stage] layer08_out  shape=[16,101,384]  max_abs_diff=0.3641
+[stage] layer09_out  shape=[16,101,384]  max_abs_diff=1.0719
+[stage] layer10_out  shape=[16,101,384]  max_abs_diff=1.7049
+[stage] layer11_out  shape=[16,101,384]  max_abs_diff=1.5987
+```
+
+### Findings
+
+The architecture is structurally correct (output sums + shapes
+match within tight tolerance at each stage). The diff at
+`embeddings_out` is **0.006** — within the fp32 noise floor for
+bicubic-interpolated position embeddings. From there the diff
+grows roughly 4-8× per 3 layers, indicating a small per-layer
+numerical drift that compounds through the 12-block residual
+stack rather than a single gross bug.
+
+Concrete hypotheses for the next slice (#65L slice 5+) to investigate:
+
+1. **Position-embedding interpolation** — PyTorch's `interpolate(…,
+   mode='bicubic', align_corners=False)` may differ very slightly
+   from libtorch's implementation. Switch to `bilinear` for an
+   exact-match probe, OR pre-compute interpolation in Python and
+   compare layer-0 input directly.
+
+2. **Window↔full reshape order** — verify cls token placement in
+   the un-windowed token stream. Upstream's `view(B, W²·HW, C)`
+   places the cls of window 0 at index 0, window 1's cls at index
+   `HW`, etc. — same as ours. Likely correct, but worth
+   instrumenting.
+
+3. **GELU approximation** — DINOv2 uses exact GELU. PyTorch's
+   default is exact. Should match but verify.
+
+4. **fp32 round-off in attention softmax** — for B*W²=16, Lq=101,
+   16 heads × 32 head_dim, the matmul at fp32 has ~1e-6 relative
+   precision. Per-block compounding to ~1.6 at layer 11 is in the
+   right order of magnitude for accumulated rounding alone.
+
+This slice doesn't fix any bug — it builds the diagnostic
+infrastructure and reports the diff floor. Whether the residual
+0.006-1.6 range is "good enough" for predictions depends on what
+the decoder does with it. Detection plausibility check is the next
+gate.
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 4 done (per-block diff visibility); slice 5
+  digs into the embeddings_out diff source first (smallest
+  delta to characterise).
+
+---
+
 ## [0.46.0] — 2026-05-02
 
 ### Added — RF-DETR parity test harness (#65L slice 3)

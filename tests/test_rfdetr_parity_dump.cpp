@@ -21,6 +21,8 @@
 #include <torch/torch.h>
 
 #include "yolocpp/models/rfdetr.hpp"
+#include "yolocpp/models/rfdetr_backbone.hpp"
+#include "yolocpp/models/rfdetr_projector.hpp"
 #include "yolocpp/serialization/rfdetr_weights.hpp"
 
 namespace fs = std::filesystem;
@@ -80,28 +82,39 @@ int main() {
   }
   m->load_from_upstream_pt(wpath.string(), /*strict=*/false);
 
-  // Forward through the backbone module reach-by-reach. Since the
-  // C++ side wraps a `BackboneSlot` (containing `encoder` +
-  // `projector`), we need to access the inner `Dinov2Model`'s sub-
-  // modules. The simplest path: expose them via named_modules.
-  // (Without an explicit `forward_intermediate` API, this test acts
-  // as a sanity check on the FULL forward only — granular
-  // bisection lands in a follow-up.)
-
+  // Walk the live module tree to find the inner Dinov2Model so we
+  // can call `embeddings()` and `encoder.forward_all_blocks()`
+  // directly — bypassing forward_eval to capture per-stage
+  // activations alongside Python's dumps.
   torch::NoGradGuard ng;
-  auto cpp_out = m->forward_eval(inp);
-  std::cout << "C++ forward_eval output shape: " << cpp_out.sizes() << "\n";
+  auto& slot = *m->named_children()["backbone"]->as<torch::nn::ModuleListImpl>();
+  auto& bs   = *slot[0]->as<yolocpp::models::rfdetr::BackboneSlotImpl>();
+  auto& wrapper = *bs.encoder.ptr();          // Dinov2Wrapper
+  auto& dmodel  = *wrapper.encoder.ptr();     // Dinov2Model
 
-  // Compare against final dumped layer.
-  auto py_last = load_dump(d, "layer11_out");
-  if (py_last.defined()) {
-    std::cout << "Python last layer output shape: " << py_last.sizes()
-              << " sum=" << py_last.sum().item<float>()
-              << " abs.max=" << py_last.abs().max().item<float>() << "\n";
+  auto emb_cpp = dmodel.embeddings->forward(inp);
+  std::cout << "[stage] embeddings_out  C++ "
+            << emb_cpp.sizes() << " sum=" << emb_cpp.sum().item<float>()
+            << " abs.max=" << emb_cpp.abs().max().item<float>() << "\n";
+  auto emb_py = load_dump(d, "embeddings_out");
+  if (emb_py.defined()) {
+    float diff = max_abs_diff(emb_cpp.to(torch::kFloat).contiguous(),
+                                emb_py.to(torch::kFloat).contiguous());
+    std::cout << "[stage] embeddings_out  Py "
+              << emb_py.sizes() << " sum=" << emb_py.sum().item<float>()
+              << "  →  max_abs_diff=" << diff << "\n";
   }
 
-  std::cout << "\nNote: granular per-stage bisection requires a "
-              "`forward_intermediate` API on Dinov2Model — filed as "
-              "the next #65L slice.\n";
+  auto blocks = dmodel.encoder->forward_all_blocks(emb_cpp);
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    char name[32]; std::snprintf(name, sizeof(name), "layer%02zu_out", i);
+    auto py = load_dump(d, name);
+    if (!py.defined()) continue;
+    float diff = max_abs_diff(blocks[i].to(torch::kFloat).contiguous(),
+                                py.to(torch::kFloat).contiguous());
+    std::cout << "[stage] " << name << "  shape="
+              << blocks[i].sizes() << "  max_abs_diff=" << diff << "\n";
+  }
+
   return 0;
 }

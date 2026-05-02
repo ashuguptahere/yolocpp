@@ -302,6 +302,17 @@ std::vector<torch::Tensor> Dinov2EncoderImpl::forward(torch::Tensor x) {
   return taps;
 }
 
+std::vector<torch::Tensor> Dinov2EncoderImpl::forward_all_blocks(torch::Tensor x) {
+  std::vector<torch::Tensor> outs;
+  outs.reserve(layer->size());
+  for (int i = 0; i < static_cast<int>(layer->size()); ++i) {
+    bool run_full = !is_windowed_[i];
+    x = layer[i]->as<Dinov2LayerImpl>()->forward(x, run_full);
+    outs.push_back(x);
+  }
+  return outs;
+}
+
 Dinov2ModelImpl::Dinov2ModelImpl(const Dinov2Cfg& cfg) {
   embeddings = register_module("embeddings", Dinov2Embeddings(cfg));
   encoder    = register_module("encoder", Dinov2Encoder(cfg));
