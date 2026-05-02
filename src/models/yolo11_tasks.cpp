@@ -170,7 +170,7 @@ int load_state_dict_generic(M& self,
 }
 
 // Remap state_dict keys: insert ".detect." after "model.23." for cv2/cv3/dfl
-// (Ultralytics' Segment/Pose/OBB inherit Detect, but our nesting wraps Detect
+// (Upstream Segment/Pose/OBB inherit Detect, but our nesting wraps Detect
 // inside the task head). cv4/proto stay where they are.
 std::vector<std::pair<std::string, at::Tensor>>
 remap_task_keys(const std::vector<std::pair<std::string, at::Tensor>>& entries,

@@ -49,7 +49,7 @@ Yolo26Scale yolo26_scale_from_filename(const std::string& path) {
 
 // ─── C2PSAf ───────────────────────────────────────────────────────────────
 // CSP-shaped block whose inner module is `Sequential(Bottleneck, PSABlock)`.
-// State-dict layout matches Ultralytics' shipped yolo26<x>.pt at layer 22.
+// State-dict layout matches the shipped yolo26<x>.pt at layer 22.
 
 C2PSAfImpl::C2PSAfImpl(int c1, int c2, int n, double e) {
   c_inner = (int)((double)c2 * e);
@@ -93,7 +93,7 @@ Detect26Impl::Detect26Impl(int nc_, std::vector<int> ch_)
   nl = (int)ch.size();
   no = 4 + nc;
 
-  // Channel sizing rule (matches Ultralytics shipped yolo26<x>.pt):
+  // Channel sizing rule (matches the shipped yolo26<x>.pt):
   //   c2 = max(16, ch[0]/4)               (no reg_max*4 since DFL-free)
   //   c3 = max(ch[0], min(nc, 100))
   int c2 = std::max({16, ch[0] / 4});

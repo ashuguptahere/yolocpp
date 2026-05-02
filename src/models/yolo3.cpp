@@ -12,7 +12,7 @@ struct Spec {
   std::vector<int> args;   // Conv: [c_out, k, s]; Bottleneck: [c_out, shortcut(0/1)]
 };
 const std::vector<Spec>& v3_yaml() {
-  // Ultralytics yolov3.yaml @ depth/width 1.0. Bottleneck shortcut
+  // Upstream yolov3.yaml @ depth/width 1.0. Bottleneck shortcut
   // defaults to True; we explicitly mark False with args[1]=0.
   static const std::vector<Spec> y = {
       // Backbone (darknet-53)

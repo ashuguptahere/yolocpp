@@ -75,7 +75,7 @@ torch::Tensor C3kImpl::forward(torch::Tensor x) {
 
 // ─── C3k2 ─────────────────────────────────────────────────────────────────
 // State-dict naming and forward shape are bit-identical to v8 C2f (only the
-// inner block kind changes). c_inner here is C2f's "self.c" in Ultralytics.
+// inner block kind changes). c_inner here is C2f's "self.c" upstream.
 
 C3k2Impl::C3k2Impl(int c1, int c2, int n, bool c3k_, double e, int g,
                    bool shortcut)
@@ -86,7 +86,7 @@ C3k2Impl::C3k2Impl(int c1, int c2, int n, bool c3k_, double e, int g,
   m   = register_module("m", torch::nn::ModuleList());
   for (int i = 0; i < n; ++i) {
     if (c3k) {
-      // Ultralytics hardcodes the inner C3k's depth to 2.
+      // Upstream hardcodes the inner C3k's depth to 2.
       m->push_back(C3k(c_inner, c_inner, /*n=*/2, shortcut, g, /*e=*/0.5, /*k=*/3));
     } else {
       m->push_back(Bottleneck(c_inner, c_inner, shortcut, g, /*e=*/0.5,
@@ -138,7 +138,7 @@ torch::Tensor PSAAttentionImpl::forward(torch::Tensor x) {
   auto y = qkv(x);  // [B, h, H, W] where h = num_heads * (2*key_dim + head_dim)
   // Reshape to [B, num_heads, 2*key_dim + head_dim, N], then split.
   y = y.view({B, num_heads, 2 * key_dim + head_dim, N});
-  // Match Ultralytics: q / k / v split sizes are key_dim, key_dim, head_dim.
+  // Match upstream: q / k / v split sizes are key_dim, key_dim, head_dim.
   auto parts = y.split_with_sizes({(int64_t)key_dim, (int64_t)key_dim,
                                    (int64_t)head_dim},
                                   /*dim=*/2);
@@ -189,7 +189,7 @@ C2PSAImpl::C2PSAImpl(int c1, int c2, int n, double e) {
   c = (int)((double)c1 * e);
   cv1 = register_module("cv1", Conv(c1,     2 * c, 1, 1));
   cv2 = register_module("cv2", Conv(2 * c,  c1,    1));
-  // num_heads = self.c // 64 (Ultralytics' rule)
+  // num_heads = self.c // 64 (upstream rule)
   int nh = std::max(1, c / 64);
   m = register_module("m", torch::nn::Sequential());
   for (int i = 0; i < n; ++i) {
@@ -220,7 +220,7 @@ struct LSpec {
 };
 
 const std::vector<LSpec>& v11_yaml() {
-  // Mirrors ultralytics/cfg/models/11/yolo11.yaml. e is encoded as e_x100 to
+  // Mirrors the upstream `cfg/models/11/yolo11.yaml`. e is encoded as e_x100 to
   // keep the args vector all-int.
   static const std::vector<LSpec> y = {
       // Backbone (10 layers)
@@ -264,7 +264,7 @@ void build_layer(torch::nn::ModuleList& model, const LSpec& spec, int in_ch,
     int c_out = scale_channels_v11(spec.a[0], scale);
     int n     = scale_depth_v11(spec.a[1], scale);
     bool c3k  = (spec.a[2] != 0);
-    // Ultralytics' parse_model() forces c3k=True for m/l/x scales regardless
+    // The upstream parse_model() forces c3k=True for m/l/x scales regardless
     // of the YAML's explicit value. Detect those scales by width >= 1.0 —
     // n=0.25, s=0.50 keep c3k as YAML; m=1.00, l=1.00, x=1.50 force-upgrade.
     if (scale.width_multiple >= 1.0) c3k = true;

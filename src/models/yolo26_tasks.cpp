@@ -114,7 +114,7 @@ Pose26Impl::forward(std::vector<torch::Tensor> x) {
   auto conf = kpts.slice(2, 2, 3);
   auto anc_b = anc_full.transpose(0, 1).unsqueeze(0).unsqueeze(0);
   auto str_b = str_full.unsqueeze(0).unsqueeze(0).unsqueeze(0);
-  // Ultralytics formula: kpts_pix = (xy * 2 + cell_idx) * stride
+  // Upstream formula: kpts_pix = (xy * 2 + cell_idx) * stride
   //                              = xy*2*stride + (anchor_pix - 0.5*stride)
   // (See the matching note in yolo8_tasks.cpp for the bug history.)
   auto xy_pix = xy * 2.0 * str_b + (anc_b - 0.5 * str_b);
@@ -149,7 +149,7 @@ OBB26Impl::forward(std::vector<torch::Tensor> x) {
   auto angle = torch::cat(as, /*dim=*/2);                    // [N, 1, A]
   angle = (angle.sigmoid() - 0.25) * M_PI;
 
-  // ── Rotated decode (DFL-free; matches Ultralytics' dist2rbox) ──────────
+  // ── Rotated decode (DFL-free; matches the upstream dist2rbox) ─────────
   std::vector<torch::Tensor> flat_pred;
   std::vector<torch::Tensor> anchors_feat, str_t;
   for (int i = 0; i < nl; ++i) {

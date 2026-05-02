@@ -63,7 +63,7 @@ AAttnImpl::AAttnImpl(int dim, int num_heads_, int area_)
 }
 
 torch::Tensor AAttnImpl::forward(torch::Tensor x) {
-  // Mirror of Ultralytics' AAttn.forward (yolo12). Channel layout matters:
+  // Mirror of the upstream AAttn.forward (yolo12). Channel layout matters:
   // the qkv conv output's 3C channels are interleaved as
   // [head0(q,k,v), head1(q,k,v), ...] — `view(B, N, nh, 3*hd)` then split
   // along the per-head feature dim. Splitting the OUTER 3C with chunk(3)
@@ -271,7 +271,7 @@ void build_layer(torch::nn::ModuleList& model, const LSpec& spec, int in_ch,
     int area   = spec.a[3];
     bool resid = (spec.a[4] != 0);
     double mlp = (double)spec.a[5] / 100.0;
-    // Ultralytics' parse_model override: scales l/x flip A2C2f to
+    // Upstream parse_model override: scales l/x flip A2C2f to
     // `residual=True, mlp_ratio=1.2` regardless of the YAML default. l
     // and x both have depth_multiple=1.0; m (depth=0.5, width=1.0) keeps
     // the defaults.

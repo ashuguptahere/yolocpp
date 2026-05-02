@@ -14,7 +14,7 @@ C3Impl::C3Impl(int c1, int c2, int n, bool shortcut, int g, double e) {
   cv3 = register_module("cv3", Conv(2 * c_inner, c2, 1));
   m   = register_module("m",   torch::nn::ModuleList());
   for (int i = 0; i < n; ++i) {
-    // Ultralytics C3 uses Bottleneck(k=((1,1),(3,3)), e=1.0) — 1×1 then 3×3.
+    // Upstream C3 uses Bottleneck(k=((1,1),(3,3)), e=1.0) — 1×1 then 3×3.
     m->push_back(Bottleneck(c_inner, c_inner, shortcut, g, 1.0,
                             std::array<int, 2>{1, 3}));
   }

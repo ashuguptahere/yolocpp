@@ -184,7 +184,7 @@ remap_task_keys(const std::vector<std::pair<std::string, at::Tensor>>& entries,
 }
 
 // v12-cls walker (mirrors v11-cls; ends in Classify). Layers 2,4 use
-// halved C3k2 c_out to match Ultralytics' yolo12-cls.yaml convention.
+// halved C3k2 c_out to match the upstream yolo12-cls.yaml convention.
 struct LSpecCls { std::string kind; std::vector<int> a; };
 const std::vector<LSpecCls>& v12_cls_yaml() {
   static const std::vector<LSpecCls> y = {

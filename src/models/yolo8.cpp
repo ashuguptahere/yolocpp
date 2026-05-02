@@ -13,7 +13,7 @@ namespace yolocpp::models {
 
 namespace F = torch::nn::functional;
 
-// Auto-pad: same as Ultralytics' autopad(k, p, d=1).
+// Auto-pad: same as the upstream autopad(k, p, d=1).
 static int autopad(int k, int p, int d = 1) {
   if (p >= 0) return p;
   // d=1 always for our use — effective k stays k.
@@ -32,7 +32,7 @@ BnEpsScope::~BnEpsScope() { g_default_bn_eps = prev; }
 
 int scale_channels(int c, const Yolo8Scale& s) {
   c = std::min(c, s.max_channels);
-  // ultralytics rounds to multiple of 8 in some places, but for v8 the
+  // upstream rounds to multiple of 8 in some places, but for v8 the
   // YAML-defined channels are already multiples of 8 and the multiplier
   // is applied last. Their exact rule:
   //   c = make_divisible(min(c, max) * width, 8)
@@ -60,7 +60,7 @@ ConvImpl::ConvImpl(int c_in, int c_out, int k, int s, int p, int g, bool act,
                             .groups(g)
                             .bias(conv_bias)
                             .dilation(1)));
-  // Ultralytics overrides BN eps to 1e-3 for detect/segment/pose/obb
+  // Upstream overrides BN eps to 1e-3 for detect/segment/pose/obb
   // (vs PyTorch default 1e-5). The classify models use plain 1e-5
   // though — Yolo*Classify constructors push a `BnEpsScope(1e-5)` before
   // building their children so this picks up the cls value.
@@ -237,7 +237,7 @@ DetectImpl::DetectImpl(int nc_, std::vector<int> ch_, bool legacy_)
       // v11+: nested (DWConv 3×3 → Conv 1×1) × 2 → Conv2d 1×1. Each pair is
       // a DWConvBlock with children named "0"/"1", so the full state_dict
       // path becomes cv3.<lvl>.<0|1>.<0|1>.{conv,bn}.<...> —
-      // matching Ultralytics' yolo11<x>.pt naming.
+      // matching the upstream yolo11<x>.pt naming.
       cls->push_back(DWConvBlock(ch[i], c3, /*k_dw=*/3));
       cls->push_back(DWConvBlock(c3,    c3, /*k_dw=*/3));
       cls->push_back(torch::nn::Conv2d(
@@ -314,7 +314,7 @@ torch::Tensor DetectImpl::decode(const std::vector<torch::Tensor>& feats) {
 // = state_dict iteration order = pickle traversal order.
 
 namespace {
-// Ultralytics yaml decoded for v8 detect:
+// Upstream yaml decoded for v8 detect:
 //   from   = which previous outputs feed this layer (-1 = previous)
 //   module = layer kind
 //   args   = (out_channels [pre-scale], extra...)
@@ -466,7 +466,7 @@ Yolo8DetectImpl::Yolo8DetectImpl(Yolo8Scale s, int nc_) : scale(s), nc(nc_) {
   }
 
   // Initialize the Detect head's biases to be near-zero "no object" priors.
-  // Ultralytics: cv3 final 1x1 conv bias init to log((1 - 0.01) / 0.01) ≈ 4.6
+  // Upstream: cv3 final 1x1 conv bias init to log((1 - 0.01) / 0.01) ≈ 4.6
   // is NOT what they do — they set bias to log(class_freq * stride / 8) etc.
   // For from-scratch training we leave default; for loaded weights this is
   // overwritten anyway.

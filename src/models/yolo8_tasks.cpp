@@ -11,7 +11,7 @@ namespace yolocpp::models {
 // ─── Proto ────────────────────────────────────────────────────────────────
 ProtoImpl::ProtoImpl(int c1, int c_, int c2) {
   cv1      = register_module("cv1", Conv(c1, c_, 3));
-  // Ultralytics: ConvTranspose2d(c_, c_, 2, 2, 0)
+  // Upstream: ConvTranspose2d(c_, c_, 2, 2, 0)
   upsample = register_module(
       "upsample",
       torch::nn::ConvTranspose2d(
@@ -133,7 +133,7 @@ PoseImpl::forward(std::vector<torch::Tensor> x) {
   auto anc_full = torch::cat(anc, 0);                // [A, 2]
   auto str_full = torch::cat(str_t, 0);              // [A]
 
-  // Apply ultralytics decode.
+  // Apply upstream decode.
   //   In feature units: kpts_xy_feat = xy * 2 + (anchor_feat - 0.5)
   //                     kpts_xy_pix  = kpts_xy_feat * stride
   //   With anchor_feat = cell_idx + 0.5 (make_anchors offset),
@@ -142,7 +142,7 @@ PoseImpl::forward(std::vector<torch::Tensor> x) {
   //                                  = xy * 2 * stride + (anchor_pix - 0.5*stride)
   // (Earlier code had `(xy*2 - 1)*stride + anchor_pix` which is off by
   //  −0.5*stride per element — produced 4–16 pixel keypoint offsets vs
-  //  Ultralytics depending on level. Caught by the ONNX-vs-Python parity
+  //  upstream depending on level. Caught by the ONNX-vs-Python parity
   //  comparator.)
   auto xy   = kpts.slice(2, 0, 2);                   // [N, K, 2, A]
   auto conf = kpts.slice(2, 2, 3);                   // [N, K, 1, A]
@@ -180,7 +180,7 @@ OBBImpl::forward(std::vector<torch::Tensor> x) {
   auto angle = torch::cat(as, /*dim=*/2);             // [N, ne=1, A]
   angle = (angle.sigmoid() - 0.25) * M_PI;            // [N, 1, A]
 
-  // ── Rotated-box decode (Ultralytics dist2rbox) ─────────────────────────
+  // ── Rotated-box decode (upstream dist2rbox) ────────────────────────────
   // Per-anchor: lt, rb in feature units (DFL expectation), then
   //   xf = (r - l)/2,  yf = (b - t)/2
   //   cx_feat = xf*cos − yf*sin + anchor_x_feat
@@ -411,7 +411,7 @@ Yolo8SegmentImpl::forward_eval(torch::Tensor x) {
 
 int Yolo8SegmentImpl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
-  // Ultralytics state_dict has model.22.cv2/cv3/dfl/cv4/proto. Our nesting
+  // Upstream state_dict has model.22.cv2/cv3/dfl/cv4/proto. Our nesting
   // is model.22.detect.cv2 etc. — we need to remap the prefix.
   std::vector<std::pair<std::string, at::Tensor>> remapped;
   remapped.reserve(entries.size());

@@ -401,7 +401,7 @@ Yolo9Impl::Yolo9Impl(Yolo9Scale scale_, int nc_) : scale(scale_), nc(nc_) {
     return (idx == -1) ? c_in_img : ch[idx];
   };
 
-  // Ultralytics' parse_model rounds args[0] (the output channel count) up
+  // The upstream parse_model rounds args[0] (the output channel count) up
   // to the nearest multiple of 8. Internal args (c3/c4 of RepNCSPELAN4
   // etc.) are passed through unchanged. v9m hits this at layers 16/18
   // (180 → 184); v9c/v9t/v9s happen to have all multiples of 8 already.

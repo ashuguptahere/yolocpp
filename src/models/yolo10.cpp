@@ -111,7 +111,7 @@ struct Spec {
                                     // {shortcut(0/1), lk(0/1)} flags
 };
 
-// Apply Ultralytics' parse_model channel scaling:
+// Apply the upstream parse_model channel scaling:
 //   c2 = make_divisible(min(c2_yaml, max_channels) * width, 8)
 inline int v10_scale_ch(int c2_yaml, const Yolo10Scale& s) {
   int capped = std::min(c2_yaml, s.max_channels);
