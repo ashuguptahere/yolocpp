@@ -60,6 +60,10 @@ yolocpp_add_test(test_cross_backend_parity test_cross_backend_parity.cpp)
 set_tests_properties(test_cross_backend_parity PROPERTIES
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 600)  # TRT engine builds dominate first run; cached afterward
+yolocpp_add_test(test_flat_dataset test_flat_dataset.cpp)
+set_tests_properties(test_flat_dataset PROPERTIES
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30)
 yolocpp_add_test(test_yolo8_arch   test_yolo8_arch.cpp)
 yolocpp_add_test(test_pt_loader     test_pt_loader.cpp)
 yolocpp_add_test(test_predict       test_predict.cpp)
