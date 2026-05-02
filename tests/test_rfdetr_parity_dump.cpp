@@ -243,6 +243,103 @@ int main() {
     auto tf_out = m->named_modules()["transformer"]
                       ->as<yolocpp::models::rfdetr::RFDetrTransformerImpl>()
                       ->forward(memory_2d, qfeat, rpemb, Q);
+    // Bisect inside decoder layer 0.
+    {
+      auto& trans = *m->named_modules()["transformer"]
+                       ->as<yolocpp::models::rfdetr::RFDetrTransformerImpl>();
+      auto memory = memory_2d.flatten(2).transpose(1, 2).contiguous();
+      // Reproduce two-stage init:
+      auto props = yolocpp::models::rfdetr::gen_encoder_output_proposals_1l(
+          memory, memory_2d.size(2), memory_2d.size(3));
+      auto out_mem = trans.enc_output_norm[0]->as<torch::nn::LayerNormImpl>()
+                       ->forward(trans.enc_output[0]->as<torch::nn::LinearImpl>()
+                                       ->forward(props.output_memory));
+      auto cls_l = trans.enc_out_class_embed[0]->as<torch::nn::LinearImpl>()
+                       ->forward(out_mem);
+      auto bbox_d = trans.enc_out_bbox_embed[0]->as<yolocpp::models::rfdetr::RFDetrMLPImpl>()
+                       ->forward(out_mem);
+      auto coord_xy = bbox_d.slice(-1, 0, 2) * props.output_proposals.slice(-1, 2, 4) + props.output_proposals.slice(-1, 0, 2);
+      auto coord_wh = bbox_d.slice(-1, 2, 4).exp() * props.output_proposals.slice(-1, 2, 4);
+      auto coord = torch::cat({coord_xy, coord_wh}, -1);
+      auto scores = std::get<0>(cls_l.max(-1));
+      int K = Q;
+      auto idx = std::get<1>(scores.topk(K, 1));
+      auto idx4 = idx.unsqueeze(-1).expand({1, K, 4});
+      auto rp_ts = torch::gather(coord, 1, idx4);
+      auto subset = rpemb.unsqueeze(0).expand({1, K, 4}).contiguous();
+      auto rp_xy = subset.slice(-1, 0, 2) * rp_ts.slice(-1, 2, 4) + rp_ts.slice(-1, 0, 2);
+      auto rp_wh = subset.slice(-1, 2, 4).exp() * rp_ts.slice(-1, 2, 4);
+      auto refpts = torch::cat({rp_xy, rp_wh}, -1);
+      std::cout << "[dec_l0] refpts cpp_sum=" << refpts.sum().item<float>()
+                << " abs.max=" << refpts.abs().max().item<float>() << "\n";
+      auto tgt0 = qfeat.unsqueeze(0).expand({1, K, qfeat.size(-1)}).contiguous();
+      // Compute query_pos via ref_point_head.
+      auto sin_emb = yolocpp::models::rfdetr::gen_sineembed_for_position(
+          refpts, /*dim=*/static_cast<int>(memory.size(-1)) / 2);
+      auto query_pos = trans.decoder->ref_point_head->forward(sin_emb);
+      // Decoder layer 0 forward.
+      auto& l0 = *trans.decoder->layers[0]
+                      ->as<yolocpp::models::rfdetr::RFDetrDecoderLayerImpl>();
+      auto stages_l0 = l0.forward_stages(tgt0, query_pos, refpts, memory,
+                                            memory_2d.size(2), memory_2d.size(3));
+
+      auto report = [&](const std::string& name, const torch::Tensor& cpp_t) {
+        auto py_t = load_dump(d, name);
+        if (!py_t.defined()) {
+          std::cout << "[dec_l0] " << name << " (no Py dump)\n";
+          return;
+        }
+        // Some Python dumps come out as tuples (`_0` suffix added);
+        // try that fallback name too.
+        if (py_t.sizes() != cpp_t.sizes()) {
+          auto alt = load_dump(d, name + "_0");
+          if (alt.defined() && alt.sizes() == cpp_t.sizes()) py_t = alt;
+        }
+        float diff = max_abs_diff(cpp_t.to(torch::kFloat).contiguous(),
+                                    py_t.to(torch::kFloat).contiguous());
+        std::cout << "[dec_l0] " << name << "  cpp_sum="
+                  << cpp_t.sum().item<float>()
+                  << "  py_sum=" << py_t.sum().item<float>()
+                  << "  max_abs_diff=" << diff << "\n";
+      };
+      report("ref_point_head_out", query_pos);
+      report("dec_l0_self_attn_out", stages_l0.self_attn_out);
+      report("dec_l0_norm1_out",     stages_l0.norm1_out);
+      report("dec_l0_cross_attn_out", stages_l0.cross_attn_out);
+      report("dec_l0_norm2_out",     stages_l0.norm2_out);
+      report("dec_l0_linear1_out",   stages_l0.linear1_out);
+      report("dec_l0_linear2_out",   stages_l0.linear2_out);
+      report("dec_l0_norm3_out",     stages_l0.norm3_out);
+      // Compare the two-stage selected refpoints — likely source of
+      // ref_point_head divergence.
+      auto rp_ts_py = load_dump(d, "topk_refpts");
+      if (rp_ts_py.defined() && rp_ts_py.sizes() == rp_ts.sizes()) {
+        std::cout << "[dec_l0] topk_refpts  cpp_sum=" << rp_ts.sum().item<float>()
+                  << "  py_sum=" << rp_ts_py.sum().item<float>()
+                  << "  max_abs_diff="
+                  << max_abs_diff(rp_ts, rp_ts_py) << "\n";
+      }
+      // Raw enc_output[0] (before norm) — Python hook captures before norm.
+      auto raw_eo0 = trans.enc_output[0]->as<torch::nn::LinearImpl>()
+                       ->forward(props.output_memory);
+      report("enc_output0_out", raw_eo0);
+      report("enc_output_norm0_out", out_mem);
+      // Compare cls_l (raw enc_out_class[0]) vs Python.
+      report("enc_out_class0_out", cls_l);
+      // Probe whether my cls_l contains inf/nan.
+      auto isfin = torch::isfinite(cls_l).all().item<bool>();
+      auto cls_l_max = cls_l.max().item<float>();
+      auto cls_l_min = cls_l.min().item<float>();
+      std::cout << "[dec_l0] cls_l finite=" << (isfin ? "yes" : "NO!")
+                << "  min=" << cls_l_min << "  max=" << cls_l_max << "\n";
+      // Check the weight + bias.
+      auto& cls0_w = m->named_parameters()["transformer.enc_out_class_embed.0.weight"];
+      auto& cls0_b = m->named_parameters()["transformer.enc_out_class_embed.0.bias"];
+      std::cout << "[probe] enc_out_class_embed.0.weight  abs.max="
+                << cls0_w.abs().max().item<float>()
+                << "  bias.abs.max=" << cls0_b.abs().max().item<float>() << "\n";
+      report("enc_out_bbox0_out",  bbox_d);
+    }
     std::cout << "[stage] transformer.decoder_out  shape="
               << tf_out.decoder_out.sizes()
               << "  cpp_sum=" << tf_out.decoder_out.sum().item<float>() << "\n";

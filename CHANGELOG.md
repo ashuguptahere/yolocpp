@@ -30,6 +30,82 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.54.0] — 2026-05-02
+
+### Diagnosed — RF-DETR decoder layer-0 substage bisection (#65L slice 11)
+
+`RFDetrDecoderLayerImpl::forward_stages` exposes every intermediate
+of a single decoder layer for the parity harness to capture:
+self-attn out, norm1, cross-attn out, norm2, linear1, linear2,
+norm3. The harness probes layer 0 against the per-step Python
+hooks in `dump_rfdetr_forward.py` and reports per-stage
+`max_abs_diff`:
+
+```
+[dec_l0] enc_output0_out          max_abs_diff=1.1e-3   ← bit-exact
+[dec_l0] enc_output_norm0_out     max_abs_diff=1.2e-4   ← bit-exact
+[dec_l0] enc_out_bbox0_out        max_abs_diff=4.9e-4   ← bit-exact
+[dec_l0] ref_point_head_out       max_abs_diff=4.62     ← BUG
+[dec_l0] dec_l0_norm1_out         max_abs_diff=0.018    ← downstream
+[dec_l0] dec_l0_cross_attn_out    max_abs_diff=2.37     ← BUG
+[dec_l0] dec_l0_norm2_out         max_abs_diff=2.71
+[dec_l0] dec_l0_linear1_out       max_abs_diff=5.67
+[dec_l0] dec_l0_linear2_out       max_abs_diff=11.83
+[dec_l0] dec_l0_norm3_out         max_abs_diff=5.33
+```
+
+Two divergence sources isolated:
+
+1. **`ref_point_head_out` 4.62 diff** despite sums matching
+   (-1763.26 vs -1763.74). The ref_point_head MLP is just
+   `Linear(2C, C) → ReLU → Linear(C, C)` over `gen_sineembed`'s
+   output. Either my sineembed produces values that are PERMUTED
+   relative to Python's (off-by-one in interleave or concat
+   order), or my refpoints (input to sineembed) differ from
+   Python's.
+
+2. **`cross_attn_out` 2.37 diff** — deformable attention math
+   doesn't match upstream's `ms_deform_attn_core_pytorch`. Likely
+   in the `sample_loc = ref_xy + offset/n_points × ref_wh × 0.5`
+   formula or the bilinear `grid_sample` invocation.
+
+Encoder-output stages are bit-exact (1e-3..1e-4 diff floor),
+confirming that backbone+projector+enc_output[0]+LN[0] all match.
+The bug is fully isolated to the decoder layer's internal math.
+
+### Tooling
+
+`include/yolocpp/models/rfdetr_transformer.hpp` adds:
+
+```cpp
+struct DecLayerStages {
+  torch::Tensor self_attn_out, norm1_out, cross_attn_out, norm2_out,
+                linear1_out, linear2_out, norm3_out;
+};
+DecLayerStages forward_stages(...);
+```
+
+The Python dumper (`/tmp/yolocpp_parity/dump_rfdetr_forward.py`)
+captures all per-substage outputs via `register_forward_hook` on
+`trans.decoder.layers[0].{self_attn, norm1, cross_attn, norm2,
+linear1, linear2, norm3}` so the C++ harness can diff each.
+
+### Status
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+Forward path still emits 0 detections; the next slice (#65L slice
+12) will target one of the two isolated bugs — likely
+`gen_sineembed_for_position`'s element interleave first since
+it's a pure scalar op with no fp32 noise concerns.
+
+### Tracked
+
+- TODO #65L slice 11 done (decoder layer bisection harness +
+  precise localisation). Slice 12 picks the smaller bug
+  (sineembed permute or cross-attn math) and closes it.
+
+---
+
 ## [0.53.0] — 2026-05-02
 
 ### Fixed — RF-DETR two-stage init: masked memory + refpoint reparam (#65L slice 10)

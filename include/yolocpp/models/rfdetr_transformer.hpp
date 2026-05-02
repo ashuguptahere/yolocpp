@@ -105,6 +105,17 @@ class RFDetrMLPImpl : public torch::nn::Module {
 TORCH_MODULE(RFDetrMLP);
 
 // One decoder layer = self-attn + cross-attn + FFN, three LayerNorms.
+// Per-substage capture for decoder-layer parity bisection.
+struct DecLayerStages {
+  torch::Tensor self_attn_out;   // raw SA output, BEFORE residual + norm1
+  torch::Tensor norm1_out;       // after norm1(tgt + sa)
+  torch::Tensor cross_attn_out;  // raw CA output, BEFORE residual + norm2
+  torch::Tensor norm2_out;       // after norm2(tgt + ca)
+  torch::Tensor linear1_out;     // FFN inner
+  torch::Tensor linear2_out;     // FFN inner-back
+  torch::Tensor norm3_out;       // final layer output
+};
+
 class RFDetrDecoderLayerImpl : public torch::nn::Module {
  public:
   RFDetrDecoderLayerImpl(int hidden, int sa_nheads, int ca_nheads,
@@ -113,6 +124,10 @@ class RFDetrDecoderLayerImpl : public torch::nn::Module {
   torch::Tensor forward(torch::Tensor tgt, torch::Tensor query_pos,
                          torch::Tensor reference_points,
                          torch::Tensor memory, int spatial_h, int spatial_w);
+  // Same forward but captures every substage for parity testing.
+  DecLayerStages forward_stages(torch::Tensor tgt, torch::Tensor query_pos,
+                                  torch::Tensor reference_points,
+                                  torch::Tensor memory, int H, int W);
   FusedMHA             self_attn{nullptr};
   torch::nn::LayerNorm norm1{nullptr};
   MSDeformAttn1L       cross_attn{nullptr};

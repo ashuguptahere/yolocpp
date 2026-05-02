@@ -176,17 +176,35 @@ torch::Tensor RFDetrDecoderLayerImpl::forward(torch::Tensor tgt,
                                                 torch::Tensor reference_points,
                                                 torch::Tensor memory,
                                                 int H, int W) {
+  return forward_stages(std::move(tgt), std::move(query_pos),
+                          std::move(reference_points), std::move(memory),
+                          H, W).norm3_out;
+}
+
+DecLayerStages RFDetrDecoderLayerImpl::forward_stages(torch::Tensor tgt,
+                                                         torch::Tensor query_pos,
+                                                         torch::Tensor reference_points,
+                                                         torch::Tensor memory,
+                                                         int H, int W) {
+  DecLayerStages s;
   // Post-LN style matching upstream's `forward_post`:
   //   q = k = tgt + query_pos; v = tgt  (NOT tgt+pos for v)
-  auto sa_out = self_attn->forward(/*x=*/tgt + query_pos, /*value_x=*/tgt);
-  tgt = norm1->forward(tgt + sa_out);
+  s.self_attn_out = self_attn->forward(/*x=*/tgt + query_pos, /*value_x=*/tgt);
+  tgt = tgt + s.self_attn_out;
+  s.norm1_out = norm1->forward(tgt);
+  tgt = s.norm1_out;
   // Cross-attn: query gets pos embed; memory is the projector output.
-  auto ca_out = cross_attn->forward(tgt + query_pos, reference_points,
-                                      memory, H, W);
-  tgt = norm2->forward(tgt + ca_out);
+  s.cross_attn_out = cross_attn->forward(tgt + query_pos, reference_points,
+                                            memory, H, W);
+  tgt = tgt + s.cross_attn_out;
+  s.norm2_out = norm2->forward(tgt);
+  tgt = s.norm2_out;
   // FFN.
-  auto ff = linear2->forward(torch::relu(linear1->forward(tgt)));
-  return norm3->forward(tgt + ff);
+  s.linear1_out = linear1->forward(tgt);
+  s.linear2_out = linear2->forward(torch::relu(s.linear1_out));
+  tgt = tgt + s.linear2_out;
+  s.norm3_out = norm3->forward(tgt);
+  return s;
 }
 
 // ─── RFDetrDecoder ──────────────────────────────────────────────────────
