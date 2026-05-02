@@ -30,6 +30,45 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.35.0] — 2026-05-02
+
+### Added — RF-DETR Hungarian set loss (#65F)
+
+Set-prediction loss surface for RF-DETR landed independently of
+the weight converter (#65D) — the loss runs against the
+random-init forward, so #65G's trainer integration only needs the
+converter on top.
+
+- `include/yolocpp/losses/hungarian.hpp` +
+  `src/losses/hungarian.cpp` — Jonker-Volgenant rectangular
+  assignment. O(rows·cols²) shortest-augmenting-path with
+  potentials, pure C++, zero deps. Handles `rows ≥ cols` (DETR has
+  many more queries than GTs).
+- `include/yolocpp/losses/rfdetr_loss.hpp` +
+  `src/losses/rfdetr_loss.cpp::rfdetr_set_loss` — full DETR set
+  loss. Per-image Hungarian match on the **last** decoder layer's
+  outputs (matches stay stable across auxiliary layers), then sigmoid
+  focal cls (α=0.25, γ=2) over all queries + L1 + GIoU on matched
+  preds. Loss weights `λ_cls=2.0, λ_l1=5.0, λ_giou=2.0`. Auxiliary
+  losses summed over all decoder layers.
+
+`tests/test_rfdetr_loss.cpp`:
+1. Hungarian matcher correctness on a 3×3 grid (any optimum
+   accepted) + a rectangular 5×2 case with verified-optimum 12.
+2. Full set-loss end-to-end on rfdetr-n with a 2-image batch
+   (2 + 1 GTs). Asserts finite loss components and non-zero
+   gradient flow back to model parameters.
+
+ctest count goes 40 → 41.
+
+### Tracked
+
+- TODO #65F marked landed; #65D (`rfdetr-*.pt` converter) and #65G
+  (trainer integration) are the two remaining gates before
+  `--mode train` works on RF-DETR.
+
+---
+
 ## [0.34.0] — 2026-05-02
 
 ### Added — RF-DETR decoder + object-query head (#65C)
