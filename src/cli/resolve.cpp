@@ -579,7 +579,7 @@ std::string scale_from_filename(const std::string& path) {
         R"(rf-?detr-(seg-(?:nano|small|medium|large|xlarge|xxlarge|preview))\.(?:pt|pth)$)");
     if (std::regex_search(base, ms, rseg)) return ms[1].str();
     static const std::regex rdet(
-        R"(rf-?detr-(nano|small|medium|base|large|n|s|m|b|l)(?:-seg)?\.(?:pt|pth)$)");
+        R"(rf-?detr-(nano|small|medium|base|large|n|s|m|b|l)(?:-2026)?(?:-seg)?\.(?:pt|pth)$)");
     if (std::regex_search(base, ms, rdet)) return ms[1].str();
   }
 

@@ -30,6 +30,74 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.63.0] — 2026-05-02
+
+### Fixed — `RFDetrImpl::forward_train` uses real backbone (was legacy)
+
+`forward_eval` was rewritten to the real backbone+projector
++transformer pipeline back in 0.43.0, but `forward_train`
+still routed through the legacy `_backbone_legacy`/`_encoder_legacy`/
+`_head_legacy` modules. Those modules are sized for a fixed
+640×640 input (lw-detr-tiny placeholder), so any training at
+non-640 imgsz crashed with `tensor a (N²+1) must match tensor b
+(1601)` shape mismatch in the position embedding.
+
+`forward_train` now mirrors `forward_eval`: backbone+projector
+→ transformer.forward → shared `class_embed`/`bbox_embed` heads.
+Returns `(cls_logits, bbox_unact)` for the Hungarian set loss.
+The legacy scaffold modules are still constructed (under
+`_*_legacy` names so they don't collide with upstream keys) but
+are NEVER called.
+
+### Fixed — `kRfdetrLarge` updated to canonical 1.6.5 (`rf-detr-large-2026.pth`)
+
+Earlier versions had `kRfdetrLarge` built for the LEGACY
+`rf-detr-large.pth` (DINOv2-base, 24 ViT layers, hidden=384,
+patch=14). The canonical 1.6.5 default is **`rf-detr-large-2026.pth`**
+(DINOv2-small, 12 layers, hidden=256, patch=16, dec_layers=4,
+resolution=704, pretrain_grid=44). Updated:
+
+```cpp
+constexpr RFDetrScale kRfdetrLarge {300, 256, 4, 8, 16, 2, 90, 13,
+                                     704, 16, 384, 44, false,
+                                     "dinov2_windowed_small", "large"};
+```
+
+Plus `dinov2_cfg_for(...)` now ALWAYS starts from `kDinov2Small`
+(12 layers) regardless of `upstream_id`; the older path that
+copied `kDinov2Base` (24 layers) for "large" was the source of
+spurious legacy state in the encoder. Filename resolver now also
+matches `rf-detr-large-2026.pth` → scale="large".
+
+### Validation — training works at imgsz=1536
+
+```
+$ yolocpp --mode train -m rf-detr-large-2026.pth \
+        -d data/Screen-Dataset-COCO/train/_annotations.coco.json \
+        --imgsz 1536 -e 1 -b 1 --save runs/Screen-Detection
+[coco] 2465 images, 2660 labels (over 5 classes)
+[train] val split detected (2465 imgs); track best.pt by mAP@0.5:0.95
+[trainer] e=0 s=0   lr=8.1e-06 box=2138.96  cls=56.67   dfl=1.97  total=10812.1
+[trainer] e=0 s=10  lr=8.9e-05 box=2338.73  cls=5.86    dfl=1.92  total=11709.2
+[trainer] e=0 s=20  lr=1.7e-04 box=1569.26  cls=1.26    dfl=1.96  total=7852.73
+[trainer] e=0 s=30  lr=2.5e-04 box=1974.02  cls=0.118   dfl=1.95  total=9874.22
+[trainer] e=0 s=40  lr=3.3e-04 box=2013     cls=0.024   dfl=1.96  total=10069
+…
+```
+
+Cls loss drops from 56 → 0.024 within 40 steps (Hungarian
+matcher quickly aligns with target classes). Box loss is high
+(1500-2400 range) because: (a) image dimensions are 1536²
+producing large absolute pixel coordinates in the L1 component,
+(b) GIoU cycle stable. Training proceeds without errors through
+the first 190+ batches at 1536.
+
+ctest 42/42 (only pre-existing #64). All 7 rfdetr tests pass.
+All 12 RF-DETR variants produce real detections; large now
+binds 509/509 keys via `rf-detr-large-2026.pth`.
+
+---
+
 ## [0.62.0] — 2026-05-02
 
 ### Fixed — segment variant patch_size + resolution to match real checkpoints

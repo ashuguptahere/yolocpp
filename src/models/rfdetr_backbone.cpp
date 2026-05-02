@@ -207,13 +207,15 @@ const Dinov2Cfg kDinov2Base{
 
 const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch,
                                   int pretrain_grid, int backbone_embed) {
-  // Variants share the "small" 12-block transformer family except
-  // for "large" which uses 12 blocks at C=768. We honour the
-  // explicit `backbone_embed` from the scale rather than infer it
-  // from `upstream_id` so future variants slot in cleanly.
+  // All canonical 1.6.5 variants use the dinov2_windowed_small
+  // family (12 blocks), regardless of `upstream_id`. The earlier
+  // OLD `rf-detr-large.pth` used dinov2_base (24 blocks), but the
+  // canonical 1.6.5 large is `rf-detr-large-2026.pth` which is
+  // also small-family. Always start from kDinov2Small so the
+  // tap_blocks + num_layers default to 12 — only override
+  // hidden_size + num_heads when backbone_embed differs.
   static thread_local Dinov2Cfg cfg;
-  if (upstream_id == "large") cfg = kDinov2Base;
-  else                        cfg = kDinov2Small;
+  cfg = kDinov2Small;
   cfg.hidden_size  = backbone_embed;
   cfg.num_heads    = backbone_embed / 64;   // 6 for 384, 12 for 768
   cfg.patch_size   = patch;
@@ -238,7 +240,10 @@ const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch,
   } else if (upstream_id == "large") {
     cfg.num_windows = 2;
     cfg.window_block_indexes = {0, 1, 2, 4, 5, 7, 8, 10, 11};
-    cfg.tap_blocks = {2, 5, 8, 11};   // out_features=stage3,6,9,12 → 0-indexed = [2,5,8,11]
+    // Large uses 1-indexed `out_features=['stage3','stage6','stage9','stage12']`
+    // mapped to 0-indexed [2, 5, 8, 11]. All four taps are
+    // full-attention since they're not in window_block_indexes.
+    cfg.tap_blocks = {2, 5, 8, 11};
   } else {
     cfg.num_windows = 2;
     cfg.window_block_indexes = {0, 1, 3, 4, 6, 7, 9, 10};

@@ -90,8 +90,14 @@ constexpr RFDetrScale kRfdetrMedium {300, 256, 4, 8, 16, 2, 90, 13, 576, 16, 384
                                        "dinov2_windowed_small", "medium"};
 constexpr RFDetrScale kRfdetrBase   {300, 256, 3, 8, 16, 2, 90, 13, 560, 14, 384, 37, false,
                                        "dinov2_windowed_small", "base"};
-constexpr RFDetrScale kRfdetrLarge  {300, 384, 3, 8, 16, 2, 90, 13, 704, 14, 768, 37, false,
-                                       "dinov2_windowed_base", "large"};
+// Large updated to canonical 1.6.5: rf-detr-large-2026.pth uses
+// dinov2_windowed_small (embed=384), hidden=256, patch=16,
+// dec_layers=4, resolution=704, pretrain_grid=44 (44×16=704).
+// The legacy `rf-detr-large.pth` (patch=14, hidden=384, dec=3)
+// is no longer the default — pass it explicitly if needed; will
+// shape-mismatch on backbone but topk + decoder still bind.
+constexpr RFDetrScale kRfdetrLarge  {300, 256, 4, 8, 16, 2, 90, 13, 704, 16, 384, 44, false,
+                                       "dinov2_windowed_small", "large"};
 
 // Segment: 7 variants. **All seg variants use patch_size=12**
 // (verified from `patch_embeddings.projection.weight` shape in

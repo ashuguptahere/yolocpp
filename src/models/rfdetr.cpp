@@ -206,18 +206,28 @@ torch::Tensor RFDetrImpl::forward_eval(torch::Tensor x) {
 }
 
 std::vector<torch::Tensor> RFDetrImpl::forward_train(torch::Tensor x) {
-  auto enc = forward_encoder(std::move(x));
-  auto outs = head_->forward_train(enc.memory, enc.spatial_shapes,
-                                     enc.level_start_index);
-  // Pack [(cls, bbox), ...] → flat vector for use by the
-  // (still-pending) Hungarian loss surface (#65F).
-  std::vector<torch::Tensor> flat;
-  flat.reserve(outs.size() * 2);
-  for (auto& [c, b] : outs) {
-    flat.push_back(c);
-    flat.push_back(b);
-  }
-  return flat;
+  // Match the production forward_eval pipeline (real backbone +
+  // projector + transformer + heads), differing only in that we
+  // return per-decoder-layer (cls_logits, bbox_unact) for the
+  // Hungarian loss surface (#65F). The legacy `_*_legacy` modules
+  // are NOT used.
+  auto& slot = *backbone_real_[0]
+                    ->as<yolocpp::models::rfdetr::BackboneSlotImpl>();
+  auto memory_2d = slot.forward(std::move(x));        // [B, hidden, Hg, Wg]
+  int Q = scale.num_queries;
+  auto qfeat_first = query_feat_.slice(/*dim=*/0, 0, Q);
+  auto rpemb_first = refpoint_embed_.slice(/*dim=*/0, 0, Q);
+  auto tf_out = transformer_->forward(memory_2d, qfeat_first, rpemb_first, Q);
+  // For training we need per-layer cls/bbox; the production
+  // transformer.forward only returns the last layer. Apply the
+  // SHARED cls/bbox heads to the last decoder output for the
+  // Hungarian loss; aux-loss across decoder layers is a future
+  // refinement (#65F2 polish).
+  auto cls_logits = class_embed_->forward(tf_out.decoder_out);
+  auto bbox_delta = bbox_embed_->forward(tf_out.decoder_out);
+  // Pack as [cls0, bbox0] (only the last layer, since aux-loss
+  // is opt-in upstream and our trainer doesn't require it).
+  return {cls_logits, bbox_delta};
 }
 
 int RFDetrImpl::load_from_state_dict(
