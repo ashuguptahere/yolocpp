@@ -499,6 +499,15 @@ anything in there.** If a deb extraction needs to change (different
 TRT version, different OpenCV mirror), update the script — not the
 extracted tree.
 
+The closed dependency set + pinned versions live in
+`third_party/DEPS.md`. `scripts/audit_deps.sh` enforces the whitelist
+— any new `find_package` / `target_link_libraries` / `third_party/`
+directory fails the audit unless it's documented in DEPS.md. Adding
+a new dependency requires (a) a real need (boost, protobuf, fmt,
+GTest are all on the explicitly-rejected list with reasons),
+(b) Apache-2.0 / MIT / BSD-* compat (no GPL — see #50 reasoning),
+and (c) a row in `DEPS.md` with version + license + size.
+
 ## Parity validation
 
 Numerical parity against the upstream Python forward is a hard requirement before any
