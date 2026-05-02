@@ -39,6 +39,7 @@
 #include "yolocpp/models/rfdetr_backbone.hpp"
 #include "yolocpp/models/rfdetr_decoder.hpp"
 #include "yolocpp/models/rfdetr_encoder.hpp"
+#include "yolocpp/models/rfdetr_projector.hpp"
 
 namespace yolocpp::models {
 
@@ -63,41 +64,48 @@ struct RFDetrScale {
   int         num_classes     = 90;      // upstream COCO schema (cls=91 incl. bg)
   int         group_detr      = 13;      // training-time query groups
   int         resolution      = 560;     // letterbox side
-  int         patch_size      = 14;      // ViT patch size
+  int         patch_size      = 14;      // ViT patch size as saved in `.pt`
   int         backbone_embed  = 384;     // 768 for large
+  // Saved position_embeddings grid size — `position_embeddings` has
+  // shape `[1, pretrain_grid² + 1, backbone_embed]`. Differs per
+  // variant; the runtime pos-embed gets bicubic-interpolated to the
+  // actual input grid.
+  int         pretrain_grid   = 37;
   bool        is_segment      = false;
   const char* family          = "dinov2_windowed_small";
   const char* upstream_id     = "base";  // for converter routing
 };
 
-// Detect: 5 variants
-constexpr RFDetrScale kRfdetrNano   {300, 256, 2, 8, 16, 2, 90, 13, 384, 16, 384, false,
+// Detect: 5 variants. patch_size + pretrain_grid pinned to the saved
+// `position_embeddings` shape in each `.pth` (verified via
+// `tests/test_rfdetr_pt_load.cpp`). Note: patch_size=14 for base and
+// large despite the upstream RFDETR<X>Config claiming 16/14 — the
+// checkpoints are authoritative.
+constexpr RFDetrScale kRfdetrNano   {300, 256, 2, 8, 16, 2, 90, 13, 384, 16, 384, 24, false,
                                        "dinov2_windowed_small", "nano"};
-constexpr RFDetrScale kRfdetrSmall  {300, 256, 3, 8, 16, 2, 90, 13, 512, 16, 384, false,
+constexpr RFDetrScale kRfdetrSmall  {300, 256, 3, 8, 16, 2, 90, 13, 512, 16, 384, 32, false,
                                        "dinov2_windowed_small", "small"};
-constexpr RFDetrScale kRfdetrMedium {300, 256, 4, 8, 16, 2, 90, 13, 576, 16, 384, false,
+constexpr RFDetrScale kRfdetrMedium {300, 256, 4, 8, 16, 2, 90, 13, 576, 16, 384, 36, false,
                                        "dinov2_windowed_small", "medium"};
-constexpr RFDetrScale kRfdetrBase   {300, 256, 3, 8, 16, 2, 90, 13, 560, 14, 384, false,
+constexpr RFDetrScale kRfdetrBase   {300, 256, 3, 8, 16, 2, 90, 13, 560, 14, 384, 37, false,
                                        "dinov2_windowed_small", "base"};
-constexpr RFDetrScale kRfdetrLarge  {300, 384, 3, 8, 16, 2, 90, 13, 704, 16, 768, false,
+constexpr RFDetrScale kRfdetrLarge  {300, 384, 3, 8, 16, 2, 90, 13, 704, 14, 768, 37, false,
                                        "dinov2_windowed_base", "large"};
 
-// Segment: 7 variants (use the v8/v11 segment-task wrapper at the
-// public-API layer; the underlying RFDetrSegment shares the detect
-// stack + an extra mask head).
-constexpr RFDetrScale kRfdetrSegNano    {100, 256, 4, 8, 16, 2, 90, 13, 368, 14, 384, true,
+// Segment: 7 variants.
+constexpr RFDetrScale kRfdetrSegNano    {100, 256, 4, 8, 16, 2, 90, 13, 368, 14, 384, 26, true,
                                           "dinov2_windowed_small", "seg-nano"};
-constexpr RFDetrScale kRfdetrSegSmall   {100, 256, 4, 8, 16, 2, 90, 13, 512, 16, 384, true,
+constexpr RFDetrScale kRfdetrSegSmall   {100, 256, 4, 8, 16, 2, 90, 13, 512, 16, 384, 32, true,
                                           "dinov2_windowed_small", "seg-small"};
-constexpr RFDetrScale kRfdetrSegMedium  {200, 256, 5, 8, 16, 2, 90, 13, 576, 16, 384, true,
+constexpr RFDetrScale kRfdetrSegMedium  {200, 256, 5, 8, 16, 2, 90, 13, 576, 16, 384, 36, true,
                                           "dinov2_windowed_small", "seg-medium"};
-constexpr RFDetrScale kRfdetrSegLarge   {300, 256, 5, 8, 16, 2, 90, 13, 672, 16, 384, true,
+constexpr RFDetrScale kRfdetrSegLarge   {300, 256, 5, 8, 16, 2, 90, 13, 672, 16, 384, 42, true,
                                           "dinov2_windowed_small", "seg-large"};
-constexpr RFDetrScale kRfdetrSegXLarge  {300, 256, 6, 8, 16, 2, 90, 13, 624, 12, 384, true,
+constexpr RFDetrScale kRfdetrSegXLarge  {300, 256, 6, 8, 16, 2, 90, 13, 624, 12, 384, 52, true,
                                           "dinov2_windowed_small", "seg-xlarge"};
-constexpr RFDetrScale kRfdetrSegXXLarge {300, 256, 6, 8, 16, 2, 90, 13, 768, 12, 384, true,
+constexpr RFDetrScale kRfdetrSegXXLarge {300, 256, 6, 8, 16, 2, 90, 13, 768, 12, 384, 64, true,
                                           "dinov2_windowed_small", "seg-xxlarge"};
-constexpr RFDetrScale kRfdetrSegPreview {200, 256, 4, 8, 16, 2, 90, 13, 432, 12, 384, true,
+constexpr RFDetrScale kRfdetrSegPreview {200, 256, 4, 8, 16, 2, 90, 13, 432, 12, 384, 36, true,
                                           "dinov2_windowed_small", "seg-preview"};
 
 // Letter → scale resolver. Filename convention `rfdetr-<n|s|b|m|l>.pt`

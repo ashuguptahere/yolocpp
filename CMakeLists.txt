@@ -125,6 +125,7 @@ add_library(yolocpp_core
   src/models/yolo26_tasks.cpp
   src/models/rfdetr.cpp
   src/models/rfdetr_backbone.cpp
+  src/models/rfdetr_projector.cpp
   src/models/rfdetr_encoder.cpp
   src/models/rfdetr_decoder.cpp
   src/inference/task_predictors.cpp

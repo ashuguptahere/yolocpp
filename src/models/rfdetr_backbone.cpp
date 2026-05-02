@@ -43,20 +43,19 @@ const Dinov2Cfg kDinov2Base{
     /*patch=*/14, /*pretrain_grid=*/37, /*qkv_bias=*/true,
     /*taps=*/{2, 5, 8, 11}};
 
-const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch) {
-  // The two backbone families RF-DETR ships are "small" (C=384) for
-  // every variant except `large`, which uses "base" (C=768). The
-  // patch size differs per variant (12/14/16); the saved
-  // position_embedding is sized to the variant's pretrain grid so
-  // we override that here.
+const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch,
+                                  int pretrain_grid, int backbone_embed) {
+  // Variants share the "small" 12-block transformer family except
+  // for "large" which uses 12 blocks at C=768. We honour the
+  // explicit `backbone_embed` from the scale rather than infer it
+  // from `upstream_id` so future variants slot in cleanly.
   static thread_local Dinov2Cfg cfg;
   if (upstream_id == "large") cfg = kDinov2Base;
   else                        cfg = kDinov2Small;
-  cfg.patch_size = patch;
-  // pretrain_grid: 14×14×patch_size + 1 for the cls token. The
-  // saved tensor's exact size differs per variant — see
-  // `docs/rfdetr_arch.md`. Setting it is informational; the
-  // forward path interpolates to whatever the input dictates.
+  cfg.hidden_size  = backbone_embed;
+  cfg.num_heads    = backbone_embed / 64;   // 6 for 384, 12 for 768
+  cfg.patch_size   = patch;
+  cfg.pretrain_grid = pretrain_grid;
   return cfg;
 }
 

@@ -567,6 +567,22 @@ std::string scale_from_filename(const std::string& path) {
     std::string upstream = "yolov6" + letter + "6.pt";
     if (base == ours || base == upstream) return letter + "6";
   }
+  // RF-DETR scale extraction. Two filename forms:
+  //   `rf-detr-<scale>.pth`             (upstream-canonical detect)
+  //   `rf-detr-seg-<scale>.pt`          (upstream-canonical segment)
+  //   `rfdetr-<scale>[-seg]?.pt`        (our short form)
+  // Scale values: detect = {nano,small,medium,base,large,n,s,m,b,l};
+  //               segment = `seg-<n|s|m|l|xlarge|xxlarge|preview>`.
+  {
+    std::smatch ms;
+    static const std::regex rseg(
+        R"(rf-?detr-(seg-(?:nano|small|medium|large|xlarge|xxlarge|preview))\.(?:pt|pth)$)");
+    if (std::regex_search(base, ms, rseg)) return ms[1].str();
+    static const std::regex rdet(
+        R"(rf-?detr-(nano|small|medium|base|large|n|s|m|b|l)(?:-seg)?\.(?:pt|pth)$)");
+    if (std::regex_search(base, ms, rdet)) return ms[1].str();
+  }
+
   // Match canonical "yolo<digits><scale>[u]?(-task)?.pt" — and also accept the
   // legacy upstream "yolov<digits>..." spelling for v3..v10 weights. Scales:
   //   v5/v8/v9/v11/v12/v13/v26: {n, s, m, l, x}

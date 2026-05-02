@@ -73,10 +73,15 @@ RFDetrImpl::RFDetrImpl(RFDetrScale scale_in, int nc_in)
   // names exactly so `rfdetr_weights::load_rfdetr_pt` binds in one
   // pass.
   const auto& real_cfg = yolocpp::models::rfdetr::dinov2_cfg_for(
-      scale.upstream_id, scale.patch_size);
+      scale.upstream_id, scale.patch_size, scale.pretrain_grid,
+      scale.backbone_embed);
+  // Large variant has TWO projector stages (`stages.0` + `stages.1`);
+  // every other variant has one. Detected via `upstream_id == "large"`.
+  int n_proj_stages = (std::string(scale.upstream_id) == "large") ? 2 : 1;
   backbone_real_ = torch::nn::ModuleList();
   backbone_real_->push_back(
-      yolocpp::models::rfdetr::Dinov2WrapperOuter(real_cfg));
+      yolocpp::models::rfdetr::BackboneSlot(real_cfg, scale.hidden_dim,
+                                              n_proj_stages));
   register_module("backbone", backbone_real_);
 
   // Legacy scaffold modules — placeholders so the existing forward

@@ -30,6 +30,90 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.41.0] — 2026-05-02
+
+### Added — RF-DETR CSP projector + per-variant pretrain grid (#65B2)
+
+`include/yolocpp/models/rfdetr_projector.hpp` +
+`src/models/rfdetr_projector.cpp`. Bridges the 4 ViT taps from the
+DINOv2 backbone (#65A2) into a single-level feature map at
+`hidden_dim` channels.
+
+- `ConvBN(in, out, k, pad)` — Conv2d (no bias) + BatchNorm2d +
+  SiLU.
+- `ProjBottleneck(channels)` — two 3×3 ConvBN. Used inside C2f.
+- `ProjStage0(in, hidden, n_bottlenecks)` — C2f stage:
+  cv1 (1×1, in→hidden) → split → m (n bottlenecks at hidden/2) →
+  concat (hidden + n·hidden/2) → cv2 (1×1, fanin→hidden).
+- `Projector(n_stages, tap_concat_ch, hidden, n_bottlenecks)` —
+  ModuleList "stages" of `n_stages × {ProjStage0, BatchNorm2d}`
+  pairs. `n_stages=1` for nano/small/medium/base + all seg
+  variants; `n_stages=2` for `rfdetr-large` (refines tap features
+  twice).
+- `BackboneSlot(backbone_cfg, hidden_dim, n_proj_stages,
+  n_bottlenecks)` — wraps the DINOv2 wrapper + projector as
+  siblings under the same `backbone[0]` Module so the dotted paths
+  resolve to `backbone.0.encoder.encoder.*` and
+  `backbone.0.projector.stages.*` matching upstream exactly.
+
+`RFDetrImpl` now constructs `BackboneSlot` (with `n_proj_stages=2`
+for large, 1 elsewhere) inside the `backbone` ModuleList.
+
+### Added — per-variant `pretrain_grid` + `backbone_embed` in `RFDetrScale`
+
+The saved `position_embeddings` shape varies per variant
+(577/1025/1297/1370/1370 tokens for nano/small/medium/base/large).
+`RFDetrScale` gains `pretrain_grid` (saved grid side) +
+`backbone_embed` (384 for all but large=768) so the right module
+shape is constructed without checking strings.
+`dinov2_cfg_for(upstream_id, patch, pretrain_grid, backbone_embed)`
+now honours all four. Fixes a pre-existing latent bug where
+`patch_size` was sourced from upstream's `RFDETR<X>Config` (which
+disagrees with the `.pth`'s actual saved Conv weight shape on
+base/large) — corrected to 14 for both, matching the checkpoint.
+
+### Added — RF-DETR scale extraction in `cli::scale_from_filename`
+
+`rf-detr-large.pth` / `rf-detr-seg-medium.pt` etc. now extract
+their scale string correctly. Two regexes (segment first, detect
+second) inserted ahead of the YOLO regex so neither preempts the
+other. Fixes a routing bug where every `rf-detr-*` file was
+hitting `kRfdetrBase` (default fallback) regardless of variant.
+
+### Validated — backbone+projector loads across all 12 variants
+
+```
+nano:        matched=249  unmatched=216  shape_mismatch=0
+small:       matched=249  unmatched=238  shape_mismatch=0
+medium:      matched=249  unmatched=260  shape_mismatch=0
+base:        matched=249  unmatched=238  shape_mismatch=0
+large:       matched=273  unmatched=258  shape_mismatch=2
+seg-nano:    matched=248  unmatched=295  shape_mismatch=1
+seg-small:   matched=248  unmatched=295  shape_mismatch=1
+seg-medium:  matched=248  unmatched=323  shape_mismatch=1
+seg-large:   matched=248  unmatched=323  shape_mismatch=1
+seg-xlarge:  matched=249  unmatched=351  shape_mismatch=0
+seg-xxlarge: matched=249  unmatched=351  shape_mismatch=0
+seg-preview: matched=249  unmatched=295  shape_mismatch=0
+```
+
+All 12 variants now bind their full backbone + projector. Large
+gets +24 keys for the second projector stage. Remaining unmatched
+keys are entirely `transformer.*` (decoder + two-stage encoder-output
++ shared cls/bbox heads) — that's #65C2/D2. The seg variants'
+extra unmatched count comes from `segmentation_head.*` (#65K2 once
+detect lands).
+
+ctest 41/42 (test_v6_e2e is the pre-existing #64 build issue, not
+caused by this slice).
+
+### Tracked
+
+- TODO #65B2 done; #65C2 (rewrite decoder) is the next slice — the
+  biggest remaining block.
+
+---
+
 ## [0.40.0] — 2026-05-02
 
 ### Added — RF-DETR HF-DINOv2 windowed-attn backbone (#65A2)

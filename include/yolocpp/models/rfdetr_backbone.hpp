@@ -72,8 +72,12 @@ struct Dinov2Cfg {
 extern const Dinov2Cfg kDinov2Small;   // C=384 (default)
 extern const Dinov2Cfg kDinov2Base;    // C=768 — used by rfdetr-large
 
-// Return the right per-variant config based on `RFDetrScale.upstream_id`.
-const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch);
+// Return the right per-variant config based on `RFDetrScale.upstream_id`,
+// patch size, and pretrain grid (the saved `position_embeddings`'
+// spatial size). Backbone embed dim is selected from the variant
+// (`backbone_embed`) — overrides the family's default.
+const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch,
+                                 int pretrain_grid, int backbone_embed);
 
 // ─── Inner blocks ────────────────────────────────────────────────────────
 
