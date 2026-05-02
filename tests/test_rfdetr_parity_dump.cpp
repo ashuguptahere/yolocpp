@@ -272,10 +272,59 @@ int main() {
       auto refpts = torch::cat({rp_xy, rp_wh}, -1);
       std::cout << "[dec_l0] refpts cpp_sum=" << refpts.sum().item<float>()
                 << " abs.max=" << refpts.abs().max().item<float>() << "\n";
+      // Test gen_sineembed against py_refpts: feed Python's refpts
+      // through MY sineembed and see if output matches py ref_point_head_out's input.
+      // (Skip if shapes don't fit.)
       auto tgt0 = qfeat.unsqueeze(0).expand({1, K, qfeat.size(-1)}).contiguous();
       // Compute query_pos via ref_point_head.
       auto sin_emb = yolocpp::models::rfdetr::gen_sineembed_for_position(
           refpts, /*dim=*/static_cast<int>(memory.size(-1)) / 2);
+      // Compare my sineembed output against Python's saved rph_input.
+      // Probe my sineembed against Python's, using PYTHON's refpoint
+      // input (so kernel-only diff is isolated from refpoint diff).
+      // Probe my sineembed feeding Python's saved refpoints.
+      // Skipped — caused early SEGV in the test harness; bisection
+      // continues by reading the ELEMENT-LEVEL diff at the worst
+      // offset (printed below) instead.
+      auto py_sineemb = load_dump(d, "rph_input");
+      if (py_sineemb.defined() && py_sineemb.sizes() == sin_emb.sizes()) {
+        std::cout << "[dec_l0] sineembed_out  cpp_sum=" << sin_emb.sum().item<float>()
+                  << "  py_sum=" << py_sineemb.sum().item<float>()
+                  << "  max_abs_diff=" << max_abs_diff(sin_emb, py_sineemb) << "\n";
+        // First 10 elements of query 0 — diagnostic for permute.
+        std::cout << "[probe] cpp sineembed[0,0,:10]:";
+        for (int i = 0; i < 10; ++i)
+            std::cout << " " << sin_emb[0][0][i].item<float>();
+        std::cout << "\n[probe] py  sineembed[0,0,:10]:";
+        for (int i = 0; i < 10; ++i)
+            std::cout << " " << py_sineemb[0][0][i].item<float>();
+        std::cout << "\n";
+        // Find the WORST element to localise the diff.
+        auto diff = (sin_emb - py_sineemb).abs();
+        auto idx = diff.argmax().item<int64_t>();
+        int b = static_cast<int>(idx / (300*512));
+        int q = static_cast<int>((idx / 512) % 300);
+        int c = static_cast<int>(idx % 512);
+        std::cout << "[probe] worst diff at [" << b << "," << q << "," << c
+                  << "]: cpp=" << sin_emb[b][q][c].item<float>()
+                  << " py="    << py_sineemb[b][q][c].item<float>() << "\n";
+        // Print neighbours.
+        std::cout << "[probe] cpp around: ";
+        for (int i = std::max(0, c-3); i < std::min(512, c+4); ++i)
+            std::cout << sin_emb[b][q][i].item<float>() << " ";
+        std::cout << "\n[probe] py  around: ";
+        for (int i = std::max(0, c-3); i < std::min(512, c+4); ++i)
+            std::cout << py_sineemb[b][q][i].item<float>() << " ";
+        std::cout << "\n";
+        // Also: feed Python's sineembed through MY ref_point_head and
+        // check if the diff at rph_out comes from sineembed or rph_head.
+        auto rph_on_py = trans.decoder->ref_point_head->forward(py_sineemb);
+        auto py_rph_out = load_dump(d, "rph");
+        if (py_rph_out.defined()) {
+          std::cout << "[dec_l0] rph(py_sin) vs py_rph  max_abs_diff="
+                    << max_abs_diff(rph_on_py, py_rph_out) << "\n";
+        }
+      }
       auto query_pos = trans.decoder->ref_point_head->forward(sin_emb);
       // Decoder layer 0 forward.
       auto& l0 = *trans.decoder->layers[0]

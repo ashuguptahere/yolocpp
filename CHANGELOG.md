@@ -30,6 +30,63 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.55.0] — 2026-05-02
+
+### Diagnosed — RF-DETR refpoints diverge → sineembed → ref_point_head (#65L slice 12)
+
+Bisected the 4.62 diff at `ref_point_head_out` further:
+
+```
+[dec_l0] sineembed_out  cpp_sum=77898  py_sum=77897.3  max_abs_diff=1.99595
+[probe] cpp sineembed[0,0,:10]:  0.106691 -0.994292 ... (matches py exactly)
+[probe] worst diff at [0, 73, 386]:  cpp=-0.999  py=0.997
+[probe] cpp around (idx 383..389): 1 -0.771 0.636 -0.999 -0.034 -0.789 -0.614
+[probe] py  around (idx 383..389): 1 0.989  -0.147 0.997  0.083  0.960  0.279
+```
+
+Index 384 is the first H-channel sine element. Both C++ and Py
+have `1.0` at the LAST W-channel slot (index 383, which is
+cos(W * tiny_freq) → 1 for small W) — confirming the W part
+matches. But H portion immediately diverges.
+
+**Reasoning back from sin(h·2π) values:**
+- cpp[384] = -0.77 ⇒ my `h ≈ 0.391`
+- py[384] = 1.0    ⇒ Python's `h ≈ 0.25`
+
+Python's saved refpoint at query 73 was `h = 0.273` — close to
+0.25 but not exact (sin would be 0.989, matching index 385 in py).
+The encoding pattern aligns for Python.
+
+**My refpoints input to sineembed differs from Python's**. The
+sineembed kernel itself is bit-exact (proved earlier when feeding
+py_sineembed → my ref_point_head produces py_rph at 9.5e-7 diff).
+The bug is upstream in the refpoint computation:
+
+- `refpoint_embed[:Q]` weights: bit-exact (loader matches 100%).
+- `topk_refpts` selection: depends on cls scores from
+  `enc_out_class_embed[0]`. Earlier probe showed
+  `enc_output_norm[0]` matches at 1e-4 — but the comparison
+  against `enc_out_class0_out` got `inf` due to a shape mismatch
+  (the hook captured a LATER call). The actual in-transformer
+  cls scores might still differ.
+- `bbox_reparam` combination: contract-correct (matched upstream
+  formula in slice 10).
+
+The most likely concrete bug now: my **top-K selection picks
+different queries** than Python because of fp32 round-off + tie
+ordering, OR the cls scores feeding top-K differ subtly.
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 12 done (sineembed cleared as bit-exact;
+  divergence localised to refpoints input). Slice 13 dumps
+  Python's `topk_idx` and `topk_refpts` directly and compares
+  index-by-index against C++.
+
+---
+
 ## [0.54.0] — 2026-05-02
 
 ### Diagnosed — RF-DETR decoder layer-0 substage bisection (#65L slice 11)
