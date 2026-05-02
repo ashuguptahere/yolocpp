@@ -168,6 +168,14 @@ class RFDetrImpl : public torch::nn::Module {
   yolocpp::models::rfdetr::EncoderOutput forward_encoder(torch::Tensor x);
 
  private:
+  // #65A2 — real RF-DETR backbone, registered under a ModuleList
+  // named "backbone" whose slot 0 wraps a DINOv2-windowed ViT. The
+  // ModuleList path-rules give us `backbone.0.encoder.encoder.*`
+  // matching upstream key names exactly.
+  torch::nn::ModuleList                backbone_real_{nullptr};
+  // Legacy scaffold modules — placeholders driving the runnable
+  // forward path until #65B2/C2/D2 land. Their parameters are NOT
+  // expected to match upstream keys.
   yolocpp::models::rfdetr::ViTBackbone backbone_{nullptr};
   yolocpp::models::rfdetr::Encoder     encoder_{nullptr};
   yolocpp::models::rfdetr::DetrHead    head_{nullptr};

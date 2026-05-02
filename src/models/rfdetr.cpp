@@ -66,19 +66,36 @@ RFDetrImpl::RFDetrImpl(RFDetrScale scale_in, int nc_in)
   // forward path stays runnable in the meantime — `load_from_state_dict`
   // still throws on the converter slice (#65D2) until the modules
   // are rewritten to match upstream key names.
+  // #65A2 — register the REAL backbone first under name "backbone".
+  // ModuleList auto-numbers children, so slot 0 contains a
+  // Dinov2WrapperOuter and the full path becomes
+  // `backbone.0.encoder.encoder.embeddings.*` matching upstream key
+  // names exactly so `rfdetr_weights::load_rfdetr_pt` binds in one
+  // pass.
+  const auto& real_cfg = yolocpp::models::rfdetr::dinov2_cfg_for(
+      scale.upstream_id, scale.patch_size);
+  backbone_real_ = torch::nn::ModuleList();
+  backbone_real_->push_back(
+      yolocpp::models::rfdetr::Dinov2WrapperOuter(real_cfg));
+  register_module("backbone", backbone_real_);
+
+  // Legacy scaffold modules — placeholders so the existing forward
+  // path keeps running until #65B2/C2/D2 replace them. Registered
+  // under `_*_legacy` names so they NEVER collide with upstream
+  // parameter names.
   static constexpr const char* kPlaceholderBackbone = "lw-detr-tiny";
   const auto& bcfg =
       yolocpp::models::rfdetr::backbone_cfg_from_name(kPlaceholderBackbone);
   backbone_ = register_module(
-      "backbone", yolocpp::models::rfdetr::ViTBackbone(bcfg));
+      "_backbone_legacy", yolocpp::models::rfdetr::ViTBackbone(bcfg));
   std::vector<int> in_channels(bcfg.tap_blocks.size(), bcfg.embed_dim);
   encoder_ = register_module(
-      "encoder",
+      "_encoder_legacy",
       yolocpp::models::rfdetr::Encoder(
           in_channels, scale.hidden_dim, scale.sa_nheads,
           /*num_layers=*/1, /*num_points=*/4));
   head_ = register_module(
-      "head",
+      "_head_legacy",
       yolocpp::models::rfdetr::DetrHead(
           scale.hidden_dim, scale.sa_nheads, scale.num_dec_layers,
           scale.num_queries, nc, /*num_points=*/4));

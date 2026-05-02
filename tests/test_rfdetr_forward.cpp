@@ -24,8 +24,11 @@ void check_forward(const std::string& letter) {
   RFDetr m(scale, /*nc=*/80);
   m->eval();
 
-  const auto& cfg = backbone_cfg_from_name(scale.backbone);
-  auto x = torch::randn({1, 3, cfg.img_size, cfg.img_size});
+  // Old scaffold's backbone is now placeholder-only (see #65A2).
+  // Run forward at a hard-coded letterbox size; the real
+  // per-variant resolution is `scale.resolution`.
+  (void)backbone_cfg_from_name;
+  auto x = torch::randn({1, 3, 640, 640});
 
   // Eval — YOLO contract.
   auto out = m->forward_eval(x);
@@ -55,16 +58,16 @@ void check_forward(const std::string& letter) {
 
   // Train — per-layer logits + bbox deltas.
   auto outs = m->forward_train(x);
-  if (static_cast<int>(outs.size()) != scale.num_decoder_layers * 2) {
+  if (static_cast<int>(outs.size()) != scale.num_dec_layers * 2) {
     std::cerr << "[FAIL] " << letter << " forward_train layer count: "
               << outs.size() << " expected "
-              << scale.num_decoder_layers * 2 << "\n";
+              << scale.num_dec_layers * 2 << "\n";
     std::exit(1);
   }
   std::cout << "[PASS] rfdetr-" << letter
             << " forward Q=" << scale.num_queries
-            << " enc_layers=" << scale.num_encoder_layers
-            << " dec_layers=" << scale.num_decoder_layers << "\n";
+            << " hidden=" << scale.hidden_dim
+            << " dec_layers=" << scale.num_dec_layers << "\n";
 }
 
 }  // namespace

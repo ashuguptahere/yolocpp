@@ -1,71 +1,102 @@
-// Pins backbone forward shapes per RF-DETR scale (#65A). The
-// backbone is the only RF-DETR slice whose forward path is wired
-// today; everything downstream still throws. This test verifies
-// the whole ViT runs end-to-end on random input and produces the
-// expected multi-scale tap shapes.
+// #65A2 — pins the real HF-DINOv2 backbone forward shape (small
+// variant, C=384, depth=12, patch=14). Exercises the parameter
+// dotted-paths the loader uses (`embeddings.cls_token`,
+// `embeddings.patch_embeddings.projection.weight`,
+// `encoder.layer.0.attention.attention.query.weight`, etc.).
 
 #include <torch/torch.h>
 
-#include <cassert>
 #include <iostream>
-#include <vector>
 
-#include "yolocpp/models/rfdetr.hpp"
 #include "yolocpp/models/rfdetr_backbone.hpp"
 
-using yolocpp::models::RFDetr;
-using yolocpp::models::rfdetr::backbone_cfg_from_name;
+using yolocpp::models::rfdetr::Dinov2Cfg;
+using yolocpp::models::rfdetr::Dinov2Model;
+using yolocpp::models::rfdetr::Dinov2WrapperOuter;
 
-namespace {
-
-void check_backbone(const std::string& letter) {
+int main() {
   torch::NoGradGuard ng;
   torch::manual_seed(0);
 
-  auto scale = yolocpp::models::rfdetr_scale_from_letter(letter);
-  RFDetr m(scale, /*nc=*/80);
+  Dinov2Cfg cfg = yolocpp::models::rfdetr::kDinov2Small;
+  cfg.patch_size = 14;
+  cfg.pretrain_grid = 16;  // smaller for test speed
+  cfg.num_layers = 4;       // smaller depth for test speed
+  cfg.tap_blocks = {0, 1, 2, 3};
+
+  Dinov2Model m(cfg);
   m->eval();
 
-  const auto& cfg = backbone_cfg_from_name(scale.backbone);
-  int img        = cfg.img_size;
-  int grid       = img / cfg.patch_size;
-
-  auto x   = torch::randn({1, 3, img, img});
-  auto out = m->forward_backbone(x);
-
-  if (out.size() != cfg.tap_blocks.size()) {
-    std::cerr << "[FAIL] " << letter << " tap count: got " << out.size()
-              << " expected " << cfg.tap_blocks.size() << "\n";
-    std::exit(1);
-  }
-  for (auto& f : out) {
-    if (f.dim() != 4 || f.size(0) != 1 || f.size(1) != cfg.embed_dim ||
-        f.size(2) != grid || f.size(3) != grid) {
-      std::cerr << "[FAIL] " << letter << " tap shape: " << f.sizes()
-                << " expected [1, " << cfg.embed_dim << ", " << grid
-                << ", " << grid << "]\n";
-      std::exit(1);
+  // Verify the parameter dotted-paths exist with the right shapes.
+  auto params = m->named_parameters();
+  std::vector<std::string> required = {
+      "embeddings.cls_token",
+      "embeddings.mask_token",
+      "embeddings.position_embeddings",
+      "embeddings.patch_embeddings.projection.weight",
+      "embeddings.patch_embeddings.projection.bias",
+      "encoder.layer.0.norm1.weight",
+      "encoder.layer.0.attention.attention.query.weight",
+      "encoder.layer.0.attention.attention.key.weight",
+      "encoder.layer.0.attention.attention.value.weight",
+      "encoder.layer.0.attention.output.dense.weight",
+      "encoder.layer.0.layer_scale1.lambda1",
+      "encoder.layer.0.norm2.weight",
+      "encoder.layer.0.mlp.fc1.weight",
+      "encoder.layer.0.mlp.fc2.weight",
+      "encoder.layer.0.layer_scale2.lambda1",
+      "layernorm.weight",
+      "layernorm.bias",
+  };
+  for (const auto& key : required) {
+    if (!params.contains(key)) {
+      std::cerr << "[FAIL] backbone missing param '" << key << "'\n";
+      std::cerr << "  available keys (first 25):\n";
+      int n = 0;
+      for (const auto& kv : params) {
+        if (n++ >= 25) break;
+        std::cerr << "    " << kv.key() << "\n";
+      }
+      return 1;
     }
-    if (!std::isfinite(f.abs().sum().item<float>())) {
-      std::cerr << "[FAIL] " << letter << " tap has non-finite values\n";
-      std::exit(1);
+  }
+
+  // Forward at a divisible-by-patch resolution. Pretrain grid is
+  // 16×16; input grid here is 4×4 so position embedding is
+  // bicubic-interpolated.
+  auto x = torch::randn({1, 3, 4 * cfg.patch_size, 4 * cfg.patch_size});
+  auto taps = m->forward(x);
+  if (taps.size() != cfg.tap_blocks.size()) {
+    std::cerr << "[FAIL] taps " << taps.size() << " expected "
+              << cfg.tap_blocks.size() << "\n";
+    return 1;
+  }
+  for (auto& t : taps) {
+    if (t.dim() != 4 || t.size(0) != 1 || t.size(1) != cfg.hidden_size ||
+        t.size(2) != 4 || t.size(3) != 4) {
+      std::cerr << "[FAIL] tap shape " << t.sizes() << " expected [1, "
+                << cfg.hidden_size << ", 4, 4]\n";
+      return 1;
     }
   }
-  std::cout << "[PASS] rfdetr-" << letter << " backbone " << scale.backbone
-            << " (depth=" << cfg.depth << ", embed=" << cfg.embed_dim
-            << ", img=" << img << ", taps=" << cfg.tap_blocks.size() << ")\n";
-}
-
-}  // namespace
-
-int main() {
-  // DINOv2-large is gigantic (~300M params, 24 blocks of embed=1024)
-  // — instantiating it in a unit test costs ~3 GB of host memory
-  // for the parameter tensors alone. Skip in this test; the lw-detr
-  // family covers the same forward path.
-  for (const char* s : {"n", "s", "b", "m"}) {
-    check_backbone(s);
+  if (!std::isfinite(taps.back().abs().sum().item<float>())) {
+    std::cerr << "[FAIL] non-finite tap output\n";
+    return 1;
   }
-  std::cout << "rfdetr backbone shapes: OK\n";
+
+  // The wrapper-outer / wrapper / model nesting reproduces upstream's
+  // `backbone.0.encoder.encoder.embeddings.*` path. Verify the
+  // OUTER wrapper exposes that.
+  Dinov2WrapperOuter outer(cfg);
+  auto outer_params = outer->named_parameters();
+  if (!outer_params.contains("encoder.encoder.embeddings.cls_token")) {
+    std::cerr << "[FAIL] wrapper-outer path missing\n";
+    return 1;
+  }
+
+  std::cout << "[PASS] dinov2 backbone (C=" << cfg.hidden_size
+            << ", depth=" << cfg.num_layers << ", taps="
+            << taps.size() << "); wrapper exposes "
+            << "encoder.encoder.embeddings.cls_token\n";
   return 0;
 }

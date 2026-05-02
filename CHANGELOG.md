@@ -30,6 +30,105 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.40.0] — 2026-05-02
+
+### Added — RF-DETR HF-DINOv2 windowed-attn backbone (#65A2)
+
+Replaced the LW-DETR placeholder backbone with the real
+HuggingFace DINOv2 windowed-attention layout used by
+`rfdetr.models.backbone.dinov2_with_windowed_attn`.
+
+`include/yolocpp/models/rfdetr_backbone.hpp` +
+`src/models/rfdetr_backbone.cpp` now expose:
+
+- `Dinov2PatchEmbeddings` (Conv2d patch projector,
+  `projection.weight/bias`)
+- `Dinov2Embeddings` (`cls_token`, `mask_token`,
+  `position_embeddings` + 2D bicubic interpolation to match input
+  grid)
+- `Dinov2SelfAttention` (separate `query`/`key`/`value` linears —
+  *not* fused), `Dinov2SelfOutput` (`dense`),
+  `Dinov2Attention` (composes both)
+- `Dinov2LayerScale` (`lambda1` parameter)
+- `Dinov2MLP` (`fc1`/`fc2` with GELU)
+- `Dinov2Layer` (norm1 + attention + layer_scale1 + norm2 + mlp +
+  layer_scale2 + double residual)
+- `Dinov2Encoder` (ModuleList `layer.<i>` of 12 blocks; tap capture
+  at configurable indices)
+- `Dinov2Model` (embeddings + encoder + final `layernorm`; returns
+  per-tap features in spatial form `[B, C, Hg, Wg]`)
+- `Dinov2Wrapper` / `Dinov2WrapperOuter` — two thin wrappers
+  exposing nested `encoder.encoder.*` namespacing
+
+Two per-variant configs: `kDinov2Small` (C=384, default for
+n/s/m/b + all seg variants) and `kDinov2Base` (C=768, used by
+`rfdetr-large` only). `dinov2_cfg_for(upstream_id, patch_size)`
+selects the right one and overrides patch size per variant
+(12/14/16). Per-block parameter names match upstream **exactly**:
+
+```
+embeddings.cls_token / mask_token / position_embeddings
+embeddings.patch_embeddings.projection.{weight,bias}
+encoder.layer.<i>.norm1.{weight,bias}
+encoder.layer.<i>.attention.attention.{query,key,value}.{weight,bias}
+encoder.layer.<i>.attention.output.dense.{weight,bias}
+encoder.layer.<i>.layer_scale1.lambda1
+encoder.layer.<i>.norm2.{weight,bias}
+encoder.layer.<i>.mlp.{fc1,fc2}.{weight,bias}
+encoder.layer.<i>.layer_scale2.lambda1
+layernorm.{weight,bias}
+```
+
+`RFDetrImpl` now registers a `torch::nn::ModuleList` named
+`"backbone"` whose first child is `Dinov2WrapperOuter` — combined
+with the wrappers' nested `encoder` registration this produces the
+full upstream path **`backbone.0.encoder.encoder.embeddings...`**.
+
+The legacy LW-DETR scaffold modules (`ViTBackbone`, `Encoder`,
+`DetrHead`) are kept under names prefixed with `_*_legacy` so the
+existing forward path remains runnable while #65B2/C2/D2 land.
+None of those parameter names collide with upstream keys.
+
+### Validated — backbone weights now load from upstream `.pt`
+
+`yolocpp --mode predict -m /tmp/.../rf-detr-base.pth -s data/bus.jpg`
+reports:
+
+```
+rfdetr-load: matched=223 unmatched=264 shape_mismatch=0 missing=193
+```
+
+**Up from 0 → 223 keys matched.** All 12 ViT blocks plus
+embeddings + layernorm bind 1-to-1. Remaining 264 unmatched keys
+are all `transformer.*` (decoder + two-stage encoder-output) —
+unblocked by the next slice (#65C2). The 193 "missing" entries are
+parameters from the legacy scaffold modules that have no upstream
+counterpart; they go away with #65C2/D2.
+
+### Changed — backbone test rewritten; encoder test removed
+
+- `tests/test_rfdetr_backbone.cpp` rewritten to exercise the real
+  DINOv2 module: verifies the 17 mandatory upstream parameter
+  paths exist with the right shapes, runs forward through 4 ViT
+  blocks at 4×14 spatial input, asserts 4 finite tap outputs, and
+  confirms `Dinov2WrapperOuter` produces
+  `encoder.encoder.embeddings.cls_token` (the path needed for
+  upstream binding).
+- `tests/test_rfdetr_encoder.cpp` deleted — the legacy multi-scale
+  deformable encoder it tested no longer matches RF-DETR's
+  architecture (RF-DETR has *no* separate encoder; the encoder
+  output is the `transformer.enc_output*` two-stage heads, due in
+  #65D2).
+
+ctest count: 43 → 42 (encoder test removed; backbone test still
+passes as one of the 42).
+
+### Tracked
+
+- TODO #65A2 done; #65B2 (CSP projector) is the next slice.
+
+---
+
 ## [0.39.0] — 2026-05-02
 
 ### Added — RF-DETR weight loader + flat-dict pt_loader path (#65E2 partial)

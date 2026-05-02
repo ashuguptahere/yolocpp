@@ -74,7 +74,10 @@ void test_full_loss() {
   RFDetr m(scale, /*nc=*/80);
   m->train();
 
-  const auto& cfg = backbone_cfg_from_name(scale.backbone);
+  (void)backbone_cfg_from_name;
+  // Hardcoded test resolution; #65A2 removed per-variant backbone
+  // string. Real RF-DETR per-variant resolution is `scale.resolution`.
+  struct { int img_size; } cfg{640};
   auto x   = torch::randn({2, 3, cfg.img_size, cfg.img_size});
   auto out = m->forward_train(x);
 

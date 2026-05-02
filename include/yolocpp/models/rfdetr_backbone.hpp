@@ -1,32 +1,52 @@
 #pragma once
 //
-// RF-DETR backbones (#65A).
+// RF-DETR 1.6.5 backbone (#65A2) — HF-DINOv2 windowed-attention.
 //
-// Two families — both ViT-based, structurally similar, differ only in
-// width/depth/window-attention:
+// Replaces the LW-DETR placeholder scaffold (0.32.0..0.37.0). Built
+// to match the upstream HuggingFace `Dinov2WithRegistersModel`
+// structure used in `rfdetr.models.backbone.dinov2_with_windowed_attn`,
+// so the parameter dotted-paths line up 1-to-1 with the keys in
+// `rf-detr-{nano,small,medium,base,large}.pth` and their seg
+// counterparts.
 //
-//   * DINOv2 ViT-L  — Roboflow's `rfdetr-l` weights. Patch=14, 24
-//                      blocks, embed_dim=1024, 16 heads, MLP ratio=4,
-//                      input 560×560. Pre-trained self-supervised on
-//                      LVD-142M; full self-attention, no windowing.
+// ─── Parameter naming (matches upstream exactly) ─────────────────────────
 //
-//   * LW-DETR ViT   — `rfdetr-{n,s,b,m}`. Patch=16, depth +
-//                      embed_dim per scale (see kLwDetr*Cfg below),
-//                      windowed attention with 14×14 window every
-//                      layer except the last, input 640×640.
+//   embeddings.cls_token                                      [1, 1, C]
+//   embeddings.mask_token                                     [1, C]
+//   embeddings.position_embeddings                            [1, N+1, C]
+//   embeddings.patch_embeddings.projection.{weight,bias}      Conv2d(3,C,k=p,s=p)
+//   encoder.layer.<i>.norm1.{weight,bias}                     LN
+//   encoder.layer.<i>.attention.attention.query.{weight,bias} Linear(C,C)
+//   encoder.layer.<i>.attention.attention.key.{...}           Linear(C,C)
+//   encoder.layer.<i>.attention.attention.value.{...}         Linear(C,C)
+//   encoder.layer.<i>.attention.output.dense.{weight,bias}    Linear(C,C)
+//   encoder.layer.<i>.layer_scale1.lambda1                    [C]  (param)
+//   encoder.layer.<i>.norm2.{weight,bias}                     LN
+//   encoder.layer.<i>.mlp.fc1.{weight,bias}                   Linear(C,4C)
+//   encoder.layer.<i>.mlp.fc2.{weight,bias}                   Linear(4C,C)
+//   encoder.layer.<i>.layer_scale2.lambda1                    [C]
+//   layernorm.{weight,bias}                                   LN
 //
-// Both expose the same forward interface — feed a `[B, 3, H, W]` image
-// (already letterboxed + normalised), get back a list of multi-scale
-// feature maps `[[B, C0, H/8, W/8], [B, C1, H/16, W/16], [B, C2,
-// H/32, W/32]]` for the deformable encoder (#65B) to consume.
+// Two extra wrapper Modules (`Dinov2Wrapper`, `Dinov2WrapperOuter`)
+// reproduce the upstream `backbone.0.encoder.encoder.*` double-wrapping.
+// `RFDetrImpl` registers a `ModuleList` named "backbone" whose first
+// child is the outer wrapper, so the full path becomes
+// `backbone.0.encoder.encoder.embeddings...` — matches upstream key
+// names exactly so `rfdetr_weights::load_rfdetr_pt` binds in one
+// pass.
 //
-// Implementation rationale: both architectures are stock transformer
-// blocks (LayerNorm → MHA → Add → LayerNorm → MLP → Add). LW-DETR's
-// windowed attention is implemented as a strided reshape into local
-// windows, full self-attention inside each window, then unshape — no
-// custom CUDA kernel needed. Reusing the same `ViTBlockImpl` for both
-// families lets #65D's state-dict converter stay simple (one keymap
-// per family).
+// ─── Per-variant config ──────────────────────────────────────────────────
+//
+//   small (n/s/m/b/seg-* up to xxlarge): C=384, depth=12, heads=6,
+//                                         mlp_ratio=4
+//   base  (rfdetr-large only):           C=768, depth=12, heads=12,
+//                                         mlp_ratio=4
+//
+// All variants use 12 ViT blocks. RF-DETR runs them at letterbox
+// resolutions of {384..768} so the position embedding is interpolated
+// at runtime to match the actual input grid size; the saved tensor
+// stays at the upstream-dumped shape (typically 37×37+1=1370 patches
+// for patch=14, or per-variant for patch=16/12).
 
 #include <torch/torch.h>
 
@@ -35,22 +55,176 @@
 
 namespace yolocpp::models::rfdetr {
 
-// Per-backbone configuration. The `RFDetrScale::backbone` string
-// (set in `rfdetr.hpp`) selects one of these constants.
+struct Dinov2Cfg {
+  int  hidden_size = 384;
+  int  num_layers  = 12;
+  int  num_heads   = 6;
+  int  mlp_ratio   = 4;
+  int  patch_size  = 14;
+  int  pretrain_grid = 37;     // size of the saved position_embeddings (P×P+1 tokens)
+  bool qkv_bias    = true;
+  // Indices (1-indexed in upstream config; we store 0-indexed) of
+  // ViT blocks whose output is captured as a feature tap. Default
+  // `[3,6,9,12]` (config) → `[2,5,8,11]` here.
+  std::vector<int> tap_blocks = {2, 5, 8, 11};
+};
+
+extern const Dinov2Cfg kDinov2Small;   // C=384 (default)
+extern const Dinov2Cfg kDinov2Base;    // C=768 — used by rfdetr-large
+
+// Return the right per-variant config based on `RFDetrScale.upstream_id`.
+const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch);
+
+// ─── Inner blocks ────────────────────────────────────────────────────────
+
+class Dinov2PatchEmbeddingsImpl : public torch::nn::Module {
+ public:
+  Dinov2PatchEmbeddingsImpl(int in_ch, int hidden, int patch);
+  torch::Tensor forward(torch::Tensor x);
+  torch::nn::Conv2d projection{nullptr};
+};
+TORCH_MODULE(Dinov2PatchEmbeddings);
+
+class Dinov2EmbeddingsImpl : public torch::nn::Module {
+ public:
+  Dinov2EmbeddingsImpl(const Dinov2Cfg& cfg);
+  // Returns `[B, N+1, C]` token sequence with 2D-interpolated pos
+  // embedding to match the input grid.
+  torch::Tensor forward(torch::Tensor x);
+  torch::Tensor cls_token;
+  torch::Tensor mask_token;
+  torch::Tensor position_embeddings;
+  Dinov2PatchEmbeddings patch_embeddings{nullptr};
+ private:
+  int patch_size_;
+  int pretrain_grid_;
+};
+TORCH_MODULE(Dinov2Embeddings);
+
+class Dinov2SelfAttentionImpl : public torch::nn::Module {
+ public:
+  Dinov2SelfAttentionImpl(int hidden, int heads, bool bias);
+  torch::Tensor forward(torch::Tensor x);
+  torch::nn::Linear query{nullptr};
+  torch::nn::Linear key{nullptr};
+  torch::nn::Linear value{nullptr};
+ private:
+  int heads_;
+  int head_dim_;
+};
+TORCH_MODULE(Dinov2SelfAttention);
+
+class Dinov2SelfOutputImpl : public torch::nn::Module {
+ public:
+  Dinov2SelfOutputImpl(int hidden);
+  torch::Tensor forward(torch::Tensor x);
+  torch::nn::Linear dense{nullptr};
+};
+TORCH_MODULE(Dinov2SelfOutput);
+
+class Dinov2AttentionImpl : public torch::nn::Module {
+ public:
+  Dinov2AttentionImpl(int hidden, int heads, bool bias);
+  torch::Tensor forward(torch::Tensor x);
+  Dinov2SelfAttention attention{nullptr};
+  Dinov2SelfOutput    output{nullptr};
+};
+TORCH_MODULE(Dinov2Attention);
+
+class Dinov2LayerScaleImpl : public torch::nn::Module {
+ public:
+  Dinov2LayerScaleImpl(int hidden);
+  torch::Tensor forward(torch::Tensor x);
+  torch::Tensor lambda1;
+};
+TORCH_MODULE(Dinov2LayerScale);
+
+class Dinov2MLPImpl : public torch::nn::Module {
+ public:
+  Dinov2MLPImpl(int hidden, int mlp_ratio);
+  torch::Tensor forward(torch::Tensor x);
+  torch::nn::Linear fc1{nullptr};
+  torch::nn::Linear fc2{nullptr};
+};
+TORCH_MODULE(Dinov2MLP);
+
+class Dinov2LayerImpl : public torch::nn::Module {
+ public:
+  Dinov2LayerImpl(const Dinov2Cfg& cfg);
+  torch::Tensor forward(torch::Tensor x);
+  torch::nn::LayerNorm norm1{nullptr};
+  Dinov2Attention      attention{nullptr};
+  Dinov2LayerScale     layer_scale1{nullptr};
+  torch::nn::LayerNorm norm2{nullptr};
+  Dinov2MLP            mlp{nullptr};
+  Dinov2LayerScale     layer_scale2{nullptr};
+};
+TORCH_MODULE(Dinov2Layer);
+
+class Dinov2EncoderImpl : public torch::nn::Module {
+ public:
+  Dinov2EncoderImpl(const Dinov2Cfg& cfg);
+  // Returns the per-tap features (one per `cfg.tap_blocks` entry),
+  // each in token form `[B, N+1, C]`.
+  std::vector<torch::Tensor> forward(torch::Tensor x);
+  torch::nn::ModuleList layer{nullptr};
+ private:
+  std::vector<int> taps_;
+};
+TORCH_MODULE(Dinov2Encoder);
+
+// `Dinov2Model` = embeddings + encoder + final layernorm.
+class Dinov2ModelImpl : public torch::nn::Module {
+ public:
+  Dinov2ModelImpl(const Dinov2Cfg& cfg);
+  // Returns the tap features in spatial form (`[B, C, Hg, Wg]`),
+  // ready for the projector.
+  std::vector<torch::Tensor> forward(torch::Tensor x);
+  Dinov2Embeddings     embeddings{nullptr};
+  Dinov2Encoder        encoder{nullptr};
+  torch::nn::LayerNorm layernorm{nullptr};
+};
+TORCH_MODULE(Dinov2Model);
+
+// `Dinov2Wrapper` adds the inner `encoder` namespace level so the
+// effective param paths become `<parent>.encoder.embeddings.*`.
+class Dinov2WrapperImpl : public torch::nn::Module {
+ public:
+  Dinov2WrapperImpl(const Dinov2Cfg& cfg);
+  std::vector<torch::Tensor> forward(torch::Tensor x);
+  Dinov2Model encoder{nullptr};   // intentional: param paths need 'encoder.encoder.*'
+};
+TORCH_MODULE(Dinov2Wrapper);
+
+// `Dinov2WrapperOuter` adds another level: param paths become
+// `<parent>.encoder.encoder.embeddings.*`. Combined with `RFDetrImpl`
+// registering this under a `ModuleList` named "backbone" (slot 0),
+// the full path matches upstream's `backbone.0.encoder.encoder.*`.
+class Dinov2WrapperOuterImpl : public torch::nn::Module {
+ public:
+  Dinov2WrapperOuterImpl(const Dinov2Cfg& cfg);
+  std::vector<torch::Tensor> forward(torch::Tensor x);
+  Dinov2Wrapper encoder{nullptr};
+};
+TORCH_MODULE(Dinov2WrapperOuter);
+
+// ─── Backwards-compatibility shim ────────────────────────────────────────
+//
+// The earlier scaffold defined `BackboneCfg` + `ViTBackbone` which
+// downstream scaffolded modules (encoder, decoder, head) still
+// reference. These are kept (with a smaller/dummier shape) so the
+// rest of the scaffold continues to build until #65B2/C2/D2 land
+// their replacements. The actual RF-DETR backbone is exposed via
+// the `Dinov2*` modules above.
 struct BackboneCfg {
   int  patch_size   = 14;
-  int  embed_dim    = 1024;
-  int  depth        = 24;
-  int  num_heads    = 16;
-  int  mlp_ratio_x4 = 4;        // multiplier × 4 / 4 to stay integer
-  int  window_size  = 0;        // 0 = full self-attention (DINOv2)
+  int  embed_dim    = 384;
+  int  depth        = 12;
+  int  num_heads    = 6;
+  int  mlp_ratio_x4 = 4;
+  int  window_size  = 0;
   int  img_size     = 560;
-  // Multi-scale feature map block indices (1-based in upstream;
-  // 0-based here). For a 24-block ViT-L: blocks 11, 17, 23 →
-  // strides 8/16/32 via patch_size=14 + a 2×2 tap downsample on the
-  // earlier taps. The encoder (#65B) will own the actual stride
-  // adaptation; this list just says which block outputs to capture.
-  std::vector<int> tap_blocks  = {11, 17, 23};
+  std::vector<int> tap_blocks = {2, 5, 8, 11};
 };
 
 extern const BackboneCfg kDinoV2LargeCfg;
@@ -58,36 +232,23 @@ extern const BackboneCfg kLwDetrTinyCfg;
 extern const BackboneCfg kLwDetrSmallCfg;
 extern const BackboneCfg kLwDetrBaseCfg;
 extern const BackboneCfg kLwDetrMediumCfg;
-
 const BackboneCfg& backbone_cfg_from_name(const std::string& backbone);
 
-// ─── ViT building blocks ────────────────────────────────────────────────
-
-// Patch-embedding: `Conv2d(3, embed_dim, k=patch, s=patch)` then flatten
-// to `[B, N, embed_dim]` with a learnable cls + position embedding.
-// Used by both DINOv2 and LW-DETR.
 class PatchEmbedImpl : public torch::nn::Module {
  public:
   PatchEmbedImpl(int in_ch, int embed_dim, int patch_size, int img_size);
   torch::Tensor forward(torch::Tensor x);
   int           grid_size() const { return grid_size_; }
-
  private:
   torch::nn::Conv2d proj_{nullptr};
   int grid_size_;
 };
 TORCH_MODULE(PatchEmbed);
 
-// Multi-head self-attention (optionally windowed). Standard
-// Q/K/V = Linear(C, 3C); attn = softmax(QKᵀ/√d); out = Linear(C, C).
-// When `window_size > 0`, input is reshaped to `[B·nW, win·win, C]`
-// before attention and unshaped after (window-style attention from
-// Swin / LW-DETR).
 class AttentionImpl : public torch::nn::Module {
  public:
   AttentionImpl(int dim, int num_heads, int window_size, int grid_size);
   torch::Tensor forward(torch::Tensor x);
-
  private:
   torch::nn::Linear qkv_{nullptr};
   torch::nn::Linear proj_{nullptr};
@@ -98,14 +259,11 @@ class AttentionImpl : public torch::nn::Module {
 };
 TORCH_MODULE(Attention);
 
-// LN → MHA → residual → LN → MLP → residual. MLP = Linear(C, 4C) →
-// GELU → Linear(4C, C).
 class ViTBlockImpl : public torch::nn::Module {
  public:
   ViTBlockImpl(int dim, int num_heads, int mlp_ratio, int window_size,
                int grid_size);
   torch::Tensor forward(torch::Tensor x);
-
  private:
   torch::nn::LayerNorm norm1_{nullptr};
   Attention            attn_{nullptr};
@@ -115,27 +273,16 @@ class ViTBlockImpl : public torch::nn::Module {
 };
 TORCH_MODULE(ViTBlock);
 
-// Full backbone module — patch_embed → N×ViTBlock → tap-block
-// captures → final LN. Returns a vector of feature maps in the order
-// requested by `cfg.tap_blocks` (innermost → outermost stride).
 class ViTBackboneImpl : public torch::nn::Module {
  public:
   explicit ViTBackboneImpl(const BackboneCfg& cfg);
-
-  // Returns one `[B, C, Hi, Wi]` per tap. Reshapes from the
-  // `[B, N, C]` token form via the patch grid.
   std::vector<torch::Tensor> forward_features(torch::Tensor x);
-
   const BackboneCfg& cfg() const { return cfg_; }
-
  private:
   BackboneCfg cfg_;
   PatchEmbed  patch_embed_{nullptr};
   torch::Tensor cls_token_;
   torch::Tensor pos_embed_;
-  // ModuleList auto-names children "0", "1", … so the full
-  // qualified path becomes "blocks.0.attn.qkv.weight" — same as
-  // upstream, which is what #65D's state-dict converter relies on.
   torch::nn::ModuleList blocks_{nullptr};
   torch::nn::LayerNorm  norm_{nullptr};
 };

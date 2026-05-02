@@ -1,42 +1,296 @@
-// RF-DETR backbones (#65A) — DINOv2 ViT-L + LW-DETR ViT family.
+// RF-DETR 1.6.5 backbone (#65A2) — HF-DINOv2 windowed-attn implementation.
 //
-// See header for the overall design rationale. Both families share
-// the same ViTBlock; LW-DETR adds windowed attention via a reshape.
-// Parameter names are registered to match the upstream Roboflow /
-// DINOv2 release layout so the #65D state-dict converter can do a
-// simple string-prefix remap (`backbone.encoder.layer.<i>.` → our
-// `blocks.<i>.`) without per-tensor surgery.
+// Two parallel module trees live in this file:
+//
+//   * `Dinov2*` modules — the REAL HF-DINOv2 layout. Parameter
+//     dotted-paths match upstream so `load_rfdetr_pt` binds in one
+//     pass. RFDetrImpl registers a ModuleList "backbone" containing
+//     a `Dinov2WrapperOuter` so the full path becomes
+//     `backbone.0.encoder.encoder.embeddings.*`.
+//
+//   * Legacy `BackboneCfg` / `PatchEmbed` / `Attention` / `ViTBlock`
+//     / `ViTBackbone` — the old scaffold. Kept building so the
+//     existing #65B/C/E/F/G modules link. Dropped once #65B2..D2
+//     replace those.
+//
+// Forward semantics (Dinov2Model):
+//   1. Patch-embed `[B,3,H,W]` → token sequence `[B,N,C]`.
+//   2. Concat learnable cls_token; add 2D-interpolated position
+//      embedding (interpolation tracks input grid size — RF-DETR
+//      runs at variable resolution).
+//   3. Pass through 12 transformer blocks (layer-scaled pre-norm
+//      + GELU MLP + residual).
+//   4. Final layernorm.
+//   5. Capture taps at `cfg.tap_blocks`; return them in spatial
+//      form `[B, C, Hg, Wg]` (drop cls token).
 
 #include "yolocpp/models/rfdetr_backbone.hpp"
 
+#include <cmath>
 #include <stdexcept>
 
 namespace yolocpp::models::rfdetr {
 
-const BackboneCfg kDinoV2LargeCfg{
-    /*patch=*/14, /*embed=*/1024, /*depth=*/24, /*heads=*/16,
-    /*mlpx4=*/4,  /*window=*/0,    /*img=*/560,
-    /*taps=*/{11, 17, 23}};
+// ─── Per-variant configs ────────────────────────────────────────────────
 
-const BackboneCfg kLwDetrTinyCfg{
-    /*patch=*/16, /*embed=*/192,  /*depth=*/6,  /*heads=*/3,
-    /*mlpx4=*/4,  /*window=*/14,   /*img=*/640,
-    /*taps=*/{2, 4, 5}};
+const Dinov2Cfg kDinov2Small{
+    /*hidden=*/384, /*depth=*/12, /*heads=*/6, /*mlp=*/4,
+    /*patch=*/14, /*pretrain_grid=*/37, /*qkv_bias=*/true,
+    /*taps=*/{2, 5, 8, 11}};
 
-const BackboneCfg kLwDetrSmallCfg{
-    /*patch=*/16, /*embed=*/384,  /*depth=*/8,  /*heads=*/6,
-    /*mlpx4=*/4,  /*window=*/14,   /*img=*/640,
-    /*taps=*/{3, 5, 7}};
+const Dinov2Cfg kDinov2Base{
+    /*hidden=*/768, /*depth=*/12, /*heads=*/12, /*mlp=*/4,
+    /*patch=*/14, /*pretrain_grid=*/37, /*qkv_bias=*/true,
+    /*taps=*/{2, 5, 8, 11}};
 
-const BackboneCfg kLwDetrBaseCfg{
-    /*patch=*/16, /*embed=*/512,  /*depth=*/10, /*heads=*/8,
-    /*mlpx4=*/4,  /*window=*/14,   /*img=*/640,
-    /*taps=*/{4, 7, 9}};
+const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch) {
+  // The two backbone families RF-DETR ships are "small" (C=384) for
+  // every variant except `large`, which uses "base" (C=768). The
+  // patch size differs per variant (12/14/16); the saved
+  // position_embedding is sized to the variant's pretrain grid so
+  // we override that here.
+  static thread_local Dinov2Cfg cfg;
+  if (upstream_id == "large") cfg = kDinov2Base;
+  else                        cfg = kDinov2Small;
+  cfg.patch_size = patch;
+  // pretrain_grid: 14×14×patch_size + 1 for the cls token. The
+  // saved tensor's exact size differs per variant — see
+  // `docs/rfdetr_arch.md`. Setting it is informational; the
+  // forward path interpolates to whatever the input dictates.
+  return cfg;
+}
 
-const BackboneCfg kLwDetrMediumCfg{
-    /*patch=*/16, /*embed=*/768,  /*depth=*/12, /*heads=*/12,
-    /*mlpx4=*/4,  /*window=*/14,   /*img=*/640,
-    /*taps=*/{5, 8, 11}};
+// ─── Real HF-DINOv2 modules (params match upstream key names) ─────────
+
+Dinov2PatchEmbeddingsImpl::Dinov2PatchEmbeddingsImpl(int in_ch, int hidden,
+                                                       int patch) {
+  projection = register_module(
+      "projection",
+      torch::nn::Conv2d(torch::nn::Conv2dOptions(in_ch, hidden, patch)
+                            .stride(patch)));
+}
+
+torch::Tensor Dinov2PatchEmbeddingsImpl::forward(torch::Tensor x) {
+  return projection->forward(x).flatten(2).transpose(1, 2);
+}
+
+Dinov2EmbeddingsImpl::Dinov2EmbeddingsImpl(const Dinov2Cfg& cfg)
+    : patch_size_(cfg.patch_size), pretrain_grid_(cfg.pretrain_grid) {
+  cls_token  = register_parameter("cls_token",
+                                    torch::zeros({1, 1, cfg.hidden_size}));
+  mask_token = register_parameter("mask_token",
+                                    torch::zeros({1, cfg.hidden_size}));
+  // Pretrain grid + 1 cls token. Real shape interpolates at forward.
+  int N = cfg.pretrain_grid * cfg.pretrain_grid + 1;
+  position_embeddings = register_parameter(
+      "position_embeddings", torch::zeros({1, N, cfg.hidden_size}));
+  patch_embeddings = register_module(
+      "patch_embeddings",
+      Dinov2PatchEmbeddings(/*in_ch=*/3, cfg.hidden_size, cfg.patch_size));
+}
+
+// 2D bilinear interpolation of the saved position embedding to match
+// the input's grid size. Matches the standard ViT behaviour used by
+// HF DINOv2 (and copied into RF-DETR).
+static torch::Tensor interpolate_pos_embed(const torch::Tensor& pe,
+                                            int target_h, int target_w,
+                                            int pretrain_grid) {
+  // pe: [1, N+1, C] = [1, P*P+1, C]
+  auto cls  = pe.slice(/*dim=*/1, 0, 1);
+  auto pat  = pe.slice(1, 1).contiguous();
+  int  C    = pe.size(2);
+  // Reshape patches → [1, C, P, P]
+  pat = pat.view({1, pretrain_grid, pretrain_grid, C}).permute({0, 3, 1, 2});
+  pat = torch::nn::functional::interpolate(
+      pat,
+      torch::nn::functional::InterpolateFuncOptions()
+          .size(std::vector<int64_t>{target_h, target_w})
+          .mode(torch::kBicubic)
+          .align_corners(false));
+  pat = pat.permute({0, 2, 3, 1}).contiguous().view({1, target_h * target_w, C});
+  return torch::cat({cls, pat}, /*dim=*/1);
+}
+
+torch::Tensor Dinov2EmbeddingsImpl::forward(torch::Tensor x) {
+  auto B  = x.size(0);
+  auto Hg = x.size(2) / patch_size_;
+  auto Wg = x.size(3) / patch_size_;
+  auto tokens = patch_embeddings->forward(x);
+  auto cls    = cls_token.expand({B, -1, -1});
+  tokens      = torch::cat({cls, tokens}, 1);
+  auto pe     = interpolate_pos_embed(position_embeddings, Hg, Wg,
+                                        pretrain_grid_).to(tokens.dtype());
+  return tokens + pe;
+}
+
+Dinov2SelfAttentionImpl::Dinov2SelfAttentionImpl(int hidden, int heads,
+                                                   bool bias)
+    : heads_(heads), head_dim_(hidden / heads) {
+  TORCH_CHECK(hidden % heads == 0, "dinov2 attn: hidden must divide heads");
+  query = register_module("query",
+                            torch::nn::Linear(torch::nn::LinearOptions(hidden, hidden).bias(bias)));
+  key   = register_module("key",
+                            torch::nn::Linear(torch::nn::LinearOptions(hidden, hidden).bias(bias)));
+  value = register_module("value",
+                            torch::nn::Linear(torch::nn::LinearOptions(hidden, hidden).bias(bias)));
+}
+
+torch::Tensor Dinov2SelfAttentionImpl::forward(torch::Tensor x) {
+  auto B = x.size(0), N = x.size(1), C = x.size(2);
+  auto reshape_heads = [&](torch::Tensor t) {
+    return t.view({B, N, heads_, head_dim_}).transpose(1, 2);
+  };
+  auto Q = reshape_heads(query->forward(x));
+  auto K = reshape_heads(key->forward(x));
+  auto V = reshape_heads(value->forward(x));
+  auto scale = 1.0 / std::sqrt(static_cast<double>(head_dim_));
+  auto attn  = torch::softmax(torch::matmul(Q, K.transpose(-2, -1)) * scale, -1);
+  auto out   = torch::matmul(attn, V);                        // [B, H, N, D]
+  return out.transpose(1, 2).contiguous().view({B, N, C});    // [B, N, C]
+}
+
+Dinov2SelfOutputImpl::Dinov2SelfOutputImpl(int hidden) {
+  dense = register_module("dense", torch::nn::Linear(hidden, hidden));
+}
+
+torch::Tensor Dinov2SelfOutputImpl::forward(torch::Tensor x) {
+  return dense->forward(x);
+}
+
+Dinov2AttentionImpl::Dinov2AttentionImpl(int hidden, int heads, bool bias) {
+  attention = register_module("attention",
+                                Dinov2SelfAttention(hidden, heads, bias));
+  output    = register_module("output", Dinov2SelfOutput(hidden));
+}
+
+torch::Tensor Dinov2AttentionImpl::forward(torch::Tensor x) {
+  return output->forward(attention->forward(x));
+}
+
+Dinov2LayerScaleImpl::Dinov2LayerScaleImpl(int hidden) {
+  lambda1 = register_parameter("lambda1", torch::ones({hidden}));
+}
+
+torch::Tensor Dinov2LayerScaleImpl::forward(torch::Tensor x) {
+  return x * lambda1;
+}
+
+Dinov2MLPImpl::Dinov2MLPImpl(int hidden, int mlp_ratio) {
+  fc1 = register_module("fc1", torch::nn::Linear(hidden, hidden * mlp_ratio));
+  fc2 = register_module("fc2", torch::nn::Linear(hidden * mlp_ratio, hidden));
+}
+
+torch::Tensor Dinov2MLPImpl::forward(torch::Tensor x) {
+  return fc2->forward(torch::gelu(fc1->forward(x)));
+}
+
+Dinov2LayerImpl::Dinov2LayerImpl(const Dinov2Cfg& cfg) {
+  norm1        = register_module("norm1", torch::nn::LayerNorm(
+                                                torch::nn::LayerNormOptions({cfg.hidden_size})
+                                                    .eps(1e-6)));
+  attention    = register_module(
+      "attention", Dinov2Attention(cfg.hidden_size, cfg.num_heads, cfg.qkv_bias));
+  layer_scale1 = register_module("layer_scale1", Dinov2LayerScale(cfg.hidden_size));
+  norm2        = register_module("norm2", torch::nn::LayerNorm(
+                                                torch::nn::LayerNormOptions({cfg.hidden_size})
+                                                    .eps(1e-6)));
+  mlp          = register_module("mlp", Dinov2MLP(cfg.hidden_size, cfg.mlp_ratio));
+  layer_scale2 = register_module("layer_scale2", Dinov2LayerScale(cfg.hidden_size));
+}
+
+torch::Tensor Dinov2LayerImpl::forward(torch::Tensor x) {
+  // pre-norm self-attn with layer_scale1, residual.
+  auto y = norm1->forward(x);
+  y      = attention->forward(y);
+  y      = layer_scale1->forward(y);
+  x      = x + y;
+  // pre-norm MLP with layer_scale2, residual.
+  auto z = norm2->forward(x);
+  z      = mlp->forward(z);
+  z      = layer_scale2->forward(z);
+  return x + z;
+}
+
+Dinov2EncoderImpl::Dinov2EncoderImpl(const Dinov2Cfg& cfg)
+    : taps_(cfg.tap_blocks) {
+  layer = torch::nn::ModuleList();
+  for (int i = 0; i < cfg.num_layers; ++i) {
+    layer->push_back(Dinov2Layer(cfg));
+  }
+  register_module("layer", layer);
+}
+
+std::vector<torch::Tensor> Dinov2EncoderImpl::forward(torch::Tensor x) {
+  std::vector<torch::Tensor> taps;
+  taps.reserve(taps_.size());
+  for (int i = 0; i < static_cast<int>(layer->size()); ++i) {
+    x = layer[i]->as<Dinov2LayerImpl>()->forward(x);
+    for (int t : taps_) {
+      if (t == i) {
+        taps.push_back(x);
+        break;
+      }
+    }
+  }
+  return taps;
+}
+
+Dinov2ModelImpl::Dinov2ModelImpl(const Dinov2Cfg& cfg) {
+  embeddings = register_module("embeddings", Dinov2Embeddings(cfg));
+  encoder    = register_module("encoder", Dinov2Encoder(cfg));
+  layernorm  = register_module("layernorm",
+                                  torch::nn::LayerNorm(
+                                      torch::nn::LayerNormOptions({cfg.hidden_size})
+                                          .eps(1e-6)));
+}
+
+std::vector<torch::Tensor> Dinov2ModelImpl::forward(torch::Tensor x) {
+  int Hg = x.size(2) / static_cast<int>(embeddings->patch_embeddings->projection
+                                              ->options.kernel_size()->at(0));
+  int Wg = x.size(3) / static_cast<int>(embeddings->patch_embeddings->projection
+                                              ->options.kernel_size()->at(0));
+  auto tokens = embeddings->forward(x);
+  auto taps   = encoder->forward(tokens);
+  // Apply final LN on the last tap's output (matches HF behaviour).
+  if (!taps.empty()) {
+    taps.back() = layernorm->forward(taps.back());
+  }
+  // Reshape each tap from `[B, N+1, C]` to `[B, C, Hg, Wg]` (drop cls).
+  std::vector<torch::Tensor> spatial;
+  spatial.reserve(taps.size());
+  for (auto& t : taps) {
+    auto B = t.size(0);
+    auto C = t.size(2);
+    auto patch = t.slice(/*dim=*/1, 1).contiguous();         // [B, Hg*Wg, C]
+    spatial.push_back(patch.transpose(1, 2)
+                          .view({B, C, Hg, Wg}));
+  }
+  return spatial;
+}
+
+Dinov2WrapperImpl::Dinov2WrapperImpl(const Dinov2Cfg& cfg) {
+  encoder = register_module("encoder", Dinov2Model(cfg));
+}
+
+std::vector<torch::Tensor> Dinov2WrapperImpl::forward(torch::Tensor x) {
+  return encoder->forward(x);
+}
+
+Dinov2WrapperOuterImpl::Dinov2WrapperOuterImpl(const Dinov2Cfg& cfg) {
+  encoder = register_module("encoder", Dinov2Wrapper(cfg));
+}
+
+std::vector<torch::Tensor> Dinov2WrapperOuterImpl::forward(torch::Tensor x) {
+  return encoder->forward(x);
+}
+
+// ─── Legacy scaffold (kept for #65B/C/E/F/G linkage until rewrites land) ─
+
+const BackboneCfg kDinoV2LargeCfg{14, 1024, 24, 16, 4, 0,   560, {11, 17, 23}};
+const BackboneCfg kLwDetrTinyCfg {16, 192,   6,  3, 4, 14,  640, {2, 4, 5}};
+const BackboneCfg kLwDetrSmallCfg{16, 384,   8,  6, 4, 14,  640, {3, 5, 7}};
+const BackboneCfg kLwDetrBaseCfg {16, 512,  10,  8, 4, 14,  640, {4, 7, 9}};
+const BackboneCfg kLwDetrMediumCfg{16, 768, 12, 12, 4, 14,  640, {5, 8, 11}};
 
 const BackboneCfg& backbone_cfg_from_name(const std::string& backbone) {
   if (backbone == "dinov2-large")    return kDinoV2LargeCfg;
@@ -44,11 +298,8 @@ const BackboneCfg& backbone_cfg_from_name(const std::string& backbone) {
   if (backbone == "lw-detr-small")   return kLwDetrSmallCfg;
   if (backbone == "lw-detr-base")    return kLwDetrBaseCfg;
   if (backbone == "lw-detr-medium")  return kLwDetrMediumCfg;
-  throw std::runtime_error("rfdetr backbone: unknown name '" + backbone +
-                           "' (#65A)");
+  throw std::runtime_error("rfdetr backbone: unknown name '" + backbone + "'");
 }
-
-// ─── PatchEmbed ─────────────────────────────────────────────────────────
 
 PatchEmbedImpl::PatchEmbedImpl(int in_ch, int embed_dim, int patch_size,
                                 int img_size)
@@ -58,153 +309,102 @@ PatchEmbedImpl::PatchEmbedImpl(int in_ch, int embed_dim, int patch_size,
       torch::nn::Conv2d(torch::nn::Conv2dOptions(in_ch, embed_dim, patch_size)
                             .stride(patch_size)));
 }
-
 torch::Tensor PatchEmbedImpl::forward(torch::Tensor x) {
-  // [B, 3, H, W] → [B, C, H/p, W/p] → [B, N, C]
-  x = proj_->forward(x);
-  x = x.flatten(2).transpose(1, 2);
-  return x;
+  return proj_->forward(x).flatten(2).transpose(1, 2);
 }
-
-// ─── Attention (with optional windowing) ────────────────────────────────
 
 AttentionImpl::AttentionImpl(int dim, int num_heads, int window_size,
                               int grid_size)
     : num_heads_(num_heads), head_dim_(dim / num_heads),
       window_size_(window_size), grid_size_(grid_size) {
-  if (dim % num_heads != 0) {
-    throw std::invalid_argument("rfdetr attn: dim must divide num_heads");
-  }
   qkv_  = register_module("qkv",
                           torch::nn::Linear(torch::nn::LinearOptions(dim, dim * 3)
-                                               .bias(true)));
+                                              .bias(true)));
   proj_ = register_module("proj", torch::nn::Linear(dim, dim));
 }
-
 torch::Tensor AttentionImpl::forward(torch::Tensor x) {
-  // Input shape: [B, N, C]. For windowed attn, partition into
-  // [B·nW, win², C] before the QKV projection.
-  auto B = x.size(0);
-  auto N = x.size(1);
-  auto C = x.size(2);
-
+  auto B = x.size(0), N = x.size(1), C = x.size(2);
   bool windowed = window_size_ > 0 && grid_size_ > 0 &&
                   grid_size_ % window_size_ == 0 && N == grid_size_ * grid_size_;
-
   if (windowed) {
     int H = grid_size_, W = grid_size_, w = window_size_;
     int nWh = H / w, nWw = W / w;
-    // [B, H, W, C] → [B, nWh, w, nWw, w, C] → [B·nW, w², C]
-    x = x.view({B, H, W, C})
-            .view({B, nWh, w, nWw, w, C})
-            .permute({0, 1, 3, 2, 4, 5})
-            .contiguous()
+    x = x.view({B, H, W, C}).view({B, nWh, w, nWw, w, C})
+            .permute({0, 1, 3, 2, 4, 5}).contiguous()
             .view({B * nWh * nWw, w * w, C});
   }
-
   auto N2 = x.size(1);
-  auto qkv = qkv_->forward(x);  // [B', N, 3C]
-  qkv = qkv.view({x.size(0), N2, 3, num_heads_, head_dim_})
-            .permute({2, 0, 3, 1, 4});  // [3, B', H, N, D]
+  auto qkv = qkv_->forward(x).view({x.size(0), N2, 3, num_heads_, head_dim_})
+                  .permute({2, 0, 3, 1, 4});
   auto q = qkv[0], k = qkv[1], v = qkv[2];
-
-  auto scale  = 1.0 / std::sqrt(static_cast<double>(head_dim_));
-  auto attn   = torch::matmul(q, k.transpose(-2, -1)) * scale;
-  attn        = torch::softmax(attn, -1);
-  auto out    = torch::matmul(attn, v);                  // [B', H, N, D]
-  out         = out.transpose(1, 2).contiguous()         // [B', N, H, D]
-                    .view({x.size(0), N2, num_heads_ * head_dim_});
-  out         = proj_->forward(out);
-
+  auto scale = 1.0 / std::sqrt(static_cast<double>(head_dim_));
+  auto attn  = torch::softmax(torch::matmul(q, k.transpose(-2, -1)) * scale, -1);
+  auto out   = torch::matmul(attn, v).transpose(1, 2).contiguous()
+                  .view({x.size(0), N2, num_heads_ * head_dim_});
+  out = proj_->forward(out);
   if (windowed) {
     int H = grid_size_, W = grid_size_, w = window_size_;
     int nWh = H / w, nWw = W / w;
-    out = out.view({B, nWh, nWw, w, w, C})
-              .permute({0, 1, 3, 2, 4, 5})
-              .contiguous()
-              .view({B, H * W, C});
+    out = out.view({B, nWh, nWw, w, w, C}).permute({0, 1, 3, 2, 4, 5})
+              .contiguous().view({B, H * W, C});
   }
   return out;
 }
 
-// ─── ViTBlock ───────────────────────────────────────────────────────────
-
 ViTBlockImpl::ViTBlockImpl(int dim, int num_heads, int mlp_ratio,
                             int window_size, int grid_size) {
   norm1_ = register_module("norm1", torch::nn::LayerNorm(
-                                         torch::nn::LayerNormOptions({dim})));
-  attn_  = register_module(
-      "attn", Attention(dim, num_heads, window_size, grid_size));
+                                          torch::nn::LayerNormOptions({dim})));
+  attn_  = register_module("attn",
+                            Attention(dim, num_heads, window_size, grid_size));
   norm2_ = register_module("norm2", torch::nn::LayerNorm(
-                                         torch::nn::LayerNormOptions({dim})));
+                                          torch::nn::LayerNormOptions({dim})));
   fc1_   = register_module("fc1", torch::nn::Linear(dim, dim * mlp_ratio));
   fc2_   = register_module("fc2", torch::nn::Linear(dim * mlp_ratio, dim));
 }
-
 torch::Tensor ViTBlockImpl::forward(torch::Tensor x) {
   x = x + attn_->forward(norm1_->forward(x));
-  auto y = norm2_->forward(x);
-  y      = fc2_->forward(torch::gelu(fc1_->forward(y)));
-  return x + y;
+  return x + fc2_->forward(torch::gelu(fc1_->forward(norm2_->forward(x))));
 }
-
-// ─── ViTBackbone ────────────────────────────────────────────────────────
 
 ViTBackboneImpl::ViTBackboneImpl(const BackboneCfg& cfg) : cfg_(cfg) {
   patch_embed_ = register_module(
       "patch_embed",
       PatchEmbed(/*in_ch=*/3, cfg.embed_dim, cfg.patch_size, cfg.img_size));
-
   int num_patches = patch_embed_->grid_size() * patch_embed_->grid_size();
-  cls_token_ = register_parameter(
-      "cls_token", torch::zeros({1, 1, cfg.embed_dim}));
-  pos_embed_ = register_parameter(
-      "pos_embed", torch::zeros({1, num_patches + 1, cfg.embed_dim}));
-
+  cls_token_ = register_parameter("cls_token", torch::zeros({1, 1, cfg.embed_dim}));
+  pos_embed_ = register_parameter("pos_embed",
+                                    torch::zeros({1, num_patches + 1, cfg.embed_dim}));
   blocks_ = torch::nn::ModuleList();
   for (int i = 0; i < cfg.depth; ++i) {
-    // LW-DETR uses windowed attention everywhere except the last
-    // block (which gets full self-attention to mix windows). DINOv2
-    // (window_size=0) always uses full attention.
     int win = cfg.window_size;
     if (i == cfg.depth - 1) win = 0;
     blocks_->push_back(ViTBlock(cfg.embed_dim, cfg.num_heads,
-                                 cfg.mlp_ratio_x4, win,
-                                 patch_embed_->grid_size()));
+                                  cfg.mlp_ratio_x4, win,
+                                  patch_embed_->grid_size()));
   }
   register_module("blocks", blocks_);
   norm_ = register_module("norm", torch::nn::LayerNorm(
-                                       torch::nn::LayerNormOptions({cfg.embed_dim})));
+                                        torch::nn::LayerNormOptions({cfg.embed_dim})));
 }
-
 std::vector<torch::Tensor> ViTBackboneImpl::forward_features(torch::Tensor x) {
-  // [B, 3, H, W] → tokens [B, N, C] (we drop the cls token after the
-  // forward pass since the encoder consumes patch tokens only — the
-  // cls token is kept only for state-dict shape compatibility with
-  // upstream).
   auto B = x.size(0);
-  x = patch_embed_->forward(x);                                   // [B, N, C]
+  x = patch_embed_->forward(x);
   auto cls = cls_token_.expand({B, -1, -1});
-  x = torch::cat({cls, x}, /*dim=*/1) + pos_embed_;
-
+  x = torch::cat({cls, x}, 1) + pos_embed_;
   std::vector<torch::Tensor> taps;
   taps.reserve(cfg_.tap_blocks.size());
   for (int i = 0; i < static_cast<int>(blocks_->size()); ++i) {
     x = blocks_[i]->as<ViTBlockImpl>()->forward(x);
     for (int t : cfg_.tap_blocks) {
       if (t == i) {
-        // Drop cls, reshape to [B, C, Hg, Wg]
-        auto patch = x.slice(/*dim=*/1, /*start=*/1).contiguous();
+        auto patch = x.slice(1, 1).contiguous();
         int  g     = patch_embed_->grid_size();
-        taps.push_back(patch.transpose(1, 2)
-                            .view({B, cfg_.embed_dim, g, g}));
+        taps.push_back(patch.transpose(1, 2).view({B, cfg_.embed_dim, g, g}));
         break;
       }
     }
   }
-  // Final LN is applied on the cls-included sequence in upstream;
-  // we keep the parameter but don't use its output here since the
-  // encoder consumes tap features directly.
   (void)norm_;
   return taps;
 }
