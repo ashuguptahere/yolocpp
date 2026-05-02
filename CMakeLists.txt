@@ -147,6 +147,8 @@ add_library(yolocpp_core
   src/losses/yolo6_loss.cpp
   src/losses/yolo7_loss.cpp
   src/losses/yolo10_loss.cpp
+  src/cli/api.cpp
+  src/cli/commands.cpp
   src/cli/data_yaml.cpp
   src/cli/model_info.cpp
   src/cli/resolve.cpp

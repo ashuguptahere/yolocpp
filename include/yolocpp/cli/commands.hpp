@@ -1,0 +1,71 @@
+#pragma once
+//
+// Internal declarations of the CLI command bodies (the `cmd_*`
+// functions implemented in `src/cli/main.cpp`). Both the CLI driver
+// itself and the public C++ API (`yolocpp::YOLO` in
+// `include/yolocpp/api.hpp`) call into them, so they live in a
+// shared namespace rather than `main.cpp`'s anonymous one.
+//
+// Not part of the user-facing SDK surface — the public entry point
+// is `yolocpp::YOLO`. These declarations exist so the api.cpp impl
+// can dispatch to the same code paths the CLI uses.
+
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace yolocpp::cli {
+
+int cmd_info();
+
+int cmd_predict_task(const std::string& task, const std::string& weights,
+                     const std::string& source, std::string out, int imgsz,
+                     std::string device, std::string scale_s, int nc,
+                     float conf, float iou,
+                     const std::string& version_hint = "");
+
+int cmd_val(const std::string& weights, const std::string& root,
+            const std::string& names_csv, int imgsz, std::string device,
+            std::string scale_s);
+
+int cmd_val_task(const std::string& task, const std::string& weights,
+                 const std::string& data, const std::string& names_csv,
+                 int imgsz, const std::string& device,
+                 const std::string& scale_s);
+
+int cmd_train(const std::string& root, const std::string& names_csv,
+              int imgsz, int epochs, int batch_size, double lr0,
+              std::string device, std::string scale_s,
+              const std::string& save_dir,
+              const std::string& init_weights,
+              int patience = 0,
+              std::vector<std::pair<std::string, std::string>> args_for_yaml = {},
+              std::uint64_t seed = 0);
+
+int cmd_train_task(const std::string& task, const std::string& data,
+                   const std::string& names_csv, int imgsz, int epochs,
+                   int batch, double lr0, const std::string& device,
+                   const std::string& scale_s, const std::string& save_dir,
+                   const std::string& weights);
+
+int cmd_export(const std::string& weights, const std::string& format,
+               const std::string& out, int imgsz, const std::string& scale_s_in,
+               int nc, const std::string& input_name, bool fp16,
+               const std::string& version_hint = "",
+               const std::string& task = "detect");
+
+int cmd_benchmark(const std::string& weights, const std::string& source,
+                  int imgsz, int warmup, int iters,
+                  const std::string& cache, const std::string& device);
+
+// Centralised --device validator (also exposed so the API can
+// validate device strings the same way the CLI does).
+std::string normalise_device(std::string d);
+
+// Split a comma-separated string into trimmed tokens. Used by the
+// CLI dispatcher (`--export-after-train onnx,trt` etc.) and by the
+// API; defined alongside the cmd_* functions in commands.cpp.
+std::vector<std::string> split_csv(const std::string& s);
+
+}  // namespace yolocpp::cli

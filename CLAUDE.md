@@ -461,6 +461,31 @@ architectures whose task heads ship with weights upstream. Predict +
 export of v11/v26 task variants additionally route through the
 registry.
 
+## Public C++ API (`#include <yolocpp/api.hpp>`)
+
+Chainable Python-style API for embedding yolocpp in C++ apps:
+
+```cpp
+yolocpp::YOLO m("yolo11s.pt");
+m.to("auto");
+m.predict({.source = "bus.jpg"});                       // single image
+m.predict({.source = "frames/", .out = "annotated/"});  // dir fan-out
+m.predict({.source = "video.mp4"});                     // frame loop
+m.val({.data = "coco/data.yaml"});
+m.train({.data = "coco/data.yaml", .epochs = 100, .seed = 42,
+         .export_after_train = "onnx"});
+m.export_({.format = "onnx", .precision = "fp16"});
+```
+
+Every method routes through `yolocpp::cli::cmd_*` (in
+`src/cli/commands.cpp`) — same dispatch the CLI uses. Adding a new
+CLI flag means adding the matching field to the corresponding Args
+struct in `api.hpp` and forwarding it in `api.cpp`. The cmd_*
+functions live in the `yolocpp_core` static lib so both `main.cpp`
+(the CLI driver) and `api.cpp` (the public API) link against them;
+`cmd_dispatch_flag_style` is the sole exception — it stays in
+`main.cpp` because it's the only CLI11 consumer.
+
 The previous kv-style parser (`task=detect mode=predict ...`) and the
 legacy subcommand-style parser (`yolocpp predict -m ... -s ...`) were
 removed under #51K (maintainer's request: one canonical parser only).

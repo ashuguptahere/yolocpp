@@ -52,6 +52,10 @@ set_target_properties(dump_v10_forward PROPERTIES
 
 yolocpp_add_test(smoke_test         smoke_test.cpp smoke_kernel.cu)
 yolocpp_add_test(test_registry      test_registry.cpp)
+yolocpp_add_test(test_api           test_api.cpp)
+set_tests_properties(test_api PROPERTIES
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 60)
 yolocpp_add_test(test_yolo8_arch   test_yolo8_arch.cpp)
 yolocpp_add_test(test_pt_loader     test_pt_loader.cpp)
 yolocpp_add_test(test_predict       test_predict.cpp)
