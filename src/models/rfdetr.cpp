@@ -84,6 +84,49 @@ RFDetrImpl::RFDetrImpl(RFDetrScale scale_in, int nc_in)
                                               n_proj_stages));
   register_module("backbone", backbone_real_);
 
+  // #65C2/D2 — real transformer (decoder + two-stage encoder-output
+  // siblings). Upstream's checkpoint stores 91 cls slots (90 COCO
+  // classes + 1 background); we mirror that so the loaded weights
+  // bind without slicing. The runtime user-facing nc may be smaller
+  // — handled at the head reduction step in #65F2.
+  transformer_ = register_module(
+      "transformer",
+      yolocpp::models::rfdetr::RFDetrTransformer(
+          scale.hidden_dim, scale.num_dec_layers, scale.sa_nheads,
+          scale.ca_nheads, scale.dec_n_points, /*ffn_dim=*/2048,
+          scale.group_detr, /*n_classes_with_bg=*/scale.num_classes + 1));
+
+  // #65C2 — shared cls/bbox heads + learnable query/refpoint
+  // embeddings.
+  class_embed_ = register_module(
+      "class_embed",
+      torch::nn::Linear(scale.hidden_dim, scale.num_classes + 1));
+  bbox_embed_ = register_module(
+      "bbox_embed",
+      yolocpp::models::rfdetr::RFDetrMLP(
+          scale.hidden_dim, scale.hidden_dim, /*output_dim=*/4,
+          /*num_layers=*/3));
+  // Match upstream's `refpoint_embed.weight` / `query_feat.weight`
+  // paths — these are `nn.Embedding`'s `.weight` param. We register
+  // each as a submodule whose sole parameter is named "weight".
+  struct EmbeddingWeightImpl : torch::nn::Module {
+    torch::Tensor weight;
+    EmbeddingWeightImpl(int64_t num, int64_t dim) {
+      weight = register_parameter("weight", torch::zeros({num, dim}));
+    }
+  };
+  TORCH_MODULE_IMPL(EmbeddingWeight, EmbeddingWeightImpl);
+  auto refpt = register_module(
+      "refpoint_embed",
+      std::make_shared<EmbeddingWeightImpl>(
+          scale.num_queries * scale.group_detr, 4));
+  auto qfeat = register_module(
+      "query_feat",
+      std::make_shared<EmbeddingWeightImpl>(
+          scale.num_queries * scale.group_detr, scale.hidden_dim));
+  refpoint_embed_ = refpt->weight;
+  query_feat_     = qfeat->weight;
+
   // Legacy scaffold modules — placeholders so the existing forward
   // path keeps running until #65B2/C2/D2 replace them. Registered
   // under `_*_legacy` names so they NEVER collide with upstream

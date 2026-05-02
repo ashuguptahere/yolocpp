@@ -30,6 +30,91 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.42.0] — 2026-05-02
+
+### Added — RF-DETR transformer (#65C2 + #65D2)
+
+`include/yolocpp/models/rfdetr_transformer.hpp` +
+`src/models/rfdetr_transformer.cpp` replace the placeholder
+encoder/decoder scaffold with the real upstream transformer
+layout. Five new modules, all matching upstream parameter dotted
+paths exactly:
+
+- `FusedMHA(hidden, num_heads)` — fused-QKV self-attention with
+  raw `in_proj_weight`/`in_proj_bias` parameters + `out_proj`
+  Linear (matches upstream's `nn.MultiheadAttention` checkpoint
+  layout). Forward: standard scaled-dot-product attention from
+  fused projection.
+- `MSDeformAttn1L(hidden, num_heads, num_points)` — single-level
+  deformable cross-attention. Linear sub-modules for
+  `sampling_offsets`, `attention_weights`, `value_proj`,
+  `output_proj`. Forward not yet implemented (lands under #65F2).
+- `RFDetrMLP(input, hidden, output, num_layers)` — N-layer MLP
+  matching upstream's `layers.<i>` ModuleList layout (used by
+  bbox_embed and ref_point_head).
+- `RFDetrDecoderLayer` — `self_attn` + `norm1` + `cross_attn` +
+  `linear1` + `linear2` + `norm2` + `norm3` (22 keys per layer,
+  matches upstream).
+- `RFDetrDecoder` — ModuleList "layers" of `n_dec_layers`
+  decoder layers + final `norm` LayerNorm + `ref_point_head` MLP
+  (sinusoidal-embed of refpoints to feature dim).
+- `RFDetrTransformer` — `decoder` + 4 sibling ModuleLists
+  (`enc_output`, `enc_output_norm`, `enc_out_class_embed`,
+  `enc_out_bbox_embed`), each with `group_detr=13` entries for
+  the two-stage query initialisation.
+
+`RFDetrImpl` registers `transformer` (real) plus the four
+top-level shared heads upstream stores at the model root:
+`class_embed` (Linear, `[91, hidden]`), `bbox_embed`
+(`RFDetrMLP(hidden→hidden→hidden→4)`), `refpoint_embed.weight`
+and `query_feat.weight` (each registered as a 1-parameter
+sub-module so the dotted paths come out as
+`refpoint_embed.weight` / `query_feat.weight` matching upstream's
+`nn.Embedding` checkpoint layout).
+
+### Validated — full upstream binding for n/s/m/b detect variants
+
+```
+nano:        matched=465  unmatched=0   shape_mismatch=0    (100% of saved keys)
+small:       matched=487  unmatched=0   shape_mismatch=0    (100%)
+medium:      matched=509  unmatched=0   shape_mismatch=0    (100%)
+base:        matched=487  unmatched=0   shape_mismatch=0    (100%)
+large:       matched=499  unmatched=20  shape_mismatch=14   (93.6%; 4-level cross-attn + extra projector stage)
+seg-nano:    matched=508  unmatched=35  (segmentation_head.*)
+seg-small:   matched=508  unmatched=35
+seg-medium:  matched=530  unmatched=41
+seg-large:   matched=530  unmatched=41
+seg-xlarge:  matched=553  unmatched=47
+seg-xxlarge: matched=553  unmatched=47
+seg-preview: matched=509  unmatched=35
+```
+
+Detect-n/s/m/b reach 100% bind. Large needs the 4-level deformable
+cross-attn variant (#65C2 follow-up — config edge case where
+`num_levels × num_points = 12` instead of 1×2). Seg variants need
+`segmentation_head.*` (#65K2 — independent slice). The "missing"
+counts come entirely from `BatchNorm2d.{running_mean, running_var,
+num_batches_tracked}` buffers that upstream doesn't persist
+(track_running_stats=False) — non-actionable.
+
+### Forward semantics still pending (#65F2)
+
+Parameter registration is complete; `forward_eval` still routes
+through the legacy scaffold (which doesn't use the loaded weights
+since their names don't match), so detection output is still
+random. The real-arch forward — backbone+projector → two-stage
+encoder-output query selection → iterative bbox refinement
+through decoder → top-K → xyxy — lands under #65F2.
+
+ctest 41/42 (test_v6_e2e is the pre-existing #64 build issue).
+
+### Tracked
+
+- TODO #65C2 + #65D2 done; #65F2 (real-arch forward + decode loop)
+  is the next slice — this is what unlocks meaningful predictions.
+
+---
+
 ## [0.41.0] — 2026-05-02
 
 ### Added — RF-DETR CSP projector + per-variant pretrain grid (#65B2)

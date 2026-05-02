@@ -40,6 +40,7 @@
 #include "yolocpp/models/rfdetr_decoder.hpp"
 #include "yolocpp/models/rfdetr_encoder.hpp"
 #include "yolocpp/models/rfdetr_projector.hpp"
+#include "yolocpp/models/rfdetr_transformer.hpp"
 
 namespace yolocpp::models {
 
@@ -176,14 +177,25 @@ class RFDetrImpl : public torch::nn::Module {
   yolocpp::models::rfdetr::EncoderOutput forward_encoder(torch::Tensor x);
 
  private:
-  // #65A2 — real RF-DETR backbone, registered under a ModuleList
-  // named "backbone" whose slot 0 wraps a DINOv2-windowed ViT. The
-  // ModuleList path-rules give us `backbone.0.encoder.encoder.*`
-  // matching upstream key names exactly.
+  // #65A2/B2 — real backbone + projector. ModuleList "backbone"
+  // slot 0 wraps a DINOv2 wrapper + CSP projector so paths resolve
+  // to `backbone.0.encoder.encoder.*` and `backbone.0.projector.*`.
   torch::nn::ModuleList                backbone_real_{nullptr};
+  // #65C2/D2 — real transformer (decoder + two-stage encoder-output
+  // siblings) registered as `transformer.*`.
+  yolocpp::models::rfdetr::RFDetrTransformer transformer_{nullptr};
+  // #65C2 — top-level shared heads + learnable query/refpoint
+  // embeddings. Registered as siblings of `transformer` so paths
+  // are `class_embed.{w,b}`, `bbox_embed.layers.{0,1,2}.{w,b}`,
+  // `refpoint_embed.weight`, `query_feat.weight`.
+  torch::nn::Linear                       class_embed_{nullptr};
+  yolocpp::models::rfdetr::RFDetrMLP      bbox_embed_{nullptr};
+  torch::Tensor                           refpoint_embed_;
+  torch::Tensor                           query_feat_;
   // Legacy scaffold modules — placeholders driving the runnable
-  // forward path until #65B2/C2/D2 land. Their parameters are NOT
-  // expected to match upstream keys.
+  // forward path until #65F2 closes the real-arch forward loop.
+  // Registered under `_*_legacy` names so they NEVER collide with
+  // upstream parameter names.
   yolocpp::models::rfdetr::ViTBackbone backbone_{nullptr};
   yolocpp::models::rfdetr::Encoder     encoder_{nullptr};
   yolocpp::models::rfdetr::DetrHead    head_{nullptr};
