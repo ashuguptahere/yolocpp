@@ -19,6 +19,7 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <filesystem>
+#include <regex>
 #include <fstream>
 #include <memory>
 
@@ -476,22 +477,142 @@ bool task_implemented(const std::string& task) {
          task == "pose"   || task == "obb";
 }
 
+// ─── --source classification ─────────────────────────────────────────────
+// The predict pipeline accepts a much broader `--source` spec than just a
+// single image path. Classification rules (in order; first match wins):
+//
+//   "0", "1", … (digits only)   → webcam index           [SourceKind::Webcam]
+//   matches `^[a-z][a-z0-9]*://` → URL stream            [SourceKind::Url]
+//   ends in a video extension   → local video file       [SourceKind::Video]
+//   contains '*' or '?' glob    → glob over images       [SourceKind::Glob]
+//   directory on disk           → all images in dir      [SourceKind::Dir]
+//   file with image extension   → single image           [SourceKind::Image]
+//
+// Classification is purely string-based — no I/O — so callers can detect
+// invalid specs early. Webcam / Url / Video routing is gated behind the
+// frame-level predict hook (TODO #51C2); for now those return a clear
+// error pointing at the gap.
+enum class SourceKind { Image, Dir, Glob, Video, Url, Webcam, Unknown };
+
+bool ends_with_lower(const std::string& s, const std::string& suf) {
+  if (s.size() < suf.size()) return false;
+  for (std::size_t i = 0; i < suf.size(); ++i) {
+    if (std::tolower((unsigned char)s[s.size() - suf.size() + i]) != suf[i])
+      return false;
+  }
+  return true;
+}
+
+bool has_image_extension(const std::string& s) {
+  for (const auto* ext : {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"})
+    if (ends_with_lower(s, ext)) return true;
+  return false;
+}
+
+bool has_video_extension(const std::string& s) {
+  for (const auto* ext : {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"})
+    if (ends_with_lower(s, ext)) return true;
+  return false;
+}
+
+bool looks_like_url(const std::string& s) {
+  // RTSP / HTTP / HTTPS / FTP / RTMP — any scheme:// prefix is a stream.
+  auto p = s.find("://");
+  if (p == std::string::npos || p == 0) return false;
+  for (std::size_t i = 0; i < p; ++i) {
+    char ch = s[i];
+    if (!(std::isalpha((unsigned char)ch) ||
+          std::isdigit((unsigned char)ch) || ch == '+' || ch == '-' || ch == '.'))
+      return false;
+  }
+  return true;
+}
+
+bool looks_like_webcam_index(const std::string& s) {
+  if (s.empty()) return false;
+  for (char ch : s) if (!std::isdigit((unsigned char)ch)) return false;
+  return true;
+}
+
+bool looks_like_glob(const std::string& s) {
+  return s.find('*') != std::string::npos || s.find('?') != std::string::npos;
+}
+
+SourceKind classify_source(const std::string& spec) {
+  if (spec.empty()) return SourceKind::Unknown;
+  if (looks_like_webcam_index(spec)) return SourceKind::Webcam;
+  if (looks_like_url(spec))          return SourceKind::Url;
+  if (has_video_extension(spec))     return SourceKind::Video;
+  if (looks_like_glob(spec))         return SourceKind::Glob;
+  std::error_code ec;
+  if (std::filesystem::is_directory(spec, ec)) return SourceKind::Dir;
+  if (has_image_extension(spec))     return SourceKind::Image;
+  if (std::filesystem::exists(spec, ec)) return SourceKind::Image;  // fall-through trust
+  return SourceKind::Unknown;
+}
+
+// Expand an image-type source (single file / directory / glob) into a
+// concrete list of image paths sorted lexicographically. Throws if the
+// expansion yields zero matches (so callers get a clear error rather
+// than silently doing nothing).
+std::vector<std::string> expand_image_source(const std::string& spec) {
+  std::vector<std::string> out;
+  auto kind = classify_source(spec);
+  namespace fs = std::filesystem;
+
+  if (kind == SourceKind::Image) {
+    out.push_back(spec);
+  } else if (kind == SourceKind::Dir) {
+    for (const auto& e : fs::directory_iterator(spec)) {
+      if (e.is_regular_file() && has_image_extension(e.path().string()))
+        out.push_back(e.path().string());
+    }
+  } else if (kind == SourceKind::Glob) {
+    fs::path p(spec);
+    auto parent = p.parent_path();
+    if (parent.empty()) parent = ".";
+    auto pat = p.filename().string();
+    // Translate the glob to a small regex (only `*` and `?` supported).
+    std::string re_str = "^";
+    for (char c : pat) {
+      if (c == '*') re_str += ".*";
+      else if (c == '?') re_str += ".";
+      else if (std::isalnum((unsigned char)c)) re_str += c;
+      else { re_str += "\\"; re_str += c; }
+    }
+    re_str += "$";
+    std::regex re(re_str, std::regex::icase);
+    for (const auto& e : fs::directory_iterator(parent)) {
+      if (e.is_regular_file() &&
+          std::regex_match(e.path().filename().string(), re) &&
+          has_image_extension(e.path().string()))
+        out.push_back(e.path().string());
+    }
+  } else {
+    throw std::runtime_error(
+        "expand_image_source: '" + spec +
+        "' is not a single image, directory, or glob");
+  }
+  std::sort(out.begin(), out.end());
+  if (out.empty())
+    throw std::runtime_error("source '" + spec + "' matched no images");
+  return out;
+}
+
+// Inner predict-one-image path: runs the registered `predict_to_file`
+// hook (or the unified Predictor fallback) on a single image. Returns
+// the CLI exit code (0 = ok, 2 = unknown version).
+int predict_one_image(const std::string& task, const std::string& weights,
+                      const std::string& source, const std::string& out,
+                      int imgsz, std::string device, std::string scale_s,
+                      int nc, float conf, float iou,
+                      const std::string& version_hint);
+
 int cmd_predict_task(const std::string& task, const std::string& weights,
                      const std::string& source, std::string out, int imgsz,
                      std::string device, std::string scale_s, int nc,
                      float conf, float iou,
                      const std::string& version_hint = "") {
-  yolocpp::inference::NMSConfig c;
-  c.conf_thresh = conf; c.iou_thresh = iou;
-  // Default output path: runs/predict/<source_stem>_<task>.jpg.
-  // Mirrors train's `runs/train` convention. Caller's `out=` wins.
-  if (out.empty()) {
-    std::filesystem::create_directories("runs/predict");
-    auto stem = std::filesystem::path(source).stem().string();
-    if (stem.empty()) stem = "out";
-    out = "runs/predict/" + stem + "_" + task + ".jpg";
-  }
-
   // Auto-resolve scale from the weights filename when the caller
   // didn't pass --scale. The registry's per-version `predict_to_file`
   // hooks need a scale letter (`yolo11s.pt` → "s") to construct the
@@ -501,6 +622,87 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     auto fs_scale = yolocpp::cli::scale_from_filename(weights);
     if (!fs_scale.empty()) scale_s = fs_scale;
   }
+
+  // Classify the source. Image / Dir / Glob fan out to a list of image
+  // paths and run inference per-image. Video / URL / Webcam are filed
+  // under TODO #51C2 (needs a frame-level adapter hook + VideoCapture
+  // loop) — surface a clear error instead of silently routing through
+  // cv::imread which would fail with an unhelpful "image not found".
+  auto kind = classify_source(source);
+  if (kind == SourceKind::Video || kind == SourceKind::Url ||
+      kind == SourceKind::Webcam) {
+    std::cerr << "[error] --source='" << source
+              << "' is a "
+              << (kind == SourceKind::Video  ? "video file"
+                : kind == SourceKind::Url    ? "URL stream"
+                                              : "webcam index")
+              << " — frame-level inference not yet wired (TODO #51C2). "
+                 "Workaround: split to frames first (e.g. `ffmpeg -i "
+                 "input.mp4 frames/%06d.jpg`) and pass `--source=frames/`.\n";
+    return 2;
+  }
+  if (kind == SourceKind::Unknown) {
+    std::cerr << "[error] --source='" << source
+              << "' not recognised: not an existing file, directory, "
+                 "glob, video, URL, or webcam index\n";
+    return 2;
+  }
+
+  // Image / Dir / Glob → expand to a sorted list and iterate.
+  std::vector<std::string> inputs;
+  try {
+    inputs = expand_image_source(source);
+  } catch (const std::exception& e) {
+    std::cerr << "[error] " << e.what() << "\n";
+    return 2;
+  }
+
+  // For multi-input cases (dir / glob), `out` becomes an OUTPUT
+  // DIRECTORY rather than a single file. We accept the user's --out
+  // either as a directory (mkdir -p, write `<basename>_<task>.jpg` per
+  // input) or, for single inputs, as a literal output file (existing
+  // behaviour).
+  bool multi = (inputs.size() > 1);
+  std::string out_dir;
+  if (multi) {
+    if (out.empty()) {
+      out_dir = "runs/predict";
+    } else {
+      out_dir = out;
+    }
+    std::filesystem::create_directories(out_dir);
+  }
+
+  int rc = 0;
+  for (const auto& in : inputs) {
+    std::string this_out;
+    if (multi) {
+      auto stem = std::filesystem::path(in).stem().string();
+      if (stem.empty()) stem = "out";
+      this_out = out_dir + "/" + stem + "_" + task + ".jpg";
+    } else if (out.empty()) {
+      std::filesystem::create_directories("runs/predict");
+      auto stem = std::filesystem::path(in).stem().string();
+      if (stem.empty()) stem = "out";
+      this_out = "runs/predict/" + stem + "_" + task + ".jpg";
+    } else {
+      this_out = out;
+    }
+    int sub_rc = predict_one_image(task, weights, in, this_out, imgsz,
+                                    device, scale_s, nc, conf, iou,
+                                    version_hint);
+    if (sub_rc != 0) rc = sub_rc;  // last non-zero wins, but keep going
+  }
+  return rc;
+}
+
+int predict_one_image(const std::string& task, const std::string& weights,
+                      const std::string& source, const std::string& out,
+                      int imgsz, std::string device, std::string scale_s,
+                      int nc, float conf, float iou,
+                      const std::string& version_hint) {
+  yolocpp::inference::NMSConfig c;
+  c.conf_thresh = conf; c.iou_thresh = iou;
 
   if (task == "detect") {
     // .trt engines are version-agnostic — the serialized graph already
