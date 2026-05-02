@@ -10,6 +10,7 @@
 //
 
 #include <string>
+#include <vector>
 
 namespace yolocpp::cli {
 
@@ -20,6 +21,18 @@ std::string resolve_weights(const std::string& spec);
 
 // Returns the local dataset root directory. May download to ./data/<name>.
 std::string resolve_dataset(const std::string& spec);
+
+// Download a well-known dataset by short name (e.g. "coco8", "coco128",
+// "voc", "dota8") into `./data/<name>/` and return the resulting
+// directory path. If `name_or_url` looks like a URL (contains "://"),
+// the URL is fetched directly into `./data/<filename-stem>/`.
+//
+// Throws std::runtime_error on unknown name, network failure, or
+// unzip failure.
+std::string download_known_dataset(const std::string& name_or_url);
+
+// List the short names of every known dataset (alphabetical).
+std::vector<std::string> known_dataset_names();
 
 // Infer YOLO8 scale ("n"/"s"/"m"/"l"/"x") from a weights filename like
 // "yolo8s-seg.pt". Returns empty string if not recognised.

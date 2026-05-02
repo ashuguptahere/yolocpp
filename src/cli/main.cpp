@@ -1406,6 +1406,16 @@ int main(int argc, char** argv) {
     auto* i = app.add_subcommand("info", "Build / device info");
     (void)i;
 
+    // `yolocpp download <name|url>` — fetch a known dataset (coco8,
+    // coco128, dota8, VOC, xView, …) into ./data/<name>/, or any
+    // direct .zip URL into ./data/<stem>/. Prints the resolved
+    // directory on success so it can be piped into `--data`.
+    std::string dl_target;
+    auto* dl = app.add_subcommand("download",
+        "Download a known dataset (coco8, coco128, VOC, dota8, xView, ...) or a direct URL");
+    dl->add_option("name", dl_target,
+                    "dataset short-name or .zip URL")->required();
+
     CLI11_PARSE(app, argc, argv);
 
     // Validate / canonicalise --device once, before any subcommand
@@ -1433,6 +1443,11 @@ int main(int argc, char** argv) {
                         export_input_name, export_fp16);
     if (app.got_subcommand("benchmark"))
       return cmd_benchmark(weights, source, imgsz, warmup, iters, cache, device);
+    if (app.got_subcommand("download")) {
+      auto path = yolocpp::cli::download_known_dataset(dl_target);
+      std::cout << path << "\n";
+      return 0;
+    }
   } catch (const std::exception& e) {
     std::cerr << "[error] " << e.what() << "\n";
     return 1;

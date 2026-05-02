@@ -8,6 +8,7 @@
 #include "yolocpp/serialization/yolov10_weights.hpp"
 #include "yolocpp/serialization/yolov3_weights.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstring>
@@ -396,6 +397,97 @@ std::string resolve_weights(const std::string& spec) {
                            " (checked cwd, ./data, ~/.cache/yolocpp/weights)");
 }
 
+
+// ─── known-dataset registry ──────────────────────────────────────────────
+//
+// Short-name → URL lookup for `yolocpp download <name>`. URLs follow the
+// upstream `v0.0.0` asset-host convention for dataset zips. Adding a new
+// dataset is two lines: name + url. To pull from a non-standard host,
+// pass the URL directly to `download_known_dataset`.
+namespace {
+struct DatasetEntry { const char* name; const char* url; };
+constexpr DatasetEntry kKnownDatasets[] = {
+  {"coco8",     "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco8.zip"},
+  {"coco8-seg", "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco8-seg.zip"},
+  {"coco8-pose","https://github.com/ultralytics/assets/releases/download/v0.0.0/coco8-pose.zip"},
+  {"coco128",   "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128.zip"},
+  {"coco128-seg","https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128-seg.zip"},
+  {"dota8",     "https://github.com/ultralytics/assets/releases/download/v0.0.0/dota8.zip"},
+  {"VOC",       "https://github.com/ultralytics/assets/releases/download/v0.0.0/VOC.zip"},
+  {"xView",     "https://github.com/ultralytics/assets/releases/download/v0.0.0/xView.zip"},
+};
+
+const char* lookup_known_dataset(const std::string& name) {
+  for (const auto& e : kKnownDatasets) {
+    if (name == e.name) return e.url;
+  }
+  return nullptr;
+}
+}  // namespace
+
+std::vector<std::string> known_dataset_names() {
+  std::vector<std::string> out;
+  for (const auto& e : kKnownDatasets) out.emplace_back(e.name);
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+std::string download_known_dataset(const std::string& name_or_url) {
+  std::string url;
+  std::string dest_name;
+  if (name_or_url.find("://") != std::string::npos) {
+    url = name_or_url;
+    auto base = fs::path(url).filename().string();
+    auto dot = base.find('.');
+    dest_name = (dot == std::string::npos) ? base : base.substr(0, dot);
+  } else {
+    auto u = lookup_known_dataset(name_or_url);
+    if (!u) {
+      std::ostringstream msg;
+      msg << "unknown dataset '" << name_or_url << "'. Known: ";
+      bool first = true;
+      for (const auto& n : known_dataset_names()) {
+        msg << (first ? "" : ", ") << n;
+        first = false;
+      }
+      msg << ". Or pass a direct URL.";
+      throw std::runtime_error(msg.str());
+    }
+    url = u;
+    dest_name = name_or_url;
+  }
+
+  fs::path data_dir = fs::current_path() / "data";
+  fs::create_directories(data_dir);
+  fs::path target_dir = data_dir / dest_name;
+  if (fs::exists(target_dir) &&
+      (fs::exists(target_dir / "images") ||
+       fs::exists(target_dir / "train")  ||
+       fs::exists(target_dir / "val")    ||
+       !fs::is_empty(target_dir))) {
+    std::cerr << "[download] " << dest_name
+              << " already present at " << target_dir << "\n";
+    return target_dir.string();
+  }
+
+  fs::path zip = data_dir / fs::path(url).filename();
+  if (!fs::exists(zip) || fs::file_size(zip) == 0) {
+    if (!run_curl(url, zip))
+      throw std::runtime_error("download failed: " + url);
+  }
+  if (!run_unzip(zip, data_dir))
+    throw std::runtime_error("unzip failed: " + zip.string());
+
+  // Most upstream zips unpack into `<name>/`; fall back to a flat
+  // directory with the user's chosen name if the zip's top-level
+  // entry has a different shape.
+  if (!fs::exists(target_dir)) {
+    std::cerr << "[download] note: zip didn't unpack into '" << dest_name
+              << "/' — check `" << data_dir << "` for the dataset root\n";
+    return data_dir.string();
+  }
+  return target_dir.string();
+}
 
 // Ensure `dst` looks like a YOLO dataset (has `images/` or `train`/`val`).
 // If empty/missing and `download_url` is set, fetch + unzip into `dst`'s
