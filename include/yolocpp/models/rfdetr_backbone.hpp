@@ -105,6 +105,15 @@ class Dinov2EmbeddingsImpl : public torch::nn::Module {
   // grid, then split into `num_windows²` windows (each gets its
   // own cls token broadcast).
   torch::Tensor forward(torch::Tensor x);
+  // Per-substage output for #65L parity bisection.
+  struct SubStages {
+    torch::Tensor patch;        // [B, Hg*Wg, C]
+    torch::Tensor with_cls;     // [B, Hg*Wg+1, C]
+    torch::Tensor pos_embed;    // [1, Hg*Wg+1, C] interpolated
+    torch::Tensor with_pos;     // [B, Hg*Wg+1, C]
+    torch::Tensor windowed;     // [B*W², N+1, C] = full output
+  };
+  SubStages forward_stages(torch::Tensor x);
   torch::Tensor cls_token;
   torch::Tensor mask_token;
   torch::Tensor position_embeddings;

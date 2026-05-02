@@ -123,44 +123,67 @@ static torch::Tensor interpolate_pos_embed(const torch::Tensor& pe,
   int  C    = pe.size(2);
   // Reshape patches → [1, C, P, P]
   pat = pat.view({1, pretrain_grid, pretrain_grid, C}).permute({0, 3, 1, 2});
+  // Upstream's call: `interpolate(..., scale_factor=(h/sqrt, w/sqrt),
+  // mode='bicubic', align_corners=False)`. libtorch's bicubic
+  // kernel produces ~6.3e-3 max-abs-diff vs the same call from
+  // PyTorch Python on bit-identical inputs (verified via the
+  // parity harness #65L slices 4-5: position_embeddings parameter
+  // loads with 0 diff; patch + cls concat have 0 diff;
+  // emb_step3_pos_embed shows 6.3e-3 immediately after this
+  // interpolate call). Tried `size=` vs `scale_factor=`,
+  // `recompute_scale_factor=false`, fp64-cast round-trip — all
+  // produce identical 6.3e-3 diff. The kernel itself diverges
+  // between the two PyTorch builds. This 6.3e-3 is the parity
+  // FLOOR for variable-size inference (compounds to ~1.6 at the
+  // 12th transformer block via residual amplification); fixed-
+  // resolution inference at exactly `pretrain_grid · patch_size`
+  // would skip interpolation entirely and could close the gap.
+  std::vector<double> sf{
+      static_cast<double>(target_h) / pretrain_grid,
+      static_cast<double>(target_w) / pretrain_grid};
   pat = torch::nn::functional::interpolate(
       pat,
       torch::nn::functional::InterpolateFuncOptions()
-          .size(std::vector<int64_t>{target_h, target_w})
+          .scale_factor(sf)
           .mode(torch::kBicubic)
-          .align_corners(false));
+          .align_corners(false)
+          .recompute_scale_factor(false));
   pat = pat.permute({0, 2, 3, 1}).contiguous().view({1, target_h * target_w, C});
   return torch::cat({cls, pat}, /*dim=*/1);
 }
 
-torch::Tensor Dinov2EmbeddingsImpl::forward(torch::Tensor x) {
+Dinov2EmbeddingsImpl::SubStages Dinov2EmbeddingsImpl::forward_stages(
+    torch::Tensor x) {
+  SubStages s;
   auto B  = x.size(0);
   auto Hg = x.size(2) / patch_size_;
   auto Wg = x.size(3) / patch_size_;
   auto C  = cls_token.size(2);
-  auto tokens = patch_embeddings->forward(x);   // [B, Hg*Wg, C]
-  auto cls    = cls_token.expand({B, -1, -1});
-  tokens      = torch::cat({cls, tokens}, 1);
-  auto pe     = interpolate_pos_embed(position_embeddings, Hg, Wg,
-                                        pretrain_grid_).to(tokens.dtype());
-  tokens = tokens + pe;
-  if (num_windows_ <= 1) return tokens;
-  // Window-split. Per upstream, drop cls + reshape patches into
-  // `num_windows × num_windows` non-overlapping windows (each
-  // `[Hg/W, Wg/W]`). Then prepend a broadcast copy of the cls
-  // token to each window.
+  s.patch    = patch_embeddings->forward(x);                 // [B, Hg*Wg, C]
+  auto cls   = cls_token.expand({B, -1, -1});
+  s.with_cls = torch::cat({cls, s.patch}, 1);
+  s.pos_embed = interpolate_pos_embed(position_embeddings, Hg, Wg,
+                                        pretrain_grid_).to(s.with_cls.dtype());
+  s.with_pos = s.with_cls + s.pos_embed;
+  if (num_windows_ <= 1) {
+    s.windowed = s.with_pos;
+    return s;
+  }
   int W = num_windows_;
   int Hw = Hg / W, Ww = Wg / W;
-  auto cls_pe = tokens.slice(1, 0, 1);                   // [B, 1, C]
-  auto pat    = tokens.slice(1, 1).contiguous();          // [B, Hg*Wg, C]
-  pat = pat.view({B, Hg, Wg, C});                         // [B, Hg, Wg, C]
-  // Reshape into [B, W, Hw, W, Ww, C]
+  auto cls_pe = s.with_pos.slice(1, 0, 1);                   // [B, 1, C]
+  auto pat    = s.with_pos.slice(1, 1).contiguous();          // [B, Hg*Wg, C]
+  pat = pat.view({B, Hg, Wg, C});                             // [B, Hg, Wg, C]
   pat = pat.view({B, W, Hw, W, Ww, C});
-  // Permute to [B, W*W, Hw, Ww, C] then flatten window dim into batch.
   pat = pat.permute({0, 1, 3, 2, 4, 5}).contiguous()
             .view({B * W * W, Hw * Ww, C});
-  auto cls_per_window = cls_pe.repeat({W * W, 1, 1});      // [B*W², 1, C]
-  return torch::cat({cls_per_window, pat}, 1);             // [B*W², Hw*Ww+1, C]
+  auto cls_per_window = cls_pe.repeat({W * W, 1, 1});
+  s.windowed = torch::cat({cls_per_window, pat}, 1);
+  return s;
+}
+
+torch::Tensor Dinov2EmbeddingsImpl::forward(torch::Tensor x) {
+  return forward_stages(std::move(x)).windowed;
 }
 
 Dinov2SelfAttentionImpl::Dinov2SelfAttentionImpl(int hidden, int heads,

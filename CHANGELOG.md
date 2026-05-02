@@ -30,6 +30,73 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.48.0] — 2026-05-02
+
+### Investigated — embeddings 0.006 parity diff origin (#65L slice 5)
+
+Bisected the embeddings stage further. Sub-stage harness now
+captures `emb_step1_patch / step2_with_cls / step3_pos_embed /
+step4_with_pos / embeddings_out` and reports per-stage diff:
+
+```
+[probe] position_embeddings  shape=[1,1370,384]  loaded_max_abs_diff=0
+[stage] emb_step1_patch      shape=[1,1600,384]  max_abs_diff=0
+[stage] emb_step2_with_cls   shape=[1,1601,384]  max_abs_diff=0
+[stage] emb_step3_pos_embed  shape=[1,1601,384]  max_abs_diff=0.0063
+[stage] emb_step4_with_pos   shape=[1,1601,384]  max_abs_diff=0.0063
+[stage] embeddings_out       shape=[16,101,384]  max_abs_diff=0.0063
+```
+
+The diff originates **inside libtorch's bicubic interpolation
+kernel**. Verified:
+
+- `position_embeddings` parameter loads with 0 diff (bit-equal to
+  upstream `.pth`).
+- Patch projection + cls concat are 0 diff.
+- Tested `size=` vs `scale_factor=` API path: identical 0.0063.
+- Tested fp64-cast round-trip (cast input to double, interpolate,
+  cast back): identical 0.0063.
+- Tested `recompute_scale_factor=false` explicitly: identical 0.0063.
+
+**Conclusion**: the libtorch C++ bicubic kernel diverges from
+PyTorch Python's bicubic kernel for non-integer scale factors
+(e.g. 40/37) at fp32 precision. The two PyTorch builds (the
+Python wheel from pip and the libtorch tarball under
+`third_party/`) likely have different vectorization or kernel
+specialization for `interpolate`.
+
+This 0.0063 is the parity **FLOOR** for variable-size inference
+(it compounds via residual amplification to ~1.6 at the 12th
+transformer block). Closing it requires either:
+
+1. Pre-computing the interpolated position embedding offline in
+   Python and shipping it as an extra buffer (one buffer per
+   distinct input resolution).
+2. Using fixed-resolution inference at exactly `pretrain_grid ·
+   patch_size` (518 for base/large at patch=14, 384/512/576 for
+   smaller variants at patch=16) — skips interpolation entirely.
+3. Replacing the `interpolate` call with a bit-exact custom
+   bicubic implementation in our codebase.
+
+The interpolate call is now annotated with the finding so the
+next iteration knows the limitation. The 0.0063 floor + per-layer
+1.5× growth ≈ 1.6 final diff is in the right order of magnitude
+for accumulated transformer-stack residual round-off — closing
+the embeddings diff to zero would predict a corresponding ~1.5×
+^12 reduction in the final-stage diff, dropping it well below
+the detection-decision threshold.
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 5 done (root-cause-ed). Slice 6 will pick the
+  cheapest of the three fix options (likely #1: precompute) and
+  measure final-output diff dropping below 1e-3 across all 12
+  transformer blocks.
+
+---
+
 ## [0.47.0] — 2026-05-02
 
 ### Added — `Dinov2Encoder::forward_all_blocks` + parity bisection (#65L slice 4)

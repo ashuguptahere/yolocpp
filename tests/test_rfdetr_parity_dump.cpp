@@ -23,6 +23,7 @@
 #include "yolocpp/models/rfdetr.hpp"
 #include "yolocpp/models/rfdetr_backbone.hpp"
 #include "yolocpp/models/rfdetr_projector.hpp"
+#include "yolocpp/serialization/pt_loader.hpp"
 #include "yolocpp/serialization/rfdetr_weights.hpp"
 
 namespace fs = std::filesystem;
@@ -92,18 +93,45 @@ int main() {
   auto& wrapper = *bs.encoder.ptr();          // Dinov2Wrapper
   auto& dmodel  = *wrapper.encoder.ptr();     // Dinov2Model
 
-  auto emb_cpp = dmodel.embeddings->forward(inp);
-  std::cout << "[stage] embeddings_out  C++ "
-            << emb_cpp.sizes() << " sum=" << emb_cpp.sum().item<float>()
-            << " abs.max=" << emb_cpp.abs().max().item<float>() << "\n";
-  auto emb_py = load_dump(d, "embeddings_out");
-  if (emb_py.defined()) {
-    float diff = max_abs_diff(emb_cpp.to(torch::kFloat).contiguous(),
-                                emb_py.to(torch::kFloat).contiguous());
-    std::cout << "[stage] embeddings_out  Py "
-              << emb_py.sizes() << " sum=" << emb_py.sum().item<float>()
-              << "  →  max_abs_diff=" << diff << "\n";
+  // Sanity: verify position_embeddings parameter (the source of the
+  // 0.0063 diff) is bit-equal to what `load_flat_state_dict` sees.
+  {
+    auto sd = yolocpp::serialization::load_flat_state_dict(
+        wpath.string(), "model");
+    for (auto& [k, t] : sd.entries) {
+      if (k == "backbone.0.encoder.encoder.embeddings.position_embeddings") {
+        float diff = max_abs_diff(
+            dmodel.embeddings->position_embeddings.to(torch::kFloat).contiguous(),
+            t.to(torch::kFloat).contiguous());
+        std::cout << "[probe] position_embeddings  shape="
+                  << dmodel.embeddings->position_embeddings.sizes()
+                  << "  loaded_max_abs_diff=" << diff << "\n";
+        break;
+      }
+    }
   }
+
+  // Embeddings sub-stage bisection.
+  auto stages = dmodel.embeddings->forward_stages(inp);
+  auto report_stage = [&](const std::string& name, const torch::Tensor& cpp_t) {
+    auto py_t = load_dump(d, name);
+    if (!py_t.defined()) {
+      std::cout << "[stage] " << name << "  C++ shape=" << cpp_t.sizes()
+                << "  (no Py dump)\n";
+      return;
+    }
+    float diff = max_abs_diff(cpp_t.to(torch::kFloat).contiguous(),
+                                py_t.to(torch::kFloat).contiguous());
+    std::cout << "[stage] " << std::left << name
+              << "  shape=" << cpp_t.sizes()
+              << "  max_abs_diff=" << diff << "\n";
+  };
+  report_stage("emb_step1_patch",     stages.patch);
+  report_stage("emb_step2_with_cls",  stages.with_cls);
+  report_stage("emb_step3_pos_embed", stages.pos_embed);
+  report_stage("emb_step4_with_pos",  stages.with_pos);
+  report_stage("embeddings_out",      stages.windowed);
+  auto emb_cpp = stages.windowed;
 
   auto blocks = dmodel.encoder->forward_all_blocks(emb_cpp);
   for (size_t i = 0; i < blocks.size(); ++i) {
