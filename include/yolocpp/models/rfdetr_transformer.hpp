@@ -58,8 +58,10 @@ namespace yolocpp::models::rfdetr {
 class FusedMHAImpl : public torch::nn::Module {
  public:
   FusedMHAImpl(int hidden, int num_heads);
-  // Vanilla scaled-dot-product attention. Q=K=V (self-attn).
-  torch::Tensor forward(torch::Tensor x);
+  // Scaled-dot-product attention with fused QKV projection.
+  // `value_x` defaults to `x` (vanilla self-attn). Upstream RF-DETR
+  // uses q=k=tgt+query_pos, v=tgt — so callers pass v=tgt.
+  torch::Tensor forward(torch::Tensor x, torch::Tensor value_x = {});
   torch::Tensor      in_proj_weight;   // [3·hidden, hidden]
   torch::Tensor      in_proj_bias;     // [3·hidden]
   torch::nn::Linear  out_proj{nullptr};

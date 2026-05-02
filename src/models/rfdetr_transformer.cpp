@@ -22,20 +22,29 @@ FusedMHAImpl::FusedMHAImpl(int hidden, int num_heads)
   out_proj = register_module("out_proj", torch::nn::Linear(hidden, hidden));
 }
 
-torch::Tensor FusedMHAImpl::forward(torch::Tensor x) {
-  // Vanilla self-attn from fused projection. Used at inference;
-  // training kernel parity not required (LossTraits doesn't gate
-  // on this op).
+torch::Tensor FusedMHAImpl::forward(torch::Tensor x, torch::Tensor value_x) {
+  // Build Q/K from x (typically tgt+query_pos) and V from value_x
+  // (typically tgt). This is the upstream pattern used in
+  // `TransformerDecoderLayer.forward_post`. When `value_x` is
+  // unset, fall back to v=x (vanilla self-attn).
   auto B = x.size(0), N = x.size(1);
-  auto qkv = torch::matmul(x, in_proj_weight.t()) + in_proj_bias;
-  auto chunks = qkv.chunk(3, /*dim=*/-1);
+  // Slice the fused weight: in_proj_weight is [3·C, C] with rows
+  // [Q rows; K rows; V rows].
+  auto Wq = in_proj_weight.slice(0, 0,            hidden_);
+  auto Wk = in_proj_weight.slice(0, hidden_,      2 * hidden_);
+  auto Wv = in_proj_weight.slice(0, 2 * hidden_,  3 * hidden_);
+  auto bq = in_proj_bias.slice(0, 0, hidden_);
+  auto bk = in_proj_bias.slice(0, hidden_, 2 * hidden_);
+  auto bv = in_proj_bias.slice(0, 2 * hidden_, 3 * hidden_);
+  auto v_in = value_x.defined() ? value_x : x;
+  auto Q = torch::matmul(x,    Wq.t()) + bq;
+  auto K = torch::matmul(x,    Wk.t()) + bk;
+  auto V = torch::matmul(v_in, Wv.t()) + bv;
   int hd = hidden_ / num_heads_;
   auto reshape_h = [&](torch::Tensor t) {
     return t.view({B, N, num_heads_, hd}).transpose(1, 2);
   };
-  auto Q = reshape_h(chunks[0]);
-  auto K = reshape_h(chunks[1]);
-  auto V = reshape_h(chunks[2]);
+  Q = reshape_h(Q); K = reshape_h(K); V = reshape_h(V);
   auto scale = 1.0 / std::sqrt(static_cast<double>(hd));
   auto attn  = torch::softmax(torch::matmul(Q, K.transpose(-2, -1)) * scale, -1);
   auto out   = torch::matmul(attn, V).transpose(1, 2).contiguous()
@@ -167,10 +176,9 @@ torch::Tensor RFDetrDecoderLayerImpl::forward(torch::Tensor tgt,
                                                 torch::Tensor reference_points,
                                                 torch::Tensor memory,
                                                 int H, int W) {
-  // Post-LN style. Self-attn uses (tgt + query_pos) for q+k+v in our
-  // simplified FusedMHA variant — minor deviation from upstream
-  // (which uses v=tgt) but produces the same shape contract.
-  auto sa_out = self_attn->forward(tgt + query_pos);
+  // Post-LN style matching upstream's `forward_post`:
+  //   q = k = tgt + query_pos; v = tgt  (NOT tgt+pos for v)
+  auto sa_out = self_attn->forward(/*x=*/tgt + query_pos, /*value_x=*/tgt);
   tgt = norm1->forward(tgt + sa_out);
   // Cross-attn: query gets pos embed; memory is the projector output.
   auto ca_out = cross_attn->forward(tgt + query_pos, reference_points,
@@ -359,7 +367,11 @@ torch::Tensor gen_sineembed_for_position(const torch::Tensor& pos_tensor,
 
 EncoderProposals gen_encoder_output_proposals_1l(const torch::Tensor& memory,
                                                   int H, int W) {
-  // Single-level proposals: cx,cy on grid, wh = 0.05 (fixed prior).
+  // Single-level proposals (RF-DETR uses one P4 level so lvl=0):
+  //   cx,cy on grid in (0,1); wh = 0.05 * 2^lvl = 0.05.
+  // Validity mask: a token's proposal is "valid" iff every coord
+  // is in (0.01, 0.99). Invalid tokens get their memory zeroed
+  // (matching upstream `output_memory.masked_fill(~valid, 0)`).
   auto opts = memory.options();
   auto y    = torch::arange(H, opts);
   auto x    = torch::arange(W, opts);
@@ -372,7 +384,13 @@ EncoderProposals gen_encoder_output_proposals_1l(const torch::Tensor& memory,
   auto props     = props_2d.view({1, H * W, 4})
                       .expand({memory.size(0), -1, -1})
                       .contiguous();
-  return {memory, props};
+  // Validity mask matching upstream.
+  auto valid = ((props > 0.01).logical_and_(props < 0.99))
+                  .all(/*dim=*/-1, /*keepdim=*/true);
+  auto out_memory = memory.masked_fill(~valid, 0.0);
+  // For bbox_reparam the proposals stay raw (not unsigmoided).
+  auto out_proposals = props.masked_fill(~valid, 0.0);
+  return {out_memory, out_proposals};
 }
 
 }  // namespace yolocpp::models::rfdetr

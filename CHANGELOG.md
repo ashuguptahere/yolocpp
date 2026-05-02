@@ -30,6 +30,54 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.45.0] — 2026-05-02
+
+### Fixed — RF-DETR parity diffs slice 2 (#65L slice 2)
+
+Three targeted parity-diff fixes from comparing the C++ forward
+against the upstream Python reference:
+
+1. **Decoder self-attention `v = tgt` (NOT `tgt + query_pos`).**
+   Upstream's `TransformerDecoderLayer.forward_post` computes
+   `q = k = tgt + query_pos`, but `v = tgt` (positional embed only
+   biases attention scores, not values). `FusedMHA::forward` now
+   takes a separate `value_x` argument; `RFDetrDecoderLayer`
+   passes `value_x = tgt`. The fused `in_proj_weight` is sliced
+   into per-head Q/K/V rows so each projection runs on its
+   correct input.
+
+2. **Two-stage encoder-output validity mask.** Per upstream's
+   `gen_encoder_output_proposals`, tokens whose proposal isn't in
+   `(0.01, 0.99)` get their memory zeroed and proposal masked
+   (we previously skipped this step). Without the mask the top-K
+   selection would pick edge tokens with degenerate boxes.
+
+3. **`*.pth` blanket-ignored** so the Python parity dumper's
+   `RFDETRBase()` ctor (which downloads `rf-detr-base-2026.pth` /
+   `rf-detr-large-2026.pth` into the project root) doesn't pollute
+   commits.
+
+### Status
+
+The architecture matches upstream end-to-end. Forward through the
+full pipeline still produces 0 detections at conf=0.05 — remaining
+parity gaps are subtle (likely a few off-by-one details in the
+windowed attention reshape order, or in the precise masking of
+the decoder's cross-attn tokens). Bit-exact parity is genuinely
+multi-session work; this commit's fixes shrink the diff but don't
+close it.
+
+ctest 41/42 (only pre-existing #64). All 5 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 2 done (decoder self-attn v=tgt + validity
+  mask). Slice 3 will instrument the C++ forward to dump
+  intermediate activations matching the Python dumper, then
+  bisect to find the first divergent stage.
+
+---
+
 ## [0.44.0] — 2026-05-02
 
 ### Added — DINOv2 windowed self-attention (#65L parity slice 1)
