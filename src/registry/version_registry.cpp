@@ -975,14 +975,31 @@ VersionAdapter make_rfdetr() {
     auto bgr = cv::imread(src);
     if (bgr.empty())
         throw std::runtime_error("predict_to_file: cannot read source: " + src);
-    // Force per-variant resolution: RF-DETR's windowed-attention
-    // embeddings hardcode `num_windows × patch_size` divisibility.
-    // The CLI's default imgsz (640) doesn't satisfy this for
-    // base (patch=14, num_windows=4 → 56 stride; 640 gives 45×45
-    // patches, not divisible by 4). Ignore passed imgsz and use
-    // the variant's pretrained resolution.
-    (void)imgsz;
-    int side = models::rfdetr_default_imgsz(rfscale);
+    // RF-DETR per-variant resolution. Each of the 12 variants has
+    // its own pretrained input size baked into `RFDetrScale.resolution`
+    // (n=384, s=512, m=576, b=560, l=704, seg-n=368, seg-s=512,
+    // seg-m=576, seg-l=672, seg-xl=624, seg-xxl=768, seg-prv=432).
+    // The windowed-attention embeddings layer requires the input
+    // dims to be divisible by `patch_size × num_windows`. If the
+    // caller supplies `--imgsz N`, honour it iff it satisfies that
+    // constraint; otherwise fall back to the variant default.
+    int default_side = models::rfdetr_default_imgsz(rfscale);
+    int side = default_side;
+    if (imgsz > 0 && imgsz != default_side) {
+      auto& bcfg = yolocpp::models::rfdetr::dinov2_cfg_for(
+          rfscale.upstream_id, rfscale.patch_size, rfscale.pretrain_grid,
+          rfscale.backbone_embed);
+      int stride = bcfg.patch_size * std::max(1, bcfg.num_windows);
+      if (imgsz % stride == 0) {
+        side = imgsz;
+      } else {
+        std::cerr << "[warn] rfdetr-" << rfscale.upstream_id
+                  << ": --imgsz=" << imgsz
+                  << " not divisible by patch×num_windows=" << stride
+                  << "; falling back to variant default "
+                  << default_side << "\n";
+      }
+    }
     auto dets = inference::rfdetr_predict_image(
         m, bgr, side, dev, nm.conf_thresh, /*max_det=*/300);
 

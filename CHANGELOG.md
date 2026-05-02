@@ -30,6 +30,55 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.61.0] — 2026-05-02
+
+### Changed — RF-DETR honours per-variant `--imgsz` with validation
+
+`predict_to_file` for RF-DETR now uses each variant's pretrained
+resolution from `RFDetrScale.resolution` as the default, but
+honours `--imgsz N` when supplied AND divisible by
+`patch_size × num_windows` for that variant. On invalid values it
+warns and falls back to the variant default.
+
+```
+nano   default: 384  stride=32 (patch=16 × windows=2)
+small  default: 512  stride=32
+medium default: 576  stride=32
+base   default: 560  stride=56 (patch=14 × windows=4)
+large  default: 704  stride=28 (patch=14 × windows=2)
+seg-n  default: 368  stride=28
+seg-s  default: 512  stride=32
+seg-m  default: 576  stride=32
+seg-l  default: 672  stride=32
+seg-xl default: 624  stride=24
+seg-xxl default: 768 stride=24
+seg-prv default: 432 stride=24
+```
+
+User-visible behaviour:
+
+```
+$ yolocpp --mode predict -m rf-detr-nano.pth -s data/bus.jpg --imgsz 448
+[predict] (rfdetr) 6 detections           # 448÷32=14, valid → uses 448
+
+$ yolocpp --mode predict -m rf-detr-nano.pth -s data/bus.jpg --imgsz 500
+[warn] rfdetr-nano: --imgsz=500 not divisible by patch×num_windows=32;
+       falling back to variant default 384
+[predict] (rfdetr) 4 detections           # falls back to 384
+```
+
+### Changed — `--imgsz` help mentions space-separated form
+
+The CLI11 parser already accepts both `--imgsz=640` and
+`--imgsz 640`; the help string now spells out the space-
+separated form so users discover it without trial-and-error.
+
+ctest 42/42 (only pre-existing #64). All 7 rfdetr tests pass.
+detect-base: 6 dets at conf=0.5, 5 dets at conf=0.7 (matches
+bus.jpg's 5 objects).
+
+---
+
 ## [0.60.0] — 2026-05-02
 
 ### 🎯 Fixed — RF-DETR predictions work end-to-end (#65L slice 17)
