@@ -186,7 +186,8 @@ int cmd_info() {
 // the path. Mirrors runs/predict and runs/export so val artifacts have
 // the same `runs/<mode>` home as everything else.
 void write_val_results(const std::string& weights, const std::string& data,
-                       int imgsz, double map_50, double map_50_95) {
+                       int imgsz, double map_50, double map_50_95,
+                       const yolocpp::registry::VersionAdapter::ValResult* sml = nullptr) {
   std::filesystem::create_directories("runs/val");
   auto stem = std::filesystem::path(weights).stem().string();
   if (stem.empty()) stem = "out";
@@ -197,6 +198,14 @@ void write_val_results(const std::string& weights, const std::string& data,
     << "imgsz="   << imgsz   << "\n"
     << "mAP@0.5      = " << map_50    << "\n"
     << "mAP@0.5:0.95 = " << map_50_95 << "\n";
+  if (sml) {
+    f << "mAP@0.5:0.95 (small,  n_gt=" << sml->n_gt_small  << ") = "
+      << sml->map_50_95_small  << "\n"
+      << "mAP@0.5:0.95 (medium, n_gt=" << sml->n_gt_medium << ") = "
+      << sml->map_50_95_medium << "\n"
+      << "mAP@0.5:0.95 (large,  n_gt=" << sml->n_gt_large  << ") = "
+      << sml->map_50_95_large  << "\n";
+  }
   std::cout << "[val] wrote " << out_path << "\n";
 }
 
@@ -270,8 +279,14 @@ int cmd_val(const std::string& weights, const std::string& root,
       adapter && adapter->run_val) {
     auto r = adapter->run_val(weights, scale_s, nc, ds, torch_dev);
     std::cout << "mAP@0.5      = " << r.map_50    << "\n"
-              << "mAP@0.5:0.95 = " << r.map_50_95 << "\n";
-    write_val_results(weights, root, imgsz, r.map_50, r.map_50_95);
+              << "mAP@0.5:0.95 = " << r.map_50_95 << "\n"
+              << "  small  (n_gt=" << r.n_gt_small  << "): "
+              << r.map_50_95_small  << "\n"
+              << "  medium (n_gt=" << r.n_gt_medium << "): "
+              << r.map_50_95_medium << "\n"
+              << "  large  (n_gt=" << r.n_gt_large  << "): "
+              << r.map_50_95_large  << "\n";
+    write_val_results(weights, root, imgsz, r.map_50, r.map_50_95, &r);
     return 0;
   }
 

@@ -126,6 +126,53 @@ mAPResult compute_map(const std::vector<DetectionRow>& dets,
     r.map_50    = sum50    / n_active;
     r.map_50_95 = sum5095 / n_active;
   }
+
+  // ─── Size-stratified mAP (#54C). ──────────────────────────────────────
+  // COCO buckets by GT box area:
+  //   small  ≤ 32² = 1024 px²
+  //   medium ≤ 96² = 9216 px²
+  //   large  > 9216 px²
+  auto gt_area = [](const GroundTruthRow& g) {
+    float w = std::max(0.f, g.x2 - g.x1);
+    float h = std::max(0.f, g.y2 - g.y1);
+    return w * h;
+  };
+  auto in_bucket = [&](float area, char which) {
+    switch (which) {
+      case 's': return area > 0 && area <= 1024.f;
+      case 'm': return area > 1024.f && area <= 9216.f;
+      case 'l': return area > 9216.f;
+    }
+    return false;
+  };
+  auto map5095_for_bucket = [&](char bucket) {
+    int n_gt = 0;
+    double sum = 0.0;
+    int n_act = 0;
+    for (int c = 0; c < nc; ++c) {
+      // Filter GTs of this class to the bucket.
+      std::vector<GroundTruthRow> gs;
+      for (const auto& g : gc[c]) {
+        if (in_bucket(gt_area(g), bucket)) gs.push_back(g);
+      }
+      if (gs.empty()) continue;
+      n_gt += (int)gs.size();
+      double mean = 0.0;
+      // All same-class detections are passed in; ones that don't
+      // match an in-bucket GT become FPs (correct COCO semantics).
+      for (double t : ious) mean += compute_ap_class(dc[c], gs, t);
+      mean /= (double)ious.size();
+      sum += mean;
+      ++n_act;
+    }
+    return std::pair<double, int>{n_act > 0 ? sum / n_act : 0.0, n_gt};
+  };
+  auto [m_s, n_s] = map5095_for_bucket('s');
+  auto [m_m, n_m] = map5095_for_bucket('m');
+  auto [m_l, n_l] = map5095_for_bucket('l');
+  r.map_50_95_small  = m_s; r.n_gt_small  = n_s;
+  r.map_50_95_medium = m_m; r.n_gt_medium = n_m;
+  r.map_50_95_large  = m_l; r.n_gt_large  = n_l;
   return r;
 }
 

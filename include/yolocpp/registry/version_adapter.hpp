@@ -120,10 +120,20 @@ struct VersionAdapter {
       predict_to_file;
 
   // Validation: construct the right holder, load_state_dict, run
-  // `engine::validate<M>(model, ds, device)`. Returns (mAP@0.5,
-  // mAP@0.5:0.95). Versions that fall back to the unified
-  // `inference::Predictor` (currently v8) leave this empty.
-  struct ValResult { double map_50; double map_50_95; };
+  // `engine::validate<M>(model, ds, device)`. Returns the full
+  // mAP grid plus the S/M/L size-stratified breakdown (#54C).
+  // Versions that fall back to the unified `inference::Predictor`
+  // (currently v8) leave this empty.
+  struct ValResult {
+    double map_50          = 0.0;
+    double map_50_95       = 0.0;
+    double map_50_95_small = 0.0;
+    double map_50_95_medium= 0.0;
+    double map_50_95_large = 0.0;
+    int    n_gt_small  = 0;
+    int    n_gt_medium = 0;
+    int    n_gt_large  = 0;
+  };
   std::function<ValResult(const std::string& weights,
                           const std::string& scale,
                           int nc,

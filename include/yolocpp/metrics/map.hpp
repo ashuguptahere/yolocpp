@@ -30,6 +30,23 @@ struct mAPResult {
   double map_50_95 = 0.0;    // mean over IoU thresholds {0.50, 0.55, ..., 0.95}
   std::vector<double> ap_per_class_50;     // size = nc
   std::vector<double> ap_per_class_50_95;  // size = nc
+
+  // Size-stratified mAP@0.5:0.95 (#54C). COCO area buckets:
+  //   small  : area ≤ 32² = 1024 px²
+  //   medium : 1024 < area ≤ 96² = 9216 px²
+  //   large  : area > 9216 px²
+  // Each is the mean over the same {0.50, 0.55, ..., 0.95} IoU
+  // grid, computed against only the GTs whose box area falls in the
+  // bucket. Detections that don't match any in-bucket GT count as
+  // false positives (standard COCO behaviour). Set to 0 if no GT
+  // in the bucket — check `n_gt_*` to disambiguate "no GTs" from
+  // "true 0 mAP".
+  double map_50_95_small  = 0.0;
+  double map_50_95_medium = 0.0;
+  double map_50_95_large  = 0.0;
+  int    n_gt_small  = 0;
+  int    n_gt_medium = 0;
+  int    n_gt_large  = 0;
 };
 
 // Compute mAP for the given detections and ground-truths.
