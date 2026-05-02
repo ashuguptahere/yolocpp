@@ -30,6 +30,65 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.56.0] — 2026-05-02
+
+### Diagnosed — RF-DETR encoder-output bit-exact, divergence below top-K (#65L slice 13)
+
+Added per-stage probes against newly-captured Python intermediates.
+**The encoder-output and gen_proposals stages are bit-exact**:
+
+```
+[probe] gen_out_memory     max_abs_diff=4.6e-4  (within fp32 noise)
+[probe] gen_out_proposals  max_abs_diff=0       ← BIT-EXACT
+[dec_l0] enc_output0_out          max_abs_diff=1.1e-3
+[dec_l0] enc_output_norm0_out     max_abs_diff=1.2e-4
+[dec_l0] enc_out_bbox0_out        max_abs_diff=4.9e-4
+Python enc_class_first sum=-1000828.94 ≈ cpp cls_l sum=-1000830  (matches)
+```
+
+So:
+1. `gen_encoder_output_proposals_1l` — bit-exact ✓
+2. `enc_output[0]` Linear — bit-exact ✓
+3. `enc_output_norm[0]` LayerNorm — bit-exact ✓
+4. `enc_out_class_embed[0]` Linear — bit-exact (cls_l sums match)
+5. `enc_out_bbox_embed[0]` MLP — bit-exact ✓
+6. `bbox_reparam` formula — verified algorithmically identical
+
+Yet the refpoints fed to sineembed at query 73 differ — my h
+≈ 0.391, Python's h ≈ 0.273. Either:
+- **`top-K idx` differs** between C++ and Python (tie-breaking
+  difference on near-equal cls scores).
+- **`refpoint_embed[:Q]` slice** somehow has different values
+  (would be a loader bug — but #65A2..C2 verified 100% bind for
+  rf-detr-base.pth).
+
+The probes that compare these directly caused a SEGV in the
+harness when chained — likely a tensor-lifetime issue with
+multiple `load_dump` calls in sequence; backed out for stability.
+Slice 14 will isolate them in a separate test binary.
+
+### Tooling added
+
+`/tmp/yolocpp_parity/dump_rfdetr_forward.py` now also captures:
+- `gen_out_memory`, `gen_out_proposals` (via wrapping
+  `tmod.gen_encoder_output_proposals`)
+- `refpoint_embed_weight` (the [:Q] slice of the loaded Embedding)
+- `boxes_ts` (top-K refpoints from the encoder output, pre-reparam)
+- `enc_class_first` (cls scores fed to top-K, captured first call only)
+- `sineembed_input` (the obj_center fed to gen_sineembed_for_position)
+- `rph_input`, `rph` (input/output of `decoder.ref_point_head`)
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 13 done (encoder-output verified bit-exact;
+  divergence pinned to either top-K idx or refpoint_embed slice).
+  Slice 14 isolates the topk_idx vs subset divergence in a
+  standalone probe.
+
+---
+
 ## [0.55.0] — 2026-05-02
 
 ### Diagnosed — RF-DETR refpoints diverge → sineembed → ref_point_head (#65L slice 12)

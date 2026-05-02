@@ -251,6 +251,21 @@ int main() {
       // Reproduce two-stage init:
       auto props = yolocpp::models::rfdetr::gen_encoder_output_proposals_1l(
           memory, memory_2d.size(2), memory_2d.size(3));
+      // Compare gen_encoder_output_proposals output vs Python.
+      {
+        auto py_om = load_dump(d, "gen_out_memory");
+        auto py_op = load_dump(d, "gen_out_proposals");
+        if (py_om.defined() && py_om.sizes() == props.output_memory.sizes()) {
+          std::cout << "[probe] gen_out_memory  max_abs_diff="
+                    << max_abs_diff(props.output_memory, py_om) << "\n";
+        }
+        if (py_op.defined() && py_op.sizes() == props.output_proposals.sizes()) {
+          std::cout << "[probe] gen_out_proposals  max_abs_diff="
+                    << max_abs_diff(props.output_proposals, py_op)
+                    << "  cpp_sum=" << props.output_proposals.sum().item<float>()
+                    << "  py_sum=" << py_op.sum().item<float>() << "\n";
+        }
+      }
       auto out_mem = trans.enc_output_norm[0]->as<torch::nn::LayerNormImpl>()
                        ->forward(trans.enc_output[0]->as<torch::nn::LinearImpl>()
                                        ->forward(props.output_memory));
