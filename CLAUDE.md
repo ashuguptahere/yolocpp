@@ -418,10 +418,30 @@ utility), `cli/` (CLI11 + kv-style entry).
 
 ## CLI surface
 
-`yolocpp {train,val,predict,export,benchmark,info}` — all implemented.
-Both kv-style (`yolocpp task=detect mode=predict model=...`) and CLI11
-(`yolocpp predict --weights ...`) parsers are supported. Entry point
-is `src/cli/main.cpp`.
+Three parsers, three audiences, one set of `cmd_*` bodies:
+
+1. **Flat flag-style (canonical, #51J).**
+   `yolocpp --mode <train|predict|val|export|benchmark|info|download>`
+   followed by top-level flags (`-m/--model`, `-s/--source`, `-d/--data`,
+   `-D/--device`, `-i/--imgsz`, `-e/--epochs`, `-b/--batch`, `--seed`,
+   `-p/--precision`, `--export-after-train`, …). All options sit at
+   the top level; `--mode` selects the action; per-mode required-flag
+   validation lives in `cmd_dispatch_flag_style`.
+
+2. **kv-style (`task=detect mode=predict model=...`).**
+   Drop-in for upstream Python tooling — lets users port pipelines
+   verbatim without rewriting CLI args. Routed through
+   `yolocpp::cli::Args::parse` + `dispatch_kv`.
+
+3. **Legacy subcommand-style (`yolocpp predict -m ... -s ...`).**
+   Deprecated; emits a one-line warning and still routes to the same
+   `cmd_*` bodies. Will be removed under #51B2 once a release window
+   has passed.
+
+Routing precedence in `main()`: kv-style → flag-style → legacy
+subcommand-style → top-level help. Entry point is `src/cli/main.cpp`;
+the per-version dispatch within each mode goes through the registry
+(see #46).
 
 ## Editing third_party/
 
