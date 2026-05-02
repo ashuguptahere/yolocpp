@@ -216,6 +216,54 @@ for w in yolo3.pt yolo4.pt yolo5nu.pt yolo6n.pt yolo7-tiny.pt yolo8n.pt \
   run_one "$ver" "n" "detect" "benchmark" "$weights"
 done
 
+# ─── Phase 7: TRT round-trip per version (#53B). ─────────────────────────
+# For every version that has a cached `.pt`, build a `.trt` engine
+# (FP16) via `--mode export` and then run `--mode predict` against the
+# resulting engine. Catches any `.pt` → `.onnx` → `.trt` regression
+# the per-version export emitter, the TensorRT parser, or the runtime
+# might introduce. Smoke-only — strict numerical parity is the job of
+# `tests/test_cross_backend_parity.cpp` (#53A).
+echo "[sweep] phase 7: TRT export+predict round-trip — every version"
+TRT_OUT="$OUT/trt_round_trip"
+mkdir -p "$TRT_OUT"
+for w in yolo3.pt yolo4.pt yolo5nu.pt yolo6n.pt yolo7-tiny.pt yolo8n.pt \
+         yolo9t.pt yolo10.pt yolo11n.pt yolo12n.pt yolo13n.pt yolo26n.pt; do
+  ver=$(echo "$w" | grep -oE 'yolo[0-9]+' | sed 's/yolo/v/')
+  weights="$(resolve_weight "$w")"; [ -z "$weights" ] && weights="$WEIGHTS/$w"
+  if [ ! -f "$weights" ]; then
+    echo -e "$ver\tn\tdetect\ttrt-roundtrip\tSKIP\tweights_missing" >> "$RESULTS"
+    SKIP=$((SKIP+1))
+    continue
+  fi
+  trt_out="$TRT_OUT/${ver}.trt"
+  pred_jpg="$TRT_OUT/${ver}_trt_pred.jpg"
+  # 1. Export to .trt (FP16). We pass --scale n (with the v10
+  # exception baked into run_one's extra_flags style) to keep imgsz
+  # and channel widths consistent with the cached weights.
+  extra=""
+  case "$ver" in v10) extra="--scale n" ;; esac
+  cmd="$CLI --mode export --task detect --model $weights --format trt --out $trt_out $extra"
+  echo "==== $ver/n/detect/trt-roundtrip-export ====" >> "$LOG"
+  echo "$cmd" >> "$LOG"
+  if ! timeout 300 bash -c "$cmd" >>"$LOG" 2>&1; then
+    echo -e "$ver\tn\tdetect\ttrt-roundtrip\tFAIL\texport_failed" >> "$RESULTS"
+    FAIL=$((FAIL+1))
+    continue
+  fi
+  # 2. Predict against the engine. detect-task TRT routes through
+  # `inference::TrtPredictor` regardless of source version.
+  cmd="$CLI --mode predict --task detect --model $trt_out --source $SOURCE --out $pred_jpg"
+  echo "==== $ver/n/detect/trt-roundtrip-predict ====" >> "$LOG"
+  echo "$cmd" >> "$LOG"
+  if timeout 60 bash -c "$cmd" >>"$LOG" 2>&1; then
+    echo -e "$ver\tn\tdetect\ttrt-roundtrip\tPASS\t" >> "$RESULTS"
+    PASS=$((PASS+1))
+  else
+    echo -e "$ver\tn\tdetect\ttrt-roundtrip\tFAIL\tpredict_failed" >> "$RESULTS"
+    FAIL=$((FAIL+1))
+  fi
+done
+
 echo
 echo "================================================================"
 echo "  PASS=$PASS  FAIL=$FAIL  SKIP=$SKIP   ($(wc -l < "$RESULTS") rows)"
