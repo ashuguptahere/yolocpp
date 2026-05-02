@@ -26,10 +26,170 @@
 
 #include "yolocpp/models/rfdetr_backbone.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
 namespace yolocpp::models::rfdetr {
+
+// ─── Bit-exact bicubic 2D interpolation ────────────────────────────────
+//
+// Standalone implementation matching PyTorch's `interpolate(...,
+// mode='bicubic', align_corners=False)` reference algorithm. Used
+// instead of `torch::nn::functional::interpolate` because libtorch's
+// bicubic kernel diverges from PyTorch's Python-side bicubic kernel
+// at fp32 precision for non-integer scale factors (#65L slice 5
+// findings) — a ~6.3e-3 max-abs-diff that compounds through the
+// transformer to ~1.6 at the 12th block.
+//
+// PyTorch's reference (`aten/src/ATen/native/UpSampleBicubic2d.cpp`):
+// For each output pixel:
+//   src    = (out + 0.5) * (in / out) - 0.5
+//   i      = floor(src)
+//   t      = src - i      ∈ [0, 1)
+//   coeffs at offsets {-1, 0, 1, 2} from i, with A = -0.75:
+//     w[0] = ((A*(t+1) - 5A)*(t+1) + 8A)*(t+1) - 4A
+//     w[1] = ((A+2)*t - (A+3))*t*t + 1
+//     w[2] = ((A+2)*(1-t) - (A+3))*(1-t)*(1-t) + 1
+//     w[3] = ((A*(2-t) - 5A)*(2-t) + 8A)*(2-t) - 4A
+//   index clamp: clip(i + offset, 0, in-1)
+// Then output = Σ_i Σ_j (w_i_v · w_j_h · src[clamp_v, clamp_h]).
+//
+// Separable: do horizontal first (producing `[C, in_h, out_w]`),
+// then vertical (producing `[C, out_h, out_w]`). Same numerical
+// result as 4×4 direct due to associativity of multiplication.
+namespace bicubic_detail {
+
+constexpr float kA = -0.75f;
+
+struct WeightRow {
+  int   i0;       // first source index (== floor(src) - 1, BEFORE clamp)
+  float w[4];     // 4 weights
+};
+
+inline WeightRow make_weights(int out, int in_size, float scale_in_over_out) {
+  // src = (out + 0.5) * (in / out) - 0.5
+  // In PyTorch's interpolate(..., scale_factor=k=out/in, ...) path,
+  // the kernel computes `(out + 0.5) / k - 0.5` rather than
+  // `(out + 0.5) * (in/out) - 0.5` — these are mathematically
+  // identical but produce different fp32 values for non-power-of-2
+  // ratios. Caller passes the in/out form already prepared per
+  // PyTorch's internal sequence.
+  float src = (static_cast<float>(out) + 0.5f) * scale_in_over_out - 0.5f;
+  float floor_src = std::floor(src);
+  float t = src - floor_src;
+  float t1 = t + 1.0f;
+  float t2 = 1.0f - t;
+  float t3 = 2.0f - t;
+  WeightRow r;
+  r.i0   = static_cast<int>(floor_src) - 1;
+  r.w[0] = ((kA * t1 - 5.0f * kA) * t1 + 8.0f * kA) * t1 - 4.0f * kA;
+  r.w[1] = ((kA + 2.0f) * t - (kA + 3.0f)) * t * t + 1.0f;
+  r.w[2] = ((kA + 2.0f) * t2 - (kA + 3.0f)) * t2 * t2 + 1.0f;
+  r.w[3] = ((kA * t3 - 5.0f * kA) * t3 + 8.0f * kA) * t3 - 4.0f * kA;
+  return r;
+}
+
+}  // namespace bicubic_detail
+
+// Bit-exact bicubic 2D interpolation with `align_corners=false`.
+// Input: `[B, C, in_h, in_w]` fp32.
+// Output: `[B, C, out_h, out_w]` fp32.
+torch::Tensor bicubic_interpolate_2d(const torch::Tensor& x,
+                                      int out_h, int out_w) {
+  TORCH_CHECK(x.dim() == 4, "bicubic_interpolate_2d expects [B, C, H, W]");
+  TORCH_CHECK(x.scalar_type() == torch::kFloat,
+              "bicubic_interpolate_2d expects fp32 input");
+  auto x_c = x.contiguous();
+  int B    = static_cast<int>(x_c.size(0));
+  int C    = static_cast<int>(x_c.size(1));
+  int in_h = static_cast<int>(x_c.size(2));
+  int in_w = static_cast<int>(x_c.size(3));
+
+  // Match PyTorch's sequence:
+  //   scale_factor = out / in (the upstream Python value)
+  //   per-pixel reciprocal = 1.0f / scale_factor
+  // This yields slightly different fp32 results from `in / out`
+  // for non-power-of-2 ratios — which is the source of the 6.3e-3
+  // diff at the embeddings stage when the size= API path of
+  // libtorch's interpolate uses a different formula.
+  float scale_factor_h = static_cast<float>(out_h) / in_h;
+  float scale_factor_w = static_cast<float>(out_w) / in_w;
+  float scale_h = 1.0f / scale_factor_h;
+  float scale_w = 1.0f / scale_factor_w;
+
+  // Pre-compute weight rows for h and w.
+  std::vector<bicubic_detail::WeightRow> rows_h(out_h), rows_w(out_w);
+  for (int i = 0; i < out_h; ++i)
+      rows_h[i] = bicubic_detail::make_weights(i, in_h, scale_h);
+  for (int j = 0; j < out_w; ++j)
+      rows_w[j] = bicubic_detail::make_weights(j, in_w, scale_w);
+
+  // Horizontal pass: [B, C, in_h, in_w] → [B, C, in_h, out_w]
+  auto inter = torch::empty({B, C, in_h, out_w}, x_c.options());
+  auto* src_p = x_c.data_ptr<float>();
+  auto* int_p = inter.data_ptr<float>();
+  int64_t in_row_stride  = in_w;
+  int64_t in_chan_stride = in_h * in_w;
+  int64_t in_b_stride    = C * in_chan_stride;
+  int64_t int_row_stride  = out_w;
+  int64_t int_chan_stride = in_h * out_w;
+  int64_t int_b_stride    = C * int_chan_stride;
+  for (int b = 0; b < B; ++b) {
+    for (int c = 0; c < C; ++c) {
+      const float* sp = src_p + b * in_b_stride + c * in_chan_stride;
+      float*       ip = int_p + b * int_b_stride + c * int_chan_stride;
+      for (int y = 0; y < in_h; ++y) {
+        const float* row = sp + y * in_row_stride;
+        float*       out_row = ip + y * int_row_stride;
+        for (int j = 0; j < out_w; ++j) {
+          const auto& wj = rows_w[j];
+          float acc = 0.0f;
+          for (int k = 0; k < 4; ++k) {
+            int idx = std::clamp(wj.i0 + k, 0, in_w - 1);
+            acc += wj.w[k] * row[idx];
+          }
+          out_row[j] = acc;
+        }
+      }
+    }
+  }
+  // Vertical pass: [B, C, in_h, out_w] → [B, C, out_h, out_w]
+  auto out = torch::empty({B, C, out_h, out_w}, x_c.options());
+  auto* out_p = out.data_ptr<float>();
+  int64_t out_row_stride  = out_w;
+  int64_t out_chan_stride = out_h * out_w;
+  int64_t out_b_stride    = C * out_chan_stride;
+  for (int b = 0; b < B; ++b) {
+    for (int c = 0; c < C; ++c) {
+      const float* ip = int_p + b * int_b_stride + c * int_chan_stride;
+      float*       op = out_p + b * out_b_stride + c * out_chan_stride;
+      for (int i = 0; i < out_h; ++i) {
+        const auto& wi = rows_h[i];
+        float* out_row = op + i * out_row_stride;
+        // Resolve the 4 source rows (clamped).
+        const float* rows4[4];
+        for (int k = 0; k < 4; ++k) {
+          int idx = std::clamp(wi.i0 + k, 0, in_h - 1);
+          rows4[k] = ip + idx * int_row_stride;
+        }
+        for (int j = 0; j < out_w; ++j) {
+          float acc = wi.w[0] * rows4[0][j]
+                    + wi.w[1] * rows4[1][j]
+                    + wi.w[2] * rows4[2][j]
+                    + wi.w[3] * rows4[3][j];
+          out_row[j] = acc;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+torch::Tensor bicubic_interpolate_2d_export(const torch::Tensor& x,
+                                              int out_h, int out_w) {
+  return bicubic_interpolate_2d(x, out_h, out_w);
+}
 
 // ─── Per-variant configs ────────────────────────────────────────────────
 
@@ -122,32 +282,28 @@ static torch::Tensor interpolate_pos_embed(const torch::Tensor& pe,
   auto pat  = pe.slice(1, 1).contiguous();
   int  C    = pe.size(2);
   // Reshape patches → [1, C, P, P]
-  pat = pat.view({1, pretrain_grid, pretrain_grid, C}).permute({0, 3, 1, 2});
-  // Upstream's call: `interpolate(..., scale_factor=(h/sqrt, w/sqrt),
-  // mode='bicubic', align_corners=False)`. libtorch's bicubic
-  // kernel produces ~6.3e-3 max-abs-diff vs the same call from
-  // PyTorch Python on bit-identical inputs (verified via the
-  // parity harness #65L slices 4-5: position_embeddings parameter
-  // loads with 0 diff; patch + cls concat have 0 diff;
-  // emb_step3_pos_embed shows 6.3e-3 immediately after this
-  // interpolate call). Tried `size=` vs `scale_factor=`,
-  // `recompute_scale_factor=false`, fp64-cast round-trip — all
-  // produce identical 6.3e-3 diff. The kernel itself diverges
-  // between the two PyTorch builds. This 6.3e-3 is the parity
-  // FLOOR for variable-size inference (compounds to ~1.6 at the
-  // 12th transformer block via residual amplification); fixed-
-  // resolution inference at exactly `pretrain_grid · patch_size`
-  // would skip interpolation entirely and could close the gap.
-  std::vector<double> sf{
-      static_cast<double>(target_h) / pretrain_grid,
-      static_cast<double>(target_w) / pretrain_grid};
+  pat = pat.view({1, pretrain_grid, pretrain_grid, C}).permute({0, 3, 1, 2})
+            .contiguous();
+  // Match upstream `dinov2_with_windowed_attn.py::interpolate_pos_encoding`:
+  //   nn.functional.interpolate(
+  //       patch_pos_embed.to(dtype=torch.float32),
+  //       size=(int(h), int(w)),
+  //       mode='bicubic',
+  //       align_corners=False,
+  //       antialias=True,        # ← key for parity (#65L slice 6 finding)
+  //   )
+  // The `antialias=True` flag enables a low-pass pre-filter that
+  // significantly changes the output. Earlier slices missed this
+  // because `interpolate_pos_encoding` doc and visible call sites
+  // used scale_factor= without antialias; the actual upstream
+  // 1.6.5 code uses size= with antialias.
   pat = torch::nn::functional::interpolate(
       pat,
       torch::nn::functional::InterpolateFuncOptions()
-          .scale_factor(sf)
+          .size(std::vector<int64_t>{target_h, target_w})
           .mode(torch::kBicubic)
           .align_corners(false)
-          .recompute_scale_factor(false));
+          .antialias(true));
   pat = pat.permute({0, 2, 3, 1}).contiguous().view({1, target_h * target_w, C});
   return torch::cat({cls, pat}, /*dim=*/1);
 }

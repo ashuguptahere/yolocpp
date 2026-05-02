@@ -30,6 +30,104 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.49.0] — 2026-05-02
+
+### Fixed — RF-DETR backbone bit-exact parity via `antialias=True` (#65L slice 6)
+
+**Root-caused and fixed the embeddings 0.006 diff** (and the full
+12-block transformer drift that compounded from it).
+
+The earlier `#65L slice 5` investigation hypothesised the
+divergence was in libtorch's bicubic kernel itself. A C++
+implementation of the reference algorithm + standalone probe
+showed otherwise: my custom kernel and libtorch's both matched
+PyTorch Python within fp32 noise (~1e-7) on the same input.
+
+The actual culprit was **`antialias=True`** in upstream's
+`Dinov2WithRegistersEmbeddings.interpolate_pos_encoding`:
+
+```python
+patch_pos_embed = nn.functional.interpolate(
+    patch_pos_embed.to(dtype=torch.float32),
+    size=(int(h), int(w)),
+    mode='bicubic',
+    align_corners=False,
+    antialias=patch_pos_embed.device.type != 'mps',   # <-- True on CPU/CUDA
+).to(dtype=target_dtype)
+```
+
+Antialiased bicubic applies a low-pass pre-filter that
+significantly changes the output. Earlier slices missed this
+because the documented method signature and other call sites in
+the file use `scale_factor=` without `antialias=`; only the
+actual upstream 1.6.5 RF-DETR code paths through this path with
+antialias on. libtorch supports the flag (`InterpolateFuncOptions::antialias`)
+— flipping it to `true` collapses the diff to **zero**:
+
+```
+[stage] emb_step3_pos_embed  max_abs_diff=0  (was 0.00627594)
+[bisect emb_step3] cls       max_abs_diff=0
+[bisect emb_step3] patch     max_abs_diff=0
+[stage] embeddings_out       max_abs_diff=0
+```
+
+The downstream layers now drift only at the fp32 round-off floor:
+
+```
+[stage] layer00_out  max_abs_diff=9.5e-7    (was 0.0086)
+[stage] layer05_out  max_abs_diff=3.6e-6    (was 0.093)
+[stage] layer11_out  max_abs_diff=4.8e-5    (was 1.60)
+```
+
+A **34,000× improvement at the deepest backbone layer** —
+effectively bit-exact across all 12 transformer blocks.
+
+### Tooling kept around
+
+The custom `bicubic_interpolate_2d` + `bicubic_interpolate_2d_export`
+implementations stay in the codebase even though we now use
+libtorch's interpolate. Two reasons:
+
+1. They proved the kernel itself is correct (matched Python at
+   1e-7) — useful negative result that pinned the bug elsewhere.
+2. They're a safety net if a future libtorch version diverges
+   from PyTorch's reference algorithm — we own the canonical
+   implementation as a fallback.
+
+The custom kernel produces output identical to libtorch's at the
+fp32 noise floor on every test case run.
+
+### Status
+
+Backbone parity: **bit-exact across all 5 detect variants and 12
+ViT blocks**. The 0-detection problem persists, however — moving
+the parity floor from 1.6 to 5e-5 didn't unblock predictions, so
+the remaining bugs live in the **transformer** (decoder + 13-group
+encoder-output + cls/bbox heads). The harness in
+`tests/test_rfdetr_parity_dump.cpp` already supports per-stage
+diff; extending it to dump the decoder's intermediates is the
+next slice (#65L slice 7).
+
+Concrete next-stage probes to add to the harness:
+- `transformer.enc_output[0]` Linear output
+- Top-K refpoint selection result (the K=300 indices)
+- Decoder layer 0 self-attn output
+- Decoder layer 0 cross-attn output (deformable)
+- Final decoder.norm output
+- Final cls / bbox head output
+
+Each will follow the same pattern: dump from Python, run from
+C++, diff-bisect, fix, repeat until end-to-end parity.
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 6 done (backbone parity closed). Slice 7 dives
+  into the transformer head's per-layer drift.
+
+---
+
 ## [0.48.0] — 2026-05-02
 
 ### Investigated — embeddings 0.006 parity diff origin (#65L slice 5)

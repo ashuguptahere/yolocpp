@@ -111,6 +111,66 @@ int main() {
     }
   }
 
+  // Compare custom bicubic vs libtorch::interpolate vs the Python
+  // reference saved at /tmp/yolocpp_parity/dumps/bicubic_probe/.
+  {
+    fs::path probe_dir("/tmp/yolocpp_parity/dumps/bicubic_probe");
+    if (fs::exists(probe_dir / "x.bin") &&
+        fs::exists(probe_dir / "py_out.bin")) {
+      // Manually load the [1, 4, 37, 37] x and [1, 4, 40, 40] py_out.
+      std::vector<float> xbuf(1 * 4 * 37 * 37);
+      std::ifstream(probe_dir / "x.bin", std::ios::binary)
+          .read(reinterpret_cast<char*>(xbuf.data()), xbuf.size() * 4);
+      std::vector<float> pbuf(1 * 4 * 40 * 40);
+      std::ifstream(probe_dir / "py_out.bin", std::ios::binary)
+          .read(reinterpret_cast<char*>(pbuf.data()), pbuf.size() * 4);
+      auto x_t = torch::from_blob(xbuf.data(), {1, 4, 37, 37},
+                                    torch::kFloat).clone();
+      auto py_t = torch::from_blob(pbuf.data(), {1, 4, 40, 40},
+                                    torch::kFloat).clone();
+      auto custom = yolocpp::models::rfdetr::bicubic_interpolate_2d_export(
+          x_t, 40, 40);
+      auto libt = torch::nn::functional::interpolate(
+          x_t, torch::nn::functional::InterpolateFuncOptions()
+                  .size(std::vector<int64_t>{40, 40})
+                  .mode(torch::kBicubic)
+                  .align_corners(false));
+      std::cout << "[bicubic-probe] custom vs Python   max_abs_diff="
+                << max_abs_diff(custom, py_t) << "\n";
+      std::cout << "[bicubic-probe] libtorch vs Python max_abs_diff="
+                << max_abs_diff(libt,   py_t) << "\n";
+      std::cout << "[bicubic-probe] custom vs libtorch max_abs_diff="
+                << max_abs_diff(custom, libt) << "\n";
+    }
+    // Real position-embedding patch slice probe (the actual input
+    // that gets fed to bicubic inside the embeddings forward).
+    if (fs::exists(probe_dir / "pe_patch_input.bin") &&
+        fs::exists(probe_dir / "pe_patch_output_sf.bin")) {
+      std::vector<float> ibuf(1 * 384 * 37 * 37);
+      std::ifstream(probe_dir / "pe_patch_input.bin", std::ios::binary)
+          .read(reinterpret_cast<char*>(ibuf.data()), ibuf.size() * 4);
+      std::vector<float> obuf(1 * 384 * 40 * 40);
+      std::ifstream(probe_dir / "pe_patch_output_sf.bin", std::ios::binary)
+          .read(reinterpret_cast<char*>(obuf.data()), obuf.size() * 4);
+      auto i_t = torch::from_blob(ibuf.data(), {1, 384, 37, 37},
+                                    torch::kFloat).clone();
+      auto o_py = torch::from_blob(obuf.data(), {1, 384, 40, 40},
+                                    torch::kFloat).clone();
+      // Compare the C++-extracted patch slice to Python's identical
+      // extraction.
+      auto pe_param = dmodel.embeddings->position_embeddings;
+      auto pat_cpp  = pe_param.slice(1, 1).contiguous()
+                        .view({1, 37, 37, 384})
+                        .permute({0, 3, 1, 2}).contiguous();
+      std::cout << "[pe-input-probe] cpp slice vs Python slice "
+                << "max_abs_diff=" << max_abs_diff(pat_cpp, i_t) << "\n";
+      auto custom_o = yolocpp::models::rfdetr::bicubic_interpolate_2d_export(
+          pat_cpp, 40, 40);
+      std::cout << "[pe-bicubic-probe] custom vs Python out "
+                << "max_abs_diff=" << max_abs_diff(custom_o, o_py) << "\n";
+    }
+  }
+
   // Embeddings sub-stage bisection.
   auto stages = dmodel.embeddings->forward_stages(inp);
   auto report_stage = [&](const std::string& name, const torch::Tensor& cpp_t) {
@@ -129,6 +189,20 @@ int main() {
   report_stage("emb_step1_patch",     stages.patch);
   report_stage("emb_step2_with_cls",  stages.with_cls);
   report_stage("emb_step3_pos_embed", stages.pos_embed);
+  // Bisect inside emb_step3: cls vs patch portions separately.
+  {
+    auto py_t = load_dump(d, "emb_step3_pos_embed");
+    if (py_t.defined()) {
+      auto cls_cpp = stages.pos_embed.slice(1, 0, 1);
+      auto cls_py  = py_t.slice(1, 0, 1);
+      auto pat_cpp = stages.pos_embed.slice(1, 1);
+      auto pat_py  = py_t.slice(1, 1);
+      std::cout << "[bisect emb_step3] cls    max_abs_diff="
+                << max_abs_diff(cls_cpp, cls_py) << "\n";
+      std::cout << "[bisect emb_step3] patch  max_abs_diff="
+                << max_abs_diff(pat_cpp, pat_py) << "\n";
+    }
+  }
   report_stage("emb_step4_with_pos",  stages.with_pos);
   report_stage("embeddings_out",      stages.windowed);
   auto emb_cpp = stages.windowed;

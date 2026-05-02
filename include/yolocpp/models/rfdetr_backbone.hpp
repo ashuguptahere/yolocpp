@@ -80,6 +80,13 @@ struct Dinov2Cfg {
 extern const Dinov2Cfg kDinov2Small;   // C=384 (default)
 extern const Dinov2Cfg kDinov2Base;    // C=768 — used by rfdetr-large
 
+// Bit-exact bicubic 2D interpolation matching the PyTorch reference
+// algorithm (#65L slice 6). Public so the parity harness can probe
+// it directly. Uses `align_corners=false` and A=-0.75. Input must
+// be `[B, C, in_h, in_w]` fp32.
+torch::Tensor bicubic_interpolate_2d_export(const torch::Tensor& x,
+                                              int out_h, int out_w);
+
 // Return the right per-variant config based on `RFDetrScale.upstream_id`,
 // patch size, and pretrain grid (the saved `position_embeddings`'
 // spatial size). Backbone embed dim is selected from the variant
