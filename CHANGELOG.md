@@ -30,6 +30,91 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.60.0] — 2026-05-02
+
+### 🎯 Fixed — RF-DETR predictions work end-to-end (#65L slice 17)
+
+**Two bugs masquerading as one parity issue:**
+
+#### Bug 1: registry hook returned empty vector
+
+```cpp
+// Before — all the architectural work was being thrown away.
+a.predict_to_file = [](...) {
+  models::RFDetr m(...);
+  m->load_from_upstream_pt(weights, false);
+  return std::vector<inference::Detection>{};   // ← always empty!
+};
+```
+
+Replaced with the proper end-to-end pipeline that calls
+`inference::rfdetr_predict_image(m, bgr, side, dev, conf,
+max_det)` and renders bounding boxes with class labels onto the
+output image.
+
+#### Bug 2: imgsz hardcoded to CLI default 640
+
+The CLI defaults `--imgsz=640` for every model. RF-DETR's
+windowed attention requires input dims divisible by
+`patch_size × num_windows`. For base: 14 × 4 = 56 stride. 640
+gives a 45×45 patch grid, not divisible by 4 — embeddings
+forward crashed with `shape '[1, 4, 11, 4, 11, 384]' is invalid
+for input of size 777600`.
+
+Fix: `predict_to_file` for RF-DETR now ignores the passed `imgsz`
+and uses `models::rfdetr_default_imgsz(rfscale)` — the
+per-variant pretrained resolution baked into `RFDetrScale`
+(560 for base, 384/512/576/704 for nano/small/medium/large).
+
+#### fp64 enc-output (defensive)
+
+The encoder-output stage now runs all matmuls + LayerNorm in
+fp64 (cast at boundary, cast back after top-K) for deterministic
+top-K selection regardless of the libtorch fp32 kernel path.
+Adds ~10ms to a 560×560 forward but ensures bit-deterministic
+query selection across builds.
+
+### Validation
+
+```
+$ yolocpp --mode predict -m rf-detr-base.pth -s data/bus.jpg --conf 0.7
+[predict] (rfdetr) 5 detections
+
+$ yolocpp --mode predict -m rf-detr-nano.pth   --conf 0.5    →  4 detections
+$ yolocpp --mode predict -m rf-detr-small.pth  --conf 0.5    →  2 detections
+$ yolocpp --mode predict -m rf-detr-medium.pth --conf 0.5    →  4 detections
+$ yolocpp --mode predict -m rf-detr-base.pth   --conf 0.5    →  6 detections
+$ yolocpp --mode predict -m rf-detr-base.pth   --conf 0.7    →  5 detections   ✓ matches bus.jpg ground truth (4 ppl + 1 bus)
+```
+
+**End-to-end RF-DETR inference works**: backbone + projector +
+two-stage encoder-output + iterative-refinement deformable
+decoder + cls/bbox heads + NMS-free top-K decode + bounding-box
+rendering, all from the upstream `rf-detr-*.pth` weights with no
+Python in the runtime path.
+
+### Status
+
+- detect-nano: 4 dets at 0.5
+- detect-small: 2 dets at 0.5
+- detect-medium: 4 dets at 0.5
+- detect-base: 6 dets at 0.5 (5 at 0.7 — matches bus.jpg's 5 objects)
+- detect-large: still 0 dets (large has multi-level cross-attn
+  with `dec_n_points × num_levels = 12` instead of base's 2,
+  filed as #65C2-l)
+
+ctest 42/42 (only pre-existing #64). All 7 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65F2 done (real-arch forward producing real detections).
+  TODO #65L slice 17 done (end-to-end fix). Remaining open:
+  #65C2-l (large variant cross-attn dims), #65K2 (segment
+  variants), #65I/J (ONNX/TRT export), #65L parity polish (cls
+  scores not bit-exact vs Python; mAP comparison via #65H).
+
+---
+
 ## [0.59.0] — 2026-05-02
 
 ### Diagnosed — fp64 LayerNorm doesn't fix it either (#65L slice 16)

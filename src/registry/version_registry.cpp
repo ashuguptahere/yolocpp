@@ -36,6 +36,12 @@
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
 #include "yolocpp/models/rfdetr.hpp"
+#include "yolocpp/inference/rfdetr_predictor.hpp"
+
+#include <filesystem>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+#include <sstream>
 #include "yolocpp/datasets/yolo_dataset.hpp"
 #include "yolocpp/engine/benchmark.hpp"
 #include "yolocpp/engine/benchmark_internal.hpp"
@@ -950,20 +956,58 @@ VersionAdapter make_rfdetr() {
     }
     throw std::runtime_error("rfdetr export_onnx: scaffolded only — see #65I");
   };
-  a.predict_to_file = [](const std::string& weights, const std::string&,
-                          const std::string&, int, const std::string&,
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                          const std::string& out_path, int imgsz,
+                          const std::string& device,
                           const std::string& scale, int nc,
-                          const inference::NMSConfig&) {
-    models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
+                          const inference::NMSConfig& nm) {
+    auto rfscale = models::rfdetr_scale_from_letter(scale);
+    models::RFDetr m(rfscale, nc);
     if (!weights.empty()) {
-      // #65E2 — non-strict: until the architecture rewrite #65A2..D2
-      // lands, only the parameters whose names already match upstream
-      // are loaded; the rest stay random-init. forward_eval still
-      // produces a YOLO-shaped output but detections won't be
-      // meaningful until #65F2 closes the loop.
       m->load_from_upstream_pt(weights, /*strict=*/false);
     }
-    return std::vector<inference::Detection>{};
+    auto dev = torch::Device(torch::kCPU);
+    if (device == "cuda" && torch::cuda::is_available())
+        dev = torch::Device(torch::kCUDA);
+    m->to(dev);
+    m->eval();
+
+    auto bgr = cv::imread(src);
+    if (bgr.empty())
+        throw std::runtime_error("predict_to_file: cannot read source: " + src);
+    // Force per-variant resolution: RF-DETR's windowed-attention
+    // embeddings hardcode `num_windows × patch_size` divisibility.
+    // The CLI's default imgsz (640) doesn't satisfy this for
+    // base (patch=14, num_windows=4 → 56 stride; 640 gives 45×45
+    // patches, not divisible by 4). Ignore passed imgsz and use
+    // the variant's pretrained resolution.
+    (void)imgsz;
+    int side = models::rfdetr_default_imgsz(rfscale);
+    auto dets = inference::rfdetr_predict_image(
+        m, bgr, side, dev, nm.conf_thresh, /*max_det=*/300);
+
+    // Render annotated boxes onto the source image.
+    if (!out_path.empty()) {
+      auto img = bgr.clone();
+      for (const auto& d : dets) {
+        cv::rectangle(img,
+                       cv::Point(static_cast<int>(d.x1), static_cast<int>(d.y1)),
+                       cv::Point(static_cast<int>(d.x2), static_cast<int>(d.y2)),
+                       cv::Scalar(0, 255, 0), 2);
+        std::ostringstream lab;
+        lab.precision(2); lab << std::fixed << "cls=" << d.cls
+            << " " << d.conf;
+        cv::putText(img, lab.str(),
+                     cv::Point(static_cast<int>(d.x1),
+                                std::max(0, static_cast<int>(d.y1) - 4)),
+                     cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                     cv::Scalar(0, 255, 0), 1);
+      }
+      std::filesystem::create_directories(
+          std::filesystem::path(out_path).parent_path());
+      cv::imwrite(out_path, img);
+    }
+    return dets;
   };
   a.run_val = [](const std::string&, const std::string& scale, int nc,
                   datasets::YoloDataset&, const torch::Device&) {

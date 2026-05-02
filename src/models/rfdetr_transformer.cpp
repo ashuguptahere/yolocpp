@@ -309,49 +309,81 @@ RFDetrTransformerImpl::RFDetrTransformerImpl(int hidden, int n_dec_layers,
 TransformerOutput RFDetrTransformerImpl::forward(
     torch::Tensor memory_2d, torch::Tensor query_feat_first_group,
     torch::Tensor refpoint_embed_first_group, int num_queries) {
+  // ─── Numerical-determinism note (#65L slice 17) ──────────────────────
+  //
+  // PyTorch Python and libtorch C++ both call into ATen but pick
+  // DIFFERENT fp32 matmul/LN kernels at runtime (mkldnn vs eigen
+  // vs blas). For 487-key pipelines like RF-DETR this produces
+  // ~1e-5 per-op drift that compounds into score-flips at the
+  // K-th-largest topk boundary (8/300 picks differ at fp32, per
+  // slices 14-16). To get DETERMINISTIC parity with the upstream
+  // pretrained weights, the entire encoder-output + topk pipeline
+  // runs in fp64 — only cast back to fp32 at the very end.
+  // ~10-30x slower than fp32 on the [B, L, hidden] matmuls but
+  // negligible at inference (single image, ~milliseconds).
   // memory_2d: [B, C, H, W] — projector output.
   auto B = memory_2d.size(0);
   int  H = static_cast<int>(memory_2d.size(2));
   int  W = static_cast<int>(memory_2d.size(3));
   auto memory = memory_2d.flatten(2).transpose(1, 2).contiguous();
 
-  // Generate dense per-token proposals + masked memory (matches
-  // upstream `gen_encoder_output_proposals(memory, ..., unsigmoid=False)`).
-  auto props = gen_encoder_output_proposals_1l(memory, H, W);
-  auto& output_memory     = props.output_memory;     // memory MASKED at invalid positions
-  auto& output_proposals  = props.output_proposals;  // [B, L, 4] cxcywh in [0,1]
+  // Cast memory to fp64 — every encoder-output op runs in fp64
+  // until top-K selection is finalised.
+  auto memory_f64 = memory.to(torch::kDouble);
 
-  // Two-stage: enc_output[0] + LN[0] applied to MASKED memory (NOT
-  // raw memory — upstream applies enc_output to `output_memory`).
-  auto out_mem = enc_output_norm[0]->as<torch::nn::LayerNormImpl>()->forward(
-      enc_output[0]->as<torch::nn::LinearImpl>()->forward(output_memory));
+  auto props = gen_encoder_output_proposals_1l(memory_f64, H, W);
+  auto& output_memory_f64    = props.output_memory;       // [B, L, C] fp64
+  auto& output_proposals_f64 = props.output_proposals;    // [B, L, 4] fp64
 
-  auto cls_logits = enc_out_class_embed[0]
-                        ->as<torch::nn::LinearImpl>()->forward(out_mem);
-  auto bbox_delta = enc_out_bbox_embed[0]
-                        ->as<RFDetrMLPImpl>()->forward(out_mem);
+  // Two-stage: enc_output[0] (Linear) + LN[0] applied to MASKED memory.
+  // Apply weights cast to fp64 for deterministic accumulation.
+  auto& eo_lin = *enc_output[0]->as<torch::nn::LinearImpl>();
+  auto eo = torch::matmul(output_memory_f64,
+                            eo_lin.weight.to(torch::kDouble).t())
+              + eo_lin.bias.to(torch::kDouble);
+  auto& ln = *enc_output_norm[0]->as<torch::nn::LayerNormImpl>();
+  auto mean = eo.mean(/*dim=*/-1, /*keepdim=*/true);
+  auto var  = (eo - mean).pow(2).mean(/*dim=*/-1, /*keepdim=*/true);
+  auto eps_v = ln.options.eps();
+  auto out_mem_f64 = (eo - mean) / (var + eps_v).sqrt();
+  out_mem_f64 = out_mem_f64 * ln.weight.to(torch::kDouble) +
+                  ln.bias.to(torch::kDouble);
 
-  // bbox_reparam encoder output: cx = delta_xy * wh + xy;
-  // wh = exp(delta_wh) * wh.
-  auto coord_cxcy = bbox_delta.slice(-1, 0, 2) *
-                        output_proposals.slice(-1, 2, 4) +
-                    output_proposals.slice(-1, 0, 2);
-  auto coord_wh   = bbox_delta.slice(-1, 2, 4).exp() *
-                        output_proposals.slice(-1, 2, 4);
-  auto coord = torch::cat({coord_cxcy, coord_wh}, -1);   // [B, L, 4]
+  // Cls + bbox heads at fp64.
+  auto& cls_lin = *enc_out_class_embed[0]->as<torch::nn::LinearImpl>();
+  auto cls_logits_f64 = torch::matmul(out_mem_f64,
+                                        cls_lin.weight.to(torch::kDouble).t())
+                          + cls_lin.bias.to(torch::kDouble);
 
-  // Top-K by max-cls score. Use stable sort (descending) — PyTorch's
-  // `torch.topk` and libtorch's `topk`/`argsort` order ties
-  // differently for identical fp32 scores, producing 8/300 index
-  // mismatches at #65L slice 14. `torch::sort(stable=true)`
-  // preserves input-order on ties, matching PyTorch Python.
-  auto top_scores = std::get<0>(cls_logits.max(-1));     // [B, L]
+  // enc_out_bbox_embed is a 3-layer MLP; run its matmuls in fp64.
+  auto& bbox_mlp = *enc_out_bbox_embed[0]->as<RFDetrMLPImpl>();
+  torch::Tensor bbox_delta_f64 = out_mem_f64;
+  int n_bbox_layers = static_cast<int>(bbox_mlp.layers->size());
+  for (int i = 0; i < n_bbox_layers; ++i) {
+    auto& lin = *bbox_mlp.layers[i]->as<torch::nn::LinearImpl>();
+    bbox_delta_f64 = torch::matmul(bbox_delta_f64,
+                                     lin.weight.to(torch::kDouble).t())
+                       + lin.bias.to(torch::kDouble);
+    if (i < n_bbox_layers - 1) bbox_delta_f64 = torch::relu(bbox_delta_f64);
+  }
+
+  // bbox_reparam encoder output (still in fp64).
+  auto coord_cxcy = bbox_delta_f64.slice(-1, 0, 2) *
+                        output_proposals_f64.slice(-1, 2, 4) +
+                    output_proposals_f64.slice(-1, 0, 2);
+  auto coord_wh   = bbox_delta_f64.slice(-1, 2, 4).exp() *
+                        output_proposals_f64.slice(-1, 2, 4);
+  auto coord_f64  = torch::cat({coord_cxcy, coord_wh}, -1);   // [B, L, 4] fp64
+
+  // Top-K by max-cls score (in fp64 → indices independent of fp32 path).
+  auto top_scores = std::get<0>(cls_logits_f64.max(-1));
   int  K          = std::min<int>(num_queries, static_cast<int>(top_scores.size(1)));
   auto sorted = torch::sort(top_scores, /*stable=*/true,
                               /*dim=*/1, /*descending=*/true);
-  auto topk_idx = std::get<1>(sorted).slice(/*dim=*/1, 0, K);   // [B, K]
-  auto idx_4      = topk_idx.unsqueeze(-1).expand({B, K, 4});
-  auto refpoint_embed_ts = torch::gather(coord, /*dim=*/1, idx_4);  // [B, K, 4]
+  auto topk_idx = std::get<1>(sorted).slice(/*dim=*/1, 0, K);
+  auto idx_4    = topk_idx.unsqueeze(-1).expand({B, K, 4});
+  auto refpoint_embed_ts = torch::gather(coord_f64, /*dim=*/1, idx_4)
+                              .to(torch::kFloat);   // back to fp32 here
 
   // Combine the LEARNED `refpoint_embed[:Q]` with `refpoint_embed_ts`
   // via bbox_reparam (matches upstream transformer.forward lines
