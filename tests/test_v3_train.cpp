@@ -3,7 +3,7 @@
 // converted weights or coco8 are not available.
 //
 // v3 plugs into TrainerT<Yolo3> via the default LossTraits<M> →
-// V8DetectionLoss specialisation. Ultralytics' yolov3u uses Darknet-53
+// V8DetectionLoss specialisation. Upstream's yolov3u uses Darknet-53
 // + v8 anchor-free DFL Detect head (legacy=true, reg_max=16), so no
 // v3-specific loss class is needed.
 

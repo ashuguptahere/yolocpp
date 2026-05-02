@@ -1,4 +1,4 @@
-// Per-layer parity comparator vs Ultralytics' Python forward.
+// Per-layer parity comparator vs the upstream Python forward.
 //
 // Reads <dump_dir>/<idx>.bin (raw float32 written by /tmp/yolocpp_parity/
 // dump.py — Python harness lives outside the repo by request) and runs the

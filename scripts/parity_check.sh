@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Measure mAP@0.5 / mAP@0.5:0.95 on full COCO val (5000 images) for every
-# yolo11 and yolo26 scale, using only the Ultralytics-shipped weights (no
-# fine-tune). The intent is to compare against Ultralytics' published
+# yolo11 and yolo26 scale, using only the upstream-shipped weights (no
+# fine-tune). The intent is to compare against the upstream-published
 # numbers and quantify the parity gap.
 
 set -u

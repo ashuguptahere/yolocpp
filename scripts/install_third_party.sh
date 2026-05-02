@@ -94,7 +94,7 @@ if [[ ! -f CLI11/CLI11.hpp ]]; then
 fi
 
 # --- rapidyaml ----------------------------------------------------------------
-# Single-header amalgamation of biojppm/rapidyaml — used to parse Ultralytics
+# Single-header amalgamation of biojppm/rapidyaml — used to parse the upstream
 # data.yaml (path/train/val/names) for `data=...yaml` resolution. ryml is the
 # fastest serial YAML parser in C++ (no SIMD parser exists for YAML at the
 # spec-conforming level — ryml is the practical equivalent).

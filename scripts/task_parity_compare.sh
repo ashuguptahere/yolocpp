@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Side-by-side compare of our predict outputs vs Ultralytics Python.
+# Side-by-side compare of our predict outputs vs the upstream Python tooling.
 # Reads runs/task_smoke/*.log (produced by task_predict_sweep.sh) and
 # extracts (count, top-conf) per (version, task, scale).
 #

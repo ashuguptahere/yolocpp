@@ -1,4 +1,4 @@
-// End-to-end test for YOLO10n: convert Ultralytics yolov10n.pt → yolo10.pt
+// End-to-end test for YOLO10n: convert upstream yolov10n.pt → yolo10.pt
 // (one2many head dropped, one2one renamed to cv2/cv3, RepVGGDW fusion +
 // fp16→fp32), load + predict on bus.jpg.
 //

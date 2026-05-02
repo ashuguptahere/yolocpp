@@ -1,6 +1,6 @@
-// Verify all five YOLO8 detect scales (n/s/m/l/x) load Ultralytics weights
-// and produce sensible predictions on bus.jpg. Same canonical sample
-// Ultralytics uses to demo every scale.
+// Verify all five YOLO8 detect scales (n/s/m/l/x) load the upstream
+// weights and produce sensible predictions on bus.jpg. Same canonical
+// sample upstream uses to demo every scale.
 
 #include <iostream>
 #include <map>

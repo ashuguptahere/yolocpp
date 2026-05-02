@@ -42,7 +42,7 @@ for v in 8 11 26; do
       if [[ "${t}" == "detect" ]]; then
         weight="data/yolo${v}${s}.pt"
       else
-        # Ultralytics suffix pattern: -cls / -seg / -pose / -obb.
+        # Upstream suffix pattern: -cls / -seg / -pose / -obb.
         suffix=$(echo "${t}" | sed 's/classify/cls/; s/segment/seg/')
         weight="data/yolo${v}${s}-${suffix}.pt"
       fi

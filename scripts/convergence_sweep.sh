@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Multi-version × multi-scale convergence sweep on coco8.
 # For each (version, scale) pair: 15-epoch fine-tune from the official
-# Ultralytics .pt; capture first-epoch total loss, last-epoch total loss,
+# upstream .pt; capture first-epoch total loss, last-epoch total loss,
 # best val mAP@0.5:0.95.
 #
 # Output: runs/convergence/<version>_<scale>/{stdout.log, results.csv, summary}

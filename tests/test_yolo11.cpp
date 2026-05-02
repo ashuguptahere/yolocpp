@@ -3,7 +3,7 @@
 // For each scale (n / s / m / l / x):
 //   1. Construct Yolo11Detect at that scale.
 //   2. Load yolo11<scale>.pt's state_dict.
-//   3. Verify (a) parameter count matches Ultralytics' published value
+//   3. Verify (a) parameter count matches upstream' published value
 //                 within rounding, (b) every checkpoint key was applied.
 //   4. Run forward_eval on a 256×256 zero image — confirms the full
 //      module graph wires up + Detect decode produces the right shape.
@@ -29,8 +29,8 @@
     if (!(cond)) { std::cerr << "[FAIL] " << msg << "\n"; return 1; } \
   } while (0)
 
-// Ultralytics-published parameter counts for yolo11<scale>.pt
-// (the values printed by ultralytics' `model.info()`).
+// upstream-published parameter counts for yolo11<scale>.pt
+// (the values printed by the upstream `model.info()`).
 struct ScaleSpec {
   std::string letter;
   yolocpp::models::Yolo11Scale scale;
@@ -49,7 +49,7 @@ static long long count_params(torch::nn::Module& m) {
 
 int main() {
   using namespace yolocpp;
-  // Approximate counts (parameter-only, not buffers) from Ultralytics:
+  // Approximate counts (parameter-only, not buffers) from upstream:
   //   yolo11n: 2.6M, yolo11s: 9.4M, yolo11m: 20.0M, yolo11l: 25.3M, yolo11x: 56.9M
   // Tolerance ±1.5% absorbs rounding differences in scale_channels.
   std::vector<ScaleSpec> scales = {
@@ -71,7 +71,7 @@ int main() {
 
     long long diff = std::abs(got_params - sp.expected_params);
     EXPECT(diff < sp.expected_params / 50,  // ±2%
-           "param count too far from Ultralytics published value for " + pt);
+           "param count too far from upstream published value for " + pt);
 
     auto sd = serialization::load_state_dict(pt);
     int copied = model->load_from_state_dict(sd.entries);

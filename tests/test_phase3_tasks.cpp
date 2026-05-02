@@ -1,5 +1,5 @@
 // Verify all four Phase 3 tasks (classify / segment / pose / OBB) load
-// Ultralytics weights and produce sensible predictions on bus.jpg.
+// upstream weights and produce sensible predictions on bus.jpg.
 
 #include <opencv2/imgcodecs.hpp>
 

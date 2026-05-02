@@ -1,4 +1,4 @@
-// Verify the .pt weight loader can read Ultralytics yolo8n.pt and that
+// Verify the .pt weight loader can read upstream yolo8n.pt and that
 // every parameter shape lines up with our YOLO8n's named_parameters().
 
 #include <torch/torch.h>

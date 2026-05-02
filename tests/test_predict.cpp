@@ -1,6 +1,6 @@
 // End-to-end inference test: load yolo8n.pt, run on bus.jpg, verify
 // detections look reasonable (≥ 1 person, ≥ 1 bus) — same canonical sample
-// Ultralytics uses to demo their releases.
+// upstream uses to demo its releases.
 
 #include <iostream>
 #include <map>

@@ -18,7 +18,7 @@
 int main() {
   using namespace yolocpp;
 
-  // ─── YOLO3 (Ultralytics yolov3u — anchor-free v8-style DFL head):
+  // ─── YOLO3 (yolov3u — anchor-free v8-style DFL head):
   //     Darknet-53 backbone, ~103M params at nc=80, decoded forward
   //     output [1, 4+nc, A] for NMS (A = 8400 at imgsz=640).
   {

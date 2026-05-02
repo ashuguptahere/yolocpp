@@ -1,4 +1,4 @@
-// End-to-end test for YOLO9c: convert Ultralytics yolov9c.pt → yolo9.pt
+// End-to-end test for YOLO9c: convert upstream yolov9c.pt → yolo9.pt
 // (RepConv fusion + fp16→fp32), load + predict on bus.jpg.
 //
 // Gated on `data/yolov9c.pt` or the cache. Skipped if no upstream weights.

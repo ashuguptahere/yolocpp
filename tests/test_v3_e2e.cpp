@@ -1,4 +1,4 @@
-// End-to-end test for YOLO3: convert Ultralytics yolov3u.pt → yolo3.pt
+// End-to-end test for YOLO3: convert upstream yolov3u.pt → yolo3.pt
 // (fp16 → fp32, drop num_batches_tracked), load + predict on bus.jpg.
 //
 // Gated on `data/yolov3u.pt` or the cache. Skipped if no upstream weights.
