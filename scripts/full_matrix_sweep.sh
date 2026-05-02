@@ -41,7 +41,10 @@ resolve_weight() {
 }
 SOURCE="$ROOT/data/bus.jpg"
 DATA="$ROOT/data/coco8"
-DATA_YAML="$DATA/data.yaml"
+# Pass the directory to `--data` (cmd_val + cmd_train both expect a
+# YOLO-layout dataset root). The yaml-resolution path lives in the
+# kv-style code which was removed under #51K.
+DATA_YAML="$DATA"
 OUT="/tmp/yolocpp_full_sweep"
 rm -rf "$OUT"; mkdir -p "$OUT"
 
@@ -59,26 +62,26 @@ run_one() {
     SKIP=$((SKIP+1))
     return
   fi
+  # All invocations use the canonical flag-style CLI (#51K removed
+  # the kv-style and legacy subcommand parsers).
   local out_arg=""
   case "$mode" in
-    predict)   out_arg="out=$OUT/${ver}${sc:+_$sc}_${task}_pred.jpg" ;;
-    export)    out_arg="format=onnx out=$OUT/${ver}${sc:+_$sc}_${task}.onnx" ;;
-    val)       out_arg="data=$DATA_YAML scale=$sc" ;;
-    train)     out_arg="data=$DATA_YAML scale=$sc epochs=1 batch=1 save=$OUT/${ver}${sc:+_$sc}_${task}_train" ;;
-    benchmark) out_arg="source=$SOURCE warmup=1 iters=1 cache=$OUT/bench_cache" ;;
+    predict)   out_arg="--out $OUT/${ver}${sc:+_$sc}_${task}_pred.jpg" ;;
+    export)    out_arg="--format onnx --out $OUT/${ver}${sc:+_$sc}_${task}.onnx" ;;
+    val)       out_arg="--data $DATA_YAML --scale $sc" ;;
+    train)     out_arg="--data $DATA_YAML --scale $sc --epochs 1 --batch 1 --save $OUT/${ver}${sc:+_$sc}_${task}_train" ;;
+    benchmark) out_arg="--source $SOURCE --warmup 1 --iters 1 --cache $OUT/bench_cache" ;;
   esac
-  local cmd="$CLI task=$task mode=$mode model=$weights"
+  local cmd="$CLI --mode $mode --task $task --model $weights"
   case "$mode" in
-    predict)   cmd="$cmd source=$SOURCE $out_arg $extra" ;;
+    predict)   cmd="$cmd --source $SOURCE $out_arg $extra" ;;
     export)    cmd="$cmd $out_arg $extra" ;;
     val)       cmd="$cmd $out_arg $extra" ;;
     train)     cmd="$cmd $out_arg $extra" ;;
     # Benchmark auto-resolves version+scale from the weights filename
-    # via `cli::version_from_filename` / `scale_from_filename` inside
-    # engine::run_benchmark. Don't pass scale explicitly here — for
-    # variant names like `tiny` / `n6` / `s_mbla` the auto-resolve in
-    # the engine is correct.
-    benchmark) cmd="$CLI mode=benchmark model=$weights $out_arg $extra" ;;
+    # inside engine::run_benchmark, so we drop --task and --scale
+    # here. (Bench is detect-only today.)
+    benchmark) cmd="$CLI --mode benchmark --model $weights $out_arg $extra" ;;
   esac
   echo "==== $ver/$sc/$task/$mode ====" >> "$LOG"
   echo "$cmd" >> "$LOG"
@@ -134,7 +137,7 @@ detect_only_versions() {
       # to the CLI explicitly via `extra`.
       local extra_flags=""
       if [ "$ver" = "v10" ] && [ -z "$sc_arg" ]; then
-        extra_flags="scale=n"
+        extra_flags="--scale n"
         sc_arg="n"
       fi
       local weights="$(resolve_weight "$wtmpl")"
@@ -179,7 +182,7 @@ for w in yolo3.pt yolo4.pt yolo5nu.pt yolo6n.pt yolo7.pt yolo8n.pt yolo9c.pt yol
 done
 
 echo "[sweep] phase 4: smoke val (coco8) — one cell per version"
-if [ -f "$DATA_YAML" ]; then
+if [ -d "$DATA_YAML" ]; then
   for w in yolo5nu.pt yolo8n.pt yolo11n.pt yolo26n.pt; do
     ver=$(echo "$w" | grep -oE 'yolo[0-9]+' | sed 's/yolo/v/')
     weights="$(resolve_weight "$w")"; [ -z "$weights" ] && weights="$WEIGHTS/$w"
@@ -191,7 +194,7 @@ else
 fi
 
 echo "[sweep] phase 5: smoke train (1 epoch, batch=1) — one cell per version"
-if [ -f "$DATA_YAML" ] && [ -d "$DATA/images/train" ]; then
+if [ -d "$DATA_YAML" ] && [ -d "$DATA/images/train" ]; then
   for w in yolo8n.pt yolo11n.pt yolo26n.pt; do
     ver=$(echo "$w" | grep -oE 'yolo[0-9]+' | sed 's/yolo/v/')
     weights="$(resolve_weight "$w")"; [ -z "$weights" ] && weights="$WEIGHTS/$w"
