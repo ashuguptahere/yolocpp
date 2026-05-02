@@ -30,6 +30,49 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.32.0] — 2026-05-02
+
+### Added — RF-DETR backbones (#65A)
+
+`include/yolocpp/models/rfdetr_backbone.hpp` +
+`src/models/rfdetr_backbone.cpp` land the ViT backbone family for
+RF-DETR. Two configurations:
+
+- **DINOv2 ViT-L** (`rfdetr-l.pt`): patch=14, depth=24, embed=1024,
+  16 heads, MLP×4, full self-attention, input 560×560. Tap blocks
+  {11, 17, 23} → multi-scale feature maps for the encoder.
+- **LW-DETR ViT** (`rfdetr-{n,s,b,m}.pt`): patch=16, input 640×640,
+  windowed self-attention (window=14) on every block except the
+  last. Per-scale (depth, embed_dim, num_heads):
+  n=(6, 192, 3), s=(8, 384, 6), b=(10, 512, 8), m=(12, 768, 12).
+
+Building blocks (`PatchEmbed`, `Attention`, `ViTBlock`,
+`ViTBackbone`) are reusable across both families — only the cfg
+constants differ. Submodule names match upstream (`patch_embed.proj`,
+`blocks.<i>.attn.qkv`, `blocks.<i>.fc1/fc2`, `norm`) so the #65D
+state-dict converter can do a simple prefix rename without
+per-tensor surgery.
+
+`RFDetrImpl` / `RFDetrSegmentImpl` now construct + register their
+backbone in the ctor and expose `forward_backbone(x)`.
+`forward_eval` runs the backbone end-to-end before throwing on the
+encoder boundary (#65B / #65C). This means downstream slices can be
+unit-tested incrementally — the backbone-shape contract is now
+pinned.
+
+`tests/test_rfdetr_backbone.cpp` exercises full forward through the
+n/s/b/m scales on random `[1, 3, 640, 640]` input and asserts each
+scale produces 3 multi-scale feature maps of shape `[1, embed_dim,
+40, 40]` with finite values. DINOv2-large skipped (300M params would
+balloon the test runtime). ctest count goes 37 → 38.
+
+### Tracked
+
+- TODO #65A marked landed in `TODO.md`; #65B (encoder) is the next
+  unblocker.
+
+---
+
 ## [0.31.0] — 2026-05-02
 
 ### Added — RF-DETR family scaffold (#65)

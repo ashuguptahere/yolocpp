@@ -41,16 +41,25 @@ int rfdetr_default_imgsz(const RFDetrScale& scale) {
 
 // ─── Detect ──────────────────────────────────────────────────────────────
 
-RFDetrImpl::RFDetrImpl(RFDetrScale scale, int nc)
-    : scale_(scale), nc_(nc) {
-  // No sub-modules registered yet — construction succeeds so the
-  // registry adapter can be exercised at compile-link time. Each
-  // sub-module gets registered under its respective slice
-  // (#65A backbone, #65B transformer, #65C head).
+RFDetrImpl::RFDetrImpl(RFDetrScale scale, int nc) : scale_(scale), nc_(nc) {
+  // #65A landed: backbone is constructed + registered. #65B encoder,
+  // #65C decoder/head, #65F loss heads still pending — `forward_eval`
+  // and `forward_train` throw on the encoder boundary below.
+  const auto& cfg =
+      yolocpp::models::rfdetr::backbone_cfg_from_name(scale.backbone);
+  backbone_ = register_module(
+      "backbone", yolocpp::models::rfdetr::ViTBackbone(cfg));
 }
 
-torch::Tensor RFDetrImpl::forward_eval(torch::Tensor /*x*/) {
-  unimplemented("forward_eval", "#65C (head + decoder)");
+std::vector<torch::Tensor> RFDetrImpl::forward_backbone(torch::Tensor x) {
+  return backbone_->forward_features(std::move(x));
+}
+
+torch::Tensor RFDetrImpl::forward_eval(torch::Tensor x) {
+  // Backbone runs (real shapes), then we hit the encoder boundary.
+  (void)forward_backbone(std::move(x));
+  unimplemented("forward_eval (encoder→decoder→head)",
+                "#65B (encoder) + #65C (decoder/head)");
 }
 
 std::vector<torch::Tensor> RFDetrImpl::forward_train(torch::Tensor /*x*/) {
@@ -66,10 +75,20 @@ int RFDetrImpl::load_from_state_dict(
 // ─── Segment ─────────────────────────────────────────────────────────────
 
 RFDetrSegmentImpl::RFDetrSegmentImpl(RFDetrScale scale, int nc)
-    : scale_(scale), nc_(nc) {}
+    : scale_(scale), nc_(nc) {
+  const auto& cfg =
+      yolocpp::models::rfdetr::backbone_cfg_from_name(scale.backbone);
+  backbone_ = register_module(
+      "backbone", yolocpp::models::rfdetr::ViTBackbone(cfg));
+}
+
+std::vector<torch::Tensor> RFDetrSegmentImpl::forward_backbone(torch::Tensor x) {
+  return backbone_->forward_features(std::move(x));
+}
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-RFDetrSegmentImpl::forward_eval(torch::Tensor /*x*/) {
+RFDetrSegmentImpl::forward_eval(torch::Tensor x) {
+  (void)forward_backbone(std::move(x));
   unimplemented("seg forward_eval",
                 "#65K (segment head: per-query mask coeffs + shared protos)");
 }

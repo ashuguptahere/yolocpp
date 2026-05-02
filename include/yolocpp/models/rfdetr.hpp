@@ -36,6 +36,8 @@
 #include <string>
 #include <vector>
 
+#include "yolocpp/models/rfdetr_backbone.hpp"
+
 namespace yolocpp::models {
 
 // Scale parameters for RF-DETR. Channel widths + transformer depth +
@@ -102,9 +104,16 @@ class RFDetrImpl : public torch::nn::Module {
   int                num_queries()  const { return scale_.num_queries; }
   const RFDetrScale& scale()        const { return scale_; }
 
+  // #65A — backbone runs end-to-end and returns multi-scale feature
+  // maps. Used directly by `forward_eval` once #65B (encoder) lands;
+  // exposed publicly so unit tests can pin the backbone shape
+  // without going through the throwing forward path.
+  std::vector<torch::Tensor> forward_backbone(torch::Tensor x);
+
  private:
-  RFDetrScale scale_;
-  int         nc_;
+  RFDetrScale                       scale_;
+  int                               nc_;
+  yolocpp::models::rfdetr::ViTBackbone backbone_{nullptr};
 };
 
 TORCH_MODULE(RFDetr);
@@ -128,9 +137,12 @@ class RFDetrSegmentImpl : public torch::nn::Module {
   int                nc()    const { return nc_; }
   const RFDetrScale& scale() const { return scale_; }
 
+  std::vector<torch::Tensor> forward_backbone(torch::Tensor x);
+
  private:
-  RFDetrScale scale_;
-  int         nc_;
+  RFDetrScale                       scale_;
+  int                               nc_;
+  yolocpp::models::rfdetr::ViTBackbone backbone_{nullptr};
 };
 
 TORCH_MODULE(RFDetrSegment);

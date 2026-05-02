@@ -349,7 +349,7 @@ segment.
 | # | scope | priority | session-cost estimate | blockers |
 |---|-------|----------|------------------------|----------|
 | #65   | Top-level RF-DETR family (umbrella for #65A..#65L). Scaffold landed 0.31.0; all entry points throw with slice tags. | high | many sessions | — |
-| #65A  | Backbones: DINOv2 (ViT-L, patch=14, img=560) for `rfdetr-l`; LW-DETR-tiny / -small / -base / -medium for the smaller scales. Implement as standalone modules in `src/models/dinov2.cpp` + `src/models/lw_detr_backbone.cpp`. | high | 1-2 sessions | — |
+| ~~#65A~~  | ~~Backbones: DINOv2 (ViT-L) + LW-DETR-{tiny,small,base,medium}.~~ Landed 0.32.0 — `models/rfdetr_backbone.{hpp,cpp}` shared `PatchEmbed`/`Attention`/`ViTBlock`/`ViTBackbone`; submodule names match upstream so the #65D converter is a prefix rename. `tests/test_rfdetr_backbone.cpp` pins the n/s/b/m forward shapes (DINOv2-large skipped on memory). | done | — | — |
 | #65B  | Transformer encoder (multi-scale deformable attention, sine pos-emb, dropout-free at eval). | high | 1 session | #65A |
 | #65C  | Decoder + object-query head (cross-attn → query refinement → cls + bbox MLPs; NMS-free `[B, Q, 4+nc]` output, sigmoided cls). Wire `RFDetrImpl::forward_eval`. | high | 1 session | #65B |
 | #65D  | `.pt` converter: `rfdetr-<scale>.pt` (upstream pickled state-dict from Roboflow's `rf-detr` repo) → our format. Reuse `serialization/pt_loader.cpp` + add a per-key remapping table in `src/serialization/rfdetr_weights.cpp`. Wire `RFDetrImpl::load_from_state_dict`. | high | 1 session | #65A,B,C |
