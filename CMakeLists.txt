@@ -189,6 +189,11 @@ target_link_libraries(yolocpp PRIVATE yolocpp_core CLI11)
 enable_testing()
 add_subdirectory(tests)
 
+# ---- examples ------------------------------------------------------------
+# Demonstrate the public C++ API (`#include <yolocpp/api.hpp>`). Toggleable
+# via -DYOLOCPP_BUILD_EXAMPLES=OFF. See examples/README.md.
+add_subdirectory(examples)
+
 # ---- runtime rpath so vendored .so's resolve at exec time -----------------
 # Use DT_RPATH (transitive) instead of DT_RUNPATH so that dlopen() calls made
 # by libnvinfer.so for its sm_* resource libraries also search the rpath.
