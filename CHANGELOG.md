@@ -30,6 +30,57 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.31.0] — 2026-05-02
+
+### Added — RF-DETR family scaffold (#65)
+
+First non-YOLO architecture wired into the registry. RF-DETR is a
+transformer-based DETR-family detector (encoder/decoder + object
+queries + Hungarian-matching set loss + DINOv2 / LW-DETR backbone),
+which lands one slice at a time across follow-up sessions; this
+commit puts the **dispatch surface** in place so every CLI mode
+(`--mode predict / val / train / export / benchmark`) and every
+public API method (`yolocpp::YOLO("rfdetr-base.pt")`) routes through
+a registered adapter and produces a clear, slice-tagged error
+instead of silently mis-loading weights or returning garbage
+detections.
+
+- `include/yolocpp/models/rfdetr.hpp` + `src/models/rfdetr.cpp` —
+  scale enum (`kRfdetrNano / Small / Base / Medium / Large`),
+  `rfdetr_scale_from_letter("n|s|b|m|l")`,
+  `rfdetr_default_imgsz(scale)` (560 for DINOv2-large, 640 elsewhere),
+  `RFDetr` (detect) and `RFDetrSegment` holders. All forward,
+  forward-train, and `load_from_state_dict` paths throw with
+  `"rfdetr <area>: not yet implemented — tracked under TODO #65X"`
+  pointing at the slice that owns the missing piece.
+- `src/registry/version_registry.cpp::make_rfdetr()` registers the
+  adapter under `version_id="rfdetr"`,
+  `supported_tasks={"detect","segment"}`, with throwing hooks for
+  every command; `register_all_versions()` picks it up next to the
+  twelve YOLO versions.
+- `src/cli/resolve.cpp` — filename regex extended to match
+  `rfdetr-(n|s|b|m|l|nano|small|base|medium|large)(-seg)?\.pt`;
+  `version_from_filename("rfdetr-*.pt")` returns `"rfdetr"`.
+- `src/cli/commands.cpp` — `kKnown` known-version vector includes
+  `"rfdetr"` so the CLI's existing `[error] unknown version` path
+  doesn't fire before the registry's slice-tagged throw can run.
+
+This is **architecture stub only** — no backbone, no transformer, no
+trained weights, no ONNX emitter. Subsequent commits land #65A
+(DINOv2 / LW-DETR backbone), #65B (transformer encoder), #65C
+(decoder + object-query head), #65D (`rfdetr-*.pt` → our `.pt`
+converter), #65E (predict / NMS-free decode), #65F (Hungarian
+matching loss surface), #65G (train loop integration), #65H
+(validator + per-area mAP), #65I (ONNX emitter), #65J (TRT
+pipeline), #65K (segment mask head + seg variant), #65L (per-variant
+parity smokes against upstream).
+
+### Tracked
+
+- TODO #65 + #65A..#65L breakdown filed in `TODO.md`.
+
+---
+
 ## [0.30.0] — 2026-05-02
 
 Cross-cutting overhaul. Five MINOR-worthy bodies of work landed in

@@ -123,6 +123,7 @@ add_library(yolocpp_core
   src/models/yolo13.cpp
   src/models/yolo26.cpp
   src/models/yolo26_tasks.cpp
+  src/models/rfdetr.cpp
   src/inference/task_predictors.cpp
   src/tasks/classify_train.cpp
   src/tasks/segment_train.cpp

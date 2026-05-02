@@ -1007,7 +1007,7 @@ int predict_one_image(const std::string& task, const std::string& weights,
 
     static const std::vector<std::string> kKnown = {
         "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
-        "v11", "v12", "v13", "v26", "rtdetr"};
+        "v11", "v12", "v13", "v26", "rtdetr", "rfdetr"};
     if (std::find(kKnown.begin(), kKnown.end(), version) == kKnown.end()) {
       std::cerr << "[error] unrecognised YOLO version '" << version
                 << "' — supported set: yolo3..yolo13, yolo26\n";

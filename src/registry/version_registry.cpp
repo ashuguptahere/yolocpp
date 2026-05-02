@@ -35,6 +35,7 @@
 #include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
+#include "yolocpp/models/rfdetr.hpp"
 #include "yolocpp/datasets/yolo_dataset.hpp"
 #include "yolocpp/engine/benchmark.hpp"
 #include "yolocpp/engine/benchmark_internal.hpp"
@@ -911,6 +912,79 @@ VersionAdapter make_v26() {
   return a;
 }
 
+// ─── RF-DETR (#65) ───────────────────────────────────────────────────────
+// Scaffold-only adapter. Every hook routes to the throw-stubs in
+// `models::RFDetr` which surface "not yet implemented — see #65X"
+// rather than silently producing wrong output. Once #65A..#65L
+// land slice by slice, each hook gets a real implementation; the
+// registry surface itself doesn't need to change.
+VersionAdapter make_rfdetr() {
+  VersionAdapter a;
+  a.version_id              = "rfdetr";
+  a.display_name            = "rfdetr";
+  a.upstream_year           = "2025";
+  a.default_export_basename = "rfdetr";
+  a.supported_tasks         = {"detect", "segment"};
+  a.default_imgsz = [](const std::string& scale, const std::string& task) {
+    if (task == "classify") return 224;  // not supported, but keep symmetry
+    auto s = models::rfdetr_scale_from_letter(scale);
+    return models::rfdetr_default_imgsz(s);
+  };
+  // Every hook below constructs an RFDetr / RFDetrSegment holder and
+  // calls into a method that throws. Caller gets a clear error
+  // pointing at the slice that owns the missing piece. This is the
+  // honest version of "scaffolded" — the dispatch surface compiles
+  // and links, but no path silently mis-loads weights or returns
+  // garbage detections.
+  a.export_onnx = [](const std::string& weights, const std::string& scale,
+                      int nc, const std::string& task,
+                      const std::string& path,
+                      const serialization::OnnxExportConfig& cfg) {
+    (void)weights; (void)nc; (void)path; (void)cfg;
+    if (task == "segment") {
+      models::RFDetrSegment m(models::rfdetr_scale_from_letter(scale), nc);
+      m->load_from_state_dict({});  // throws
+    } else {
+      models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
+      m->load_from_state_dict({});  // throws
+    }
+    throw std::runtime_error("rfdetr export_onnx: scaffolded only — see #65I");
+  };
+  a.predict_to_file = [](const std::string&, const std::string&,
+                          const std::string&, int, const std::string&,
+                          const std::string& scale, int nc,
+                          const inference::NMSConfig&) {
+    models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
+    m->load_from_state_dict({});  // throws via #65D
+    return std::vector<inference::Detection>{};
+  };
+  a.run_val = [](const std::string&, const std::string& scale, int nc,
+                  datasets::YoloDataset&, const torch::Device&) {
+    models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
+    m->load_from_state_dict({});  // throws via #65D
+    return VersionAdapter::ValResult{};
+  };
+  a.run_train_detect = [](const std::string&, const std::string& scale,
+                           int nc, datasets::YoloDataset,
+                           const engine::TrainConfig&) {
+    models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
+    m->forward_train(torch::zeros({1, 3, 32, 32}));  // throws via #65F
+  };
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat&,
+                      const std::string& scale) {
+    models::RFDetr m(models::rfdetr_scale_from_letter(scale), cfg.nc);
+    m->forward_eval(torch::zeros({1, 3, cfg.imgsz, cfg.imgsz}));  // throws
+    return engine::BenchResult{};
+  };
+  a.make_frame_predictor = [](const std::string&, const std::string& scale,
+                               int nc, int, const std::string&) {
+    models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
+    m->forward_eval(torch::zeros({1, 3, 32, 32}));  // throws via #65C
+    return std::unique_ptr<inference::FramePredictor>{};
+  };
+  return a;
+}
+
 }  // namespace
 
 void register_all_versions() {
@@ -929,6 +1003,7 @@ void register_all_versions() {
     r.register_version(make_v12());
     r.register_version(make_v13());
     r.register_version(make_v26());
+    r.register_version(make_rfdetr());
   });
 }
 

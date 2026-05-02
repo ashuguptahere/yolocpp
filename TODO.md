@@ -336,6 +336,34 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 
 ---
 
+## 2B. RF-DETR family (#65 — landed scaffold 2026-05-02 in 0.31.0)
+
+First non-YOLO architecture. Transformer-based DETR-family detector
+(encoder/decoder + object queries + Hungarian-matching set loss +
+DINOv2 / LW-DETR backbone). Scaffold is registered in the registry
+under `version_id="rfdetr"`; every CLI / API path dispatches to a
+slice-tagged throw until the corresponding sub-task lands. Variants:
+`rfdetr-{n,s,b,m,l}.pt` for detect, `rfdetr-{n,s,b,m,l}-seg.pt` for
+segment.
+
+| # | scope | priority | session-cost estimate | blockers |
+|---|-------|----------|------------------------|----------|
+| #65   | Top-level RF-DETR family (umbrella for #65A..#65L). Scaffold landed 0.31.0; all entry points throw with slice tags. | high | many sessions | — |
+| #65A  | Backbones: DINOv2 (ViT-L, patch=14, img=560) for `rfdetr-l`; LW-DETR-tiny / -small / -base / -medium for the smaller scales. Implement as standalone modules in `src/models/dinov2.cpp` + `src/models/lw_detr_backbone.cpp`. | high | 1-2 sessions | — |
+| #65B  | Transformer encoder (multi-scale deformable attention, sine pos-emb, dropout-free at eval). | high | 1 session | #65A |
+| #65C  | Decoder + object-query head (cross-attn → query refinement → cls + bbox MLPs; NMS-free `[B, Q, 4+nc]` output, sigmoided cls). Wire `RFDetrImpl::forward_eval`. | high | 1 session | #65B |
+| #65D  | `.pt` converter: `rfdetr-<scale>.pt` (upstream pickled state-dict from Roboflow's `rf-detr` repo) → our format. Reuse `serialization/pt_loader.cpp` + add a per-key remapping table in `src/serialization/rfdetr_weights.cpp`. Wire `RFDetrImpl::load_from_state_dict`. | high | 1 session | #65A,B,C |
+| #65E  | Predict path: `inference::FramePredictor`-style decoder with no NMS (top-Q queries, score threshold, area filter). Wire `predict_to_file` adapter hook. | high | 0.5 session | #65C,D |
+| #65F  | Hungarian-matching set loss (cost = λ_cls·focal + λ_bbox·L1 + λ_giou·GIoU; scipy.optimize.linear_sum_assignment ported to C++ — vendored implementation in `src/losses/hungarian.cpp`). Wire `RFDetrImpl::forward_train`. | high | 1 session | #65C |
+| #65G  | Trainer integration: per-version `LossTraits<RFDetr>` specialization in `engine/trainer.cpp`; reuse the templated `TrainerT<M>` surface. Wire `run_train_detect` adapter hook. | high | 0.5 session | #65F |
+| #65H  | Validator + per-area mAP (S/M/L per #54). Wire `run_val` adapter hook. Drop-in via existing `engine::Validator` once forward_eval lands. | high | 0.25 session | #65E + #54 mAP S/M/L |
+| #65I  | ONNX emitter: `src/serialization/rfdetr_onnx.cpp::export_rfdetr_onnx`. Standard transformer ops (MatMul, Softmax, Add, LayerNorm, Gather, Gemm) — mostly reusable; deformable-attn op needs a custom decomposition into per-level grid_sample (no `MultiscaleDeformableAttention` op in stock onnxruntime). Wire `export_onnx` adapter hook. | high | 1 session | #65D |
+| #65J  | TRT pipeline: route through shared `build_trt_engine`; verify TF32 on Blackwell sm_120 doesn't regress query attention numerics. Wire `benchmark_pt` adapter hook. | high | 0.5 session | #65I |
+| #65K  | Segment variant: per-query mask coefficients + shared proto bank (à la YOLACT, mirrored from YOLO's segment head); wire `RFDetrSegment` forward + load_state_dict + a `-seg` filename suffix. | high | 1 session | #65E + segment-task infra |
+| #65L  | Per-variant parity smokes: `tests/test_rfdetr_e2e.cpp` (SKIP-gated when weights missing) + ONNX-vs-Python forward comparison through onnxruntime CPU on a fixed `arange/(N-1)` input; cls max\|Δ\| ≤ 1e-3 detect, ≤ 5e-3 segment. | medium | 0.25 session | #65I,K |
+
+---
+
 ## 3. Pending — by version
 
 ### yolo3

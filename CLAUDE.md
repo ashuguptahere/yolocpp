@@ -180,7 +180,16 @@ yolo11        ✅       ✅            ✅       ✅                ✅
 yolo12        ✅       ✅            ✅       ✅                ✅
 yolo13        ✅       ✅            ✅       ✅                ✅
 yolo26        ✅       ✅            ✅       ✅                ✅
+rfdetr        🟡       🟡            🟡       🟡                🟡
 ```
+
+🟡 RF-DETR (#65) is scaffolded only — adapter registered, every
+entry point throws with a slice-tagged error pointing at #65A..#65L.
+Variants `rfdetr-{n,s,b,m,l}.pt` for detect and
+`rfdetr-{n,s,b,m,l}-seg.pt` for segment land slice-by-slice over
+follow-up sessions (DINOv2 / LW-DETR backbones, transformer
+encoder/decoder, object-query head, Hungarian-matching loss, ONNX
+emitter, TRT pipeline, segment mask head).
 
 v6 variants: n / s / m / l + s/m/l/x_mbla + n6/s6/m6/l6 (12 total).
 v7 variants: base / tiny / x + w6 / e6 / d6 / e6e (7 total). v9 has no
