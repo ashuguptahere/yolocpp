@@ -67,6 +67,14 @@ struct Dinov2Cfg {
   // ViT blocks whose output is captured as a feature tap. Default
   // `[3,6,9,12]` (config) → `[2,5,8,11]` here.
   std::vector<int> tap_blocks = {2, 5, 8, 11};
+  // Windowed-attention partitioning. After embeddings, the spatial
+  // grid is reshaped into `num_windows × num_windows` non-overlapping
+  // windows, each becoming an independent batch sample for windowed
+  // attention. At blocks NOT in `window_block_indexes`, the windows
+  // are merged (full self-attention across the entire grid) and
+  // re-split after.
+  int              num_windows = 1;
+  std::vector<int> window_block_indexes;
 };
 
 extern const Dinov2Cfg kDinov2Small;   // C=384 (default)
@@ -92,8 +100,10 @@ TORCH_MODULE(Dinov2PatchEmbeddings);
 class Dinov2EmbeddingsImpl : public torch::nn::Module {
  public:
   Dinov2EmbeddingsImpl(const Dinov2Cfg& cfg);
-  // Returns `[B, N+1, C]` token sequence with 2D-interpolated pos
-  // embedding to match the input grid.
+  // Returns `[B*num_windows², (Hg/W)*(Wg/W)+1, C]` token sequence
+  // with 2D-interpolated pos embedding interpolated to the input
+  // grid, then split into `num_windows²` windows (each gets its
+  // own cls token broadcast).
   torch::Tensor forward(torch::Tensor x);
   torch::Tensor cls_token;
   torch::Tensor mask_token;
@@ -102,6 +112,7 @@ class Dinov2EmbeddingsImpl : public torch::nn::Module {
  private:
   int patch_size_;
   int pretrain_grid_;
+  int num_windows_;
 };
 TORCH_MODULE(Dinov2Embeddings);
 
@@ -155,25 +166,32 @@ TORCH_MODULE(Dinov2MLP);
 class Dinov2LayerImpl : public torch::nn::Module {
  public:
   Dinov2LayerImpl(const Dinov2Cfg& cfg);
-  torch::Tensor forward(torch::Tensor x);
+  // `run_full_attention=true` un-windows before self-attn and
+  // re-windows after (matches `WindowedDinov2WithRegistersLayer`
+  // upstream when block index is NOT in `window_block_indexes`).
+  torch::Tensor forward(torch::Tensor x, bool run_full_attention);
   torch::nn::LayerNorm norm1{nullptr};
   Dinov2Attention      attention{nullptr};
   Dinov2LayerScale     layer_scale1{nullptr};
   torch::nn::LayerNorm norm2{nullptr};
   Dinov2MLP            mlp{nullptr};
   Dinov2LayerScale     layer_scale2{nullptr};
+ private:
+  int num_windows_;
 };
 TORCH_MODULE(Dinov2Layer);
 
 class Dinov2EncoderImpl : public torch::nn::Module {
  public:
   Dinov2EncoderImpl(const Dinov2Cfg& cfg);
-  // Returns the per-tap features (one per `cfg.tap_blocks` entry),
-  // each in token form `[B, N+1, C]`.
+  // Returns the per-tap features in WINDOWED token form
+  // `[B*W², N_w+1, C]`. Caller is responsible for unwindowing back
+  // to the full grid.
   std::vector<torch::Tensor> forward(torch::Tensor x);
   torch::nn::ModuleList layer{nullptr};
  private:
-  std::vector<int> taps_;
+  std::vector<int>             taps_;
+  std::vector<bool>            is_windowed_;   // per-block flag
 };
 TORCH_MODULE(Dinov2Encoder);
 

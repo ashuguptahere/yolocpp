@@ -30,6 +30,76 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.44.0] — 2026-05-02
+
+### Added — DINOv2 windowed self-attention (#65L parity slice 1)
+
+Investigated upstream's per-stage forward via a Python dumper
+(`/tmp/yolocpp_parity/dump_rfdetr_forward.py`) that runs
+`rf-detr-base.pth` on a deterministic input and saves intermediate
+activations. First mismatch caught: the embeddings layer produces
+shape `[B*num_windows², (Hg/W)·(Wg/W)+1, C]` rather than
+`[B, Hg·Wg+1, C]` — RF-DETR's DINOv2 backbone partitions the patch
+grid into `num_windows × num_windows` non-overlapping windows for
+windowed self-attention. This was missing in the C++ implementation
+(0.40.0 ran full attention everywhere).
+
+Per-variant `num_windows` + `window_block_indexes` pinned from
+the upstream `WindowedDinov2WithRegistersConfig`:
+
+| variant | num_windows | window_block_indexes  |
+|---------|------------:|-----------------------|
+| nano    |     2       | [0,1,3,4,6,7,9,10]    |
+| small   |     2       | [0,1,3,4,6,7,9,10]    |
+| medium  |     2       | [0,1,3,4,6,7,9,10]    |
+| base    |     4       | [0,1,3,4,6,7,9,10]    |
+| large   |     2       | [0,1,2,4,5,7,8,10,11] |
+
+The taps blocks (full-attention by definition since they're NOT
+in `window_block_indexes`) are 0-indexed `[2,5,8,11]` for
+nano/small/medium/base and `[3,6,9,11]` for large.
+
+`Dinov2EmbeddingsImpl::forward` now reshapes after pos-embed:
+`[B, Hg·Wg+1, C]` → drop cls, view as `[B, Hg, Wg, C]`, partition
+into `[B*W², Hw·Ww, C]` (Hw=Hg/W, Ww=Wg/W), prepend a broadcast
+copy of the cls token per window.
+
+`Dinov2LayerImpl::forward(x, run_full_attention)` now takes a
+flag — when set (block index NOT in `window_block_indexes`),
+un-window into `[B, W²·Hw·Ww, C]` for full self-attention, then
+re-window back. The residual short-cut is taken against the
+ORIGINAL windowed input. `Dinov2EncoderImpl` passes the right
+flag per-block based on `is_windowed_` table.
+
+`Dinov2ModelImpl::forward` now un-windows the final tap outputs
+back to spatial form `[B, C, Hg, Wg]` so the projector receives
+the same input shape as upstream.
+
+### Status
+
+Weight binding stays at 100% for n/s/m/b detect variants
+(architecture rewrite didn't add new params). Forward through the
+full real architecture runs end-to-end with windowing applied
+correctly. Numerical parity vs Python reference still pending —
+follow-up work tracked under `#65L slice 2..N`:
+
+- Sinusoidal positional embed interleave order
+- Two-stage encoder-output proposal generation (currently uses
+  fixed `wh=0.05` prior; upstream uses `0.05 * 2^lvl`)
+- Decoder self-attn value tensor (we use v=tgt+pos, upstream v=tgt)
+- Possible LayerNorm eps mismatches (upstream uses 1e-6, we use
+  default in some places)
+- Position-embedding bicubic interpolation edge handling
+
+ctest 41/42 (only pre-existing #64).
+
+### Tracked
+
+- TODO #65L slice 1 done (windowed attention); follow-up parity
+  diffs filed under #65L itself.
+
+---
+
 ## [0.43.0] — 2026-05-02
 
 ### Added — RF-DETR real-arch forward + projector LayerNorm fix (#65F2 partial)

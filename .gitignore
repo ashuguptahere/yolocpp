@@ -26,3 +26,6 @@ data/
 *.pt
 runs/
 .claude/
+# RF-DETR upstream weight files (downloaded by /tmp/yolocpp_parity/dump_rfdetr_forward.py)
+rf-detr-*.pth
+rf-detr-*.pt

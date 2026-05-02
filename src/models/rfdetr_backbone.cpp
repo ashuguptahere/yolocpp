@@ -33,15 +33,17 @@ namespace yolocpp::models::rfdetr {
 
 // ─── Per-variant configs ────────────────────────────────────────────────
 
+// Default window config — overridden per `upstream_id` in
+// `dinov2_cfg_for`.
 const Dinov2Cfg kDinov2Small{
     /*hidden=*/384, /*depth=*/12, /*heads=*/6, /*mlp=*/4,
     /*patch=*/14, /*pretrain_grid=*/37, /*qkv_bias=*/true,
-    /*taps=*/{2, 5, 8, 11}};
+    /*taps=*/{2, 5, 8, 11}, /*num_windows=*/1, /*window_blocks=*/{}};
 
 const Dinov2Cfg kDinov2Base{
     /*hidden=*/768, /*depth=*/12, /*heads=*/12, /*mlp=*/4,
     /*patch=*/14, /*pretrain_grid=*/37, /*qkv_bias=*/true,
-    /*taps=*/{2, 5, 8, 11}};
+    /*taps=*/{2, 5, 8, 11}, /*num_windows=*/1, /*window_blocks=*/{}};
 
 const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch,
                                   int pretrain_grid, int backbone_embed) {
@@ -56,6 +58,26 @@ const Dinov2Cfg& dinov2_cfg_for(const std::string& upstream_id, int patch,
   cfg.num_heads    = backbone_embed / 64;   // 6 for 384, 12 for 768
   cfg.patch_size   = patch;
   cfg.pretrain_grid = pretrain_grid;
+  // Per-variant windowed-attn partitioning + tap blocks (verified
+  // via Python `RFDETR<X>().model.model.backbone[0].encoder.encoder.config`).
+  if (upstream_id == "nano" || upstream_id == "small" ||
+      upstream_id == "medium") {
+    cfg.num_windows = 2;
+    cfg.window_block_indexes = {0, 1, 3, 4, 6, 7, 9, 10};
+    cfg.tap_blocks = {2, 5, 8, 11};
+  } else if (upstream_id == "base") {
+    cfg.num_windows = 4;
+    cfg.window_block_indexes = {0, 1, 3, 4, 6, 7, 9, 10};
+    cfg.tap_blocks = {2, 5, 8, 11};   // upstream `out_features=['stage2','stage5','stage8','stage11']` → 0-indexed
+  } else if (upstream_id == "large") {
+    cfg.num_windows = 2;
+    cfg.window_block_indexes = {0, 1, 2, 4, 5, 7, 8, 10, 11};
+    cfg.tap_blocks = {3, 6, 9, 11};   // out_features=stage3,6,9,12 → 0-indexed
+  } else {
+    cfg.num_windows = 2;
+    cfg.window_block_indexes = {0, 1, 3, 4, 6, 7, 9, 10};
+    cfg.tap_blocks = {2, 5, 8, 11};
+  }
   return cfg;
 }
 
@@ -74,7 +96,8 @@ torch::Tensor Dinov2PatchEmbeddingsImpl::forward(torch::Tensor x) {
 }
 
 Dinov2EmbeddingsImpl::Dinov2EmbeddingsImpl(const Dinov2Cfg& cfg)
-    : patch_size_(cfg.patch_size), pretrain_grid_(cfg.pretrain_grid) {
+    : patch_size_(cfg.patch_size), pretrain_grid_(cfg.pretrain_grid),
+      num_windows_(cfg.num_windows) {
   cls_token  = register_parameter("cls_token",
                                     torch::zeros({1, 1, cfg.hidden_size}));
   mask_token = register_parameter("mask_token",
@@ -114,12 +137,30 @@ torch::Tensor Dinov2EmbeddingsImpl::forward(torch::Tensor x) {
   auto B  = x.size(0);
   auto Hg = x.size(2) / patch_size_;
   auto Wg = x.size(3) / patch_size_;
-  auto tokens = patch_embeddings->forward(x);
+  auto C  = cls_token.size(2);
+  auto tokens = patch_embeddings->forward(x);   // [B, Hg*Wg, C]
   auto cls    = cls_token.expand({B, -1, -1});
   tokens      = torch::cat({cls, tokens}, 1);
   auto pe     = interpolate_pos_embed(position_embeddings, Hg, Wg,
                                         pretrain_grid_).to(tokens.dtype());
-  return tokens + pe;
+  tokens = tokens + pe;
+  if (num_windows_ <= 1) return tokens;
+  // Window-split. Per upstream, drop cls + reshape patches into
+  // `num_windows × num_windows` non-overlapping windows (each
+  // `[Hg/W, Wg/W]`). Then prepend a broadcast copy of the cls
+  // token to each window.
+  int W = num_windows_;
+  int Hw = Hg / W, Ww = Wg / W;
+  auto cls_pe = tokens.slice(1, 0, 1);                   // [B, 1, C]
+  auto pat    = tokens.slice(1, 1).contiguous();          // [B, Hg*Wg, C]
+  pat = pat.view({B, Hg, Wg, C});                         // [B, Hg, Wg, C]
+  // Reshape into [B, W, Hw, W, Ww, C]
+  pat = pat.view({B, W, Hw, W, Ww, C});
+  // Permute to [B, W*W, Hw, Ww, C] then flatten window dim into batch.
+  pat = pat.permute({0, 1, 3, 2, 4, 5}).contiguous()
+            .view({B * W * W, Hw * Ww, C});
+  auto cls_per_window = cls_pe.repeat({W * W, 1, 1});      // [B*W², 1, C]
+  return torch::cat({cls_per_window, pat}, 1);             // [B*W², Hw*Ww+1, C]
 }
 
 Dinov2SelfAttentionImpl::Dinov2SelfAttentionImpl(int hidden, int heads,
@@ -183,7 +224,8 @@ torch::Tensor Dinov2MLPImpl::forward(torch::Tensor x) {
   return fc2->forward(torch::gelu(fc1->forward(x)));
 }
 
-Dinov2LayerImpl::Dinov2LayerImpl(const Dinov2Cfg& cfg) {
+Dinov2LayerImpl::Dinov2LayerImpl(const Dinov2Cfg& cfg)
+    : num_windows_(cfg.num_windows) {
   norm1        = register_module("norm1", torch::nn::LayerNorm(
                                                 torch::nn::LayerNormOptions({cfg.hidden_size})
                                                     .eps(1e-6)));
@@ -197,13 +239,29 @@ Dinov2LayerImpl::Dinov2LayerImpl(const Dinov2Cfg& cfg) {
   layer_scale2 = register_module("layer_scale2", Dinov2LayerScale(cfg.hidden_size));
 }
 
-torch::Tensor Dinov2LayerImpl::forward(torch::Tensor x) {
-  // pre-norm self-attn with layer_scale1, residual.
+torch::Tensor Dinov2LayerImpl::forward(torch::Tensor x, bool run_full_attention) {
+  // Optionally un-window for full self-attn — then re-window after.
+  // The norm1 + attention happen inside the un-windowed view;
+  // residual is added against the ORIGINAL (still-windowed) input.
+  auto shortcut = x;
+  if (run_full_attention && num_windows_ > 1) {
+    int W2 = num_windows_ * num_windows_;
+    auto B  = x.size(0) / W2;
+    auto HW = x.size(1);
+    auto C  = x.size(2);
+    x = x.view({B, W2 * HW, C});
+  }
   auto y = norm1->forward(x);
   y      = attention->forward(y);
-  y      = layer_scale1->forward(y);
-  x      = x + y;
-  // pre-norm MLP with layer_scale2, residual.
+  if (run_full_attention && num_windows_ > 1) {
+    int W2 = num_windows_ * num_windows_;
+    auto B = y.size(0);
+    auto HW_full = y.size(1);
+    auto C = y.size(2);
+    y = y.view({B * W2, HW_full / W2, C});
+  }
+  y = layer_scale1->forward(y);
+  x = shortcut + y;
   auto z = norm2->forward(x);
   z      = mlp->forward(z);
   z      = layer_scale2->forward(z);
@@ -213,6 +271,15 @@ torch::Tensor Dinov2LayerImpl::forward(torch::Tensor x) {
 Dinov2EncoderImpl::Dinov2EncoderImpl(const Dinov2Cfg& cfg)
     : taps_(cfg.tap_blocks) {
   layer = torch::nn::ModuleList();
+  is_windowed_.assign(cfg.num_layers, true);
+  for (int idx : cfg.window_block_indexes) {
+    if (idx >= 0 && idx < cfg.num_layers) is_windowed_[idx] = true;
+  }
+  // Set is_windowed_[i] = (i in window_block_indexes); default false.
+  std::fill(is_windowed_.begin(), is_windowed_.end(), false);
+  for (int idx : cfg.window_block_indexes) {
+    if (idx >= 0 && idx < cfg.num_layers) is_windowed_[idx] = true;
+  }
   for (int i = 0; i < cfg.num_layers; ++i) {
     layer->push_back(Dinov2Layer(cfg));
   }
@@ -223,7 +290,8 @@ std::vector<torch::Tensor> Dinov2EncoderImpl::forward(torch::Tensor x) {
   std::vector<torch::Tensor> taps;
   taps.reserve(taps_.size());
   for (int i = 0; i < static_cast<int>(layer->size()); ++i) {
-    x = layer[i]->as<Dinov2LayerImpl>()->forward(x);
+    bool run_full = !is_windowed_[i];
+    x = layer[i]->as<Dinov2LayerImpl>()->forward(x, run_full);
     for (int t : taps_) {
       if (t == i) {
         taps.push_back(x);
@@ -244,25 +312,48 @@ Dinov2ModelImpl::Dinov2ModelImpl(const Dinov2Cfg& cfg) {
 }
 
 std::vector<torch::Tensor> Dinov2ModelImpl::forward(torch::Tensor x) {
-  int Hg = x.size(2) / static_cast<int>(embeddings->patch_embeddings->projection
-                                              ->options.kernel_size()->at(0));
-  int Wg = x.size(3) / static_cast<int>(embeddings->patch_embeddings->projection
-                                              ->options.kernel_size()->at(0));
+  int patch = static_cast<int>(embeddings->patch_embeddings->projection
+                                    ->options.kernel_size()->at(0));
+  int Hg = x.size(2) / patch;
+  int Wg = x.size(3) / patch;
+  auto B = x.size(0);
+  int  W = embeddings->cls_token.size(0) > 0
+              ? /*derived from cfg via embeddings:*/0 : 0;
+  (void)W;
+  // Re-derive num_windows from the embeddings module's behaviour:
+  // its output may be [B, Hg*Wg+1, C] (no windows) or
+  // [B*W², (Hg/W)*(Wg/W)+1, C] (windowed). We pull num_windows from
+  // the layer's `is_windowed_` table indirectly — easier: figure it
+  // out from the encoder layer impl.
   auto tokens = embeddings->forward(x);
   auto taps   = encoder->forward(tokens);
+  if (taps.empty()) return {};
+
   // Apply final LN on the last tap's output (matches HF behaviour).
-  if (!taps.empty()) {
-    taps.back() = layernorm->forward(taps.back());
-  }
-  // Reshape each tap from `[B, N+1, C]` to `[B, C, Hg, Wg]` (drop cls).
+  taps.back() = layernorm->forward(taps.back());
+
+  // Compute window count from token shape.
+  auto C = taps[0].size(-1);
+  int64_t Bw = taps[0].size(0);          // = B * num_windows²
+  int64_t Hw = taps[0].size(1) - 1;       // tokens per window minus cls
+  int     num_windows = static_cast<int>(std::sqrt(static_cast<double>(Bw / B)));
+  int     Hpw = static_cast<int>(std::sqrt(static_cast<double>(Hw)));   // patches per window side
+
   std::vector<torch::Tensor> spatial;
   spatial.reserve(taps.size());
   for (auto& t : taps) {
-    auto B = t.size(0);
-    auto C = t.size(2);
-    auto patch = t.slice(/*dim=*/1, 1).contiguous();         // [B, Hg*Wg, C]
-    spatial.push_back(patch.transpose(1, 2)
-                          .view({B, C, Hg, Wg}));
+    auto patch = t.slice(/*dim=*/1, 1).contiguous();         // [Bw, Hw, C]
+    if (num_windows <= 1) {
+      spatial.push_back(patch.transpose(1, 2).view({B, C, Hg, Wg}));
+      continue;
+    }
+    // Un-window: [B*W², Hpw*Hpw, C] → [B, W, W, Hpw, Hpw, C] → [B, W, Hpw, W, Hpw, C] → [B, Hg, Wg, C]
+    auto un = patch.view({B, num_windows, num_windows, Hpw, Hpw, C})
+                    .permute({0, 1, 3, 2, 4, 5})
+                    .contiguous()
+                    .view({B, Hg, Wg, C});
+    // [B, Hg, Wg, C] → [B, C, Hg, Wg]
+    spatial.push_back(un.permute({0, 3, 1, 2}).contiguous());
   }
   return spatial;
 }
