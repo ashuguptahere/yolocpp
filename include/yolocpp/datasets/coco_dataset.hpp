@@ -61,6 +61,10 @@ class CocoDataset {
   int imgsz()       const { return imgsz_; }
   const std::vector<std::string>& names() const { return names_; }
 
+  // Accessors for the `--data` dispatcher (see `cli::make_dataset`).
+  const std::vector<std::string>&   paths()  const { return img_paths_; }
+  const std::vector<torch::Tensor>& labels() const { return labels_; }
+
  private:
   std::vector<std::string>    img_paths_;
   std::vector<torch::Tensor>  labels_;       // [N,5] per image (normalised)

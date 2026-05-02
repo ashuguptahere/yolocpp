@@ -46,6 +46,9 @@
 #include "yolocpp/cli/resolve.hpp"
 #include "yolocpp/core/device.hpp"
 #include "yolocpp/core/version.hpp"
+#include "yolocpp/datasets/coco_dataset.hpp"
+#include "yolocpp/datasets/flat_dataset.hpp"
+#include "yolocpp/datasets/voc_dataset.hpp"
 #include "yolocpp/datasets/yolo_dataset.hpp"
 #include "yolocpp/engine/benchmark.hpp"
 #include "yolocpp/engine/trainer.hpp"
@@ -258,7 +261,10 @@ int cmd_val(const std::string& weights, const std::string& root,
   if (names.empty()) names = yolocpp::inference::coco_names();
   int nc = (int)names.size();
   yolocpp::datasets::AugConfig aug; aug.augment = false;
-  yolocpp::datasets::YoloDataset ds(root, "val", imgsz, names, aug);
+  // Format-aware dispatch: `root` may be a YOLO-layout directory,
+  // a Pascal VOC root, a `.csv`/`.tsv` flat file, a COCO `.json`,
+  // or a `data.yaml` (#54B → CLI).
+  auto ds = make_dataset(root, "val", imgsz, names, aug);
   auto torch_dev = (device == "cpu") ? torch::Device(torch::kCPU)
                   : torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0)
                                                 : torch::Device(torch::kCPU);
@@ -320,7 +326,10 @@ int cmd_train(const std::string& root, const std::string& names_csv,
     if (!fs_scale.empty()) scale_s = fs_scale;
   }
 
-  yolocpp::datasets::YoloDataset train_ds(root, "train", imgsz, names);
+  // Format-aware dispatch: `root` accepts every loader the
+  // dispatcher knows (#54B → CLI).
+  auto train_ds = make_dataset(root, "train", imgsz, names,
+                                yolocpp::datasets::AugConfig{}, seed);
 
   yolocpp::engine::TrainConfig cfg;
   cfg.epochs     = epochs;
@@ -333,16 +342,21 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   cfg.seed       = seed;
   cfg.args_for_yaml = std::move(args_for_yaml);
 
-  // Auto-attach val split for best.pt tracking.
-  std::string val_dir = root + "/images/val";
-  if (std::filesystem::exists(val_dir) &&
-      !std::filesystem::is_empty(val_dir)) {
+  // Auto-attach val split for best.pt tracking. Try `make_dataset`
+  // with split="val"; on any error (no val split in the source
+  // format, ImageSets/val.txt missing, etc.) we silently skip the
+  // val pass and just save last.pt at the end.
+  try {
     yolocpp::datasets::AugConfig vaug; vaug.augment = false;
+    auto val_loaded = make_dataset(root, "val", imgsz, names, vaug);
     cfg.val_dataset = std::make_shared<yolocpp::datasets::YoloDataset>(
-        root, "val", imgsz, names, vaug);
-    cfg.val_every   = 1;
+        std::move(val_loaded));
+    cfg.val_every = 1;
     std::cout << "[train] val split detected (" << cfg.val_dataset->size()
               << " imgs); will track best.pt by mAP@0.5:0.95\n";
+  } catch (const std::exception&) {
+    // No val split available — train without best-tracking. The
+    // user can run `--mode val` separately on `last.pt`.
   }
 
   std::string v_hint =
@@ -1133,5 +1147,74 @@ int predict_one_image(const std::string& task, const std::string& weights,
 // `cmd_dispatch_flag_style` lives in `src/cli/main.cpp` — it's the
 // only CLI11 consumer in the codebase, and pulling CLI11 into the
 // core static library would balloon yolocpp_core's include surface.
+
+// ─── Dataset format dispatcher (#54B → CLI) ──────────────────────────────
+// Auto-detects which loader to use from the `--data` value and
+// funnels everything through `YoloDataset`'s pre-loaded ctor so the
+// trainer + validator can stay typed on a single dataset class. The
+// detection rules are intentionally simple — extension/sniff first,
+// existence check second; ambiguous specs error.
+datasets::YoloDataset make_dataset(
+    const std::string& spec, const std::string& split, int imgsz,
+    const std::vector<std::string>& names,
+    const datasets::AugConfig& aug, std::uint64_t seed) {
+  namespace fs = std::filesystem;
+
+  auto lower_ext = [](const fs::path& p) {
+    auto s = p.extension().string();
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+  };
+
+  // (1) data.yaml — resolve through the existing dataset resolver
+  // (which honours `path:` / `train:` / `val:` / `download:` /
+  // `names:`) and recurse on the resolved root directory.
+  if (auto ext = lower_ext(spec); ext == ".yaml" || ext == ".yml") {
+    auto root = yolocpp::cli::resolve_dataset(spec);
+    return make_dataset(root, split, imgsz, names, aug, seed);
+  }
+
+  // (2) Flat CSV / TSV.
+  if (auto ext = lower_ext(spec); ext == ".csv" || ext == ".tsv") {
+    datasets::FlatDataset f(spec, split, imgsz, names, aug, seed);
+    // Funnel through YoloDataset's pre-loaded ctor.
+    return datasets::YoloDataset(f.paths(), f.labels(), imgsz, names, aug);
+  }
+
+  // (3) COCO JSON.
+  if (auto ext = lower_ext(spec); ext == ".json") {
+    // images_dir defaults to <json's parent>; users can override by
+    // sym-linking the json next to the images. (#54B2 will accept a
+    // sibling `coco_images_dir:` key in data.yaml.)
+    datasets::CocoDataset c(spec, /*images_dir=*/"", imgsz, aug);
+    auto coco_names = c.names();  // dense [0,N) names from the JSON itself
+    return datasets::YoloDataset(c.paths(), c.labels(), imgsz,
+                                  coco_names, aug);
+  }
+
+  // (4) Pascal VOC layout (directory containing
+  //     JPEGImages/ + Annotations/ + ImageSets/Main/<split>.txt).
+  if (fs::is_directory(spec)) {
+    fs::path root(spec);
+    if (fs::is_directory(root / "JPEGImages") &&
+        fs::is_directory(root / "Annotations") &&
+        fs::is_directory(root / "ImageSets" / "Main")) {
+      // names default to canonical 20 unless caller passed something.
+      auto voc_names = names.empty() ? datasets::voc_default_names() : names;
+      datasets::VocDataset v(spec, split, imgsz, voc_names, aug);
+      return datasets::YoloDataset(v.paths(), v.labels(), imgsz,
+                                    voc_names, aug);
+    }
+    // (5) YOLO-format directory layout — existing path. Pass through
+    // to the original ctor.
+    return datasets::YoloDataset(spec, split, imgsz, names, aug);
+  }
+
+  throw std::runtime_error(
+      "make_dataset: '" + spec +
+      "' isn't recognised — expected a directory (YOLO / VOC layout), "
+      "a .csv/.tsv (flat format), a .json (COCO), or a .yaml/.yml "
+      "(data.yaml).");
+}
 
 }  // namespace yolocpp::cli

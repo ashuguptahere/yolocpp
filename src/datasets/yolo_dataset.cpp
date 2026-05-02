@@ -126,6 +126,27 @@ YoloDataset::YoloDataset(std::vector<std::string> img_paths,
     throw std::runtime_error("YoloDataset: image/label list size mismatch");
 }
 
+// Pre-loaded ctor: COCO JSON / Pascal VOC / Flat CSV all parse into
+// (img_paths, per-image [N,5] label tensors), then funnel through
+// here so downstream trainer + validator can stay typed on
+// `YoloDataset`. `lbl_paths_` is filled with empty strings of the
+// matching length so any size-check elsewhere still works.
+YoloDataset::YoloDataset(std::vector<std::string> img_paths,
+                          std::vector<torch::Tensor> labels,
+                          int imgsz, std::vector<std::string> names,
+                          AugConfig aug)
+    : img_paths_(std::move(img_paths)),
+      lbl_paths_(),
+      pre_labels_(std::move(labels)),
+      imgsz_(imgsz),
+      names_(std::move(names)),
+      aug_(std::move(aug)) {
+  if (img_paths_.size() != pre_labels_.size())
+    throw std::runtime_error(
+        "YoloDataset(pre-loaded): img_paths/labels size mismatch");
+  lbl_paths_.assign(img_paths_.size(), "");
+}
+
 YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
   YoloExample ex;
   ex.img_path = img_paths_[idx];
@@ -165,8 +186,12 @@ YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
 
   ex.img = inference::image_to_tensor(lb_img);
 
-  // Targets: read normalized YOLO labels and map into letterboxed pixel coords.
-  auto labels = load_targets(lbl_paths_[idx]);  // [N, 5] (cls, cx, cy, w, h) ∈ [0,1]
+  // Targets: prefer pre-loaded tensors when the dataset was built
+  // from a non-YOLO format (#54B); otherwise parse the .txt file.
+  auto labels = !pre_labels_.empty()
+                  ? pre_labels_[idx]
+                  : load_targets(lbl_paths_[idx]);
+  // [N, 5] (cls, cx, cy, w, h) ∈ [0,1]
   if (labels.size(0) == 0) {
     ex.targets = torch::zeros({0, 5}, torch::kFloat32);
     return ex;

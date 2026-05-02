@@ -77,6 +77,18 @@ class YoloDataset {
               int imgsz, std::vector<std::string> names,
               AugConfig aug = {});
 
+  // From pre-loaded (img_paths, per-image label tensors). Used by
+  // the `--data` dispatcher to fold COCO JSON / Pascal VOC / Flat
+  // CSV all into the same downstream Dataset type so trainer +
+  // validator stay typed on `YoloDataset` without virtual dispatch
+  // (see `cli::make_dataset`). `labels[i]` is a [N,5] float32 tensor
+  // of (cls, cx, cy, w, h) in NORMALISED [0,1] coords (same shape
+  // the per-line YOLO `.txt` decode produces).
+  YoloDataset(std::vector<std::string> img_paths,
+              std::vector<torch::Tensor> labels,
+              int imgsz, std::vector<std::string> names,
+              AugConfig aug = {});
+
   std::size_t size() const { return img_paths_.size(); }
 
   // Get a single example. Thread-safe (uses a per-call RNG seed).
@@ -99,6 +111,12 @@ class YoloDataset {
  private:
   std::vector<std::string>  img_paths_;
   std::vector<std::string>  lbl_paths_;
+  // When non-empty, `get()` reads labels from this in-memory tensor
+  // list instead of parsing `lbl_paths_[idx]` off disk. Populated by
+  // the pre-loaded ctor that the format dispatcher uses (#54B/CLI
+  // wiring). `lbl_paths_` stays as a parallel placeholder of empty
+  // strings in that mode so size checks elsewhere keep working.
+  std::vector<torch::Tensor> pre_labels_;
   int                       imgsz_ = 640;
   std::vector<std::string>  names_;
   AugConfig                 aug_;

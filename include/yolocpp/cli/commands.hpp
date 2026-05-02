@@ -15,7 +15,8 @@
 #include <utility>
 #include <vector>
 
-#include "yolocpp/inference/predictor.hpp"  // Detection
+#include "yolocpp/datasets/yolo_dataset.hpp"  // YoloDataset, AugConfig
+#include "yolocpp/inference/predictor.hpp"    // Detection
 
 namespace yolocpp::cli {
 
@@ -73,5 +74,24 @@ std::string normalise_device(std::string d);
 // CLI dispatcher (`--export-after-train onnx,trt` etc.) and by the
 // API; defined alongside the cmd_* functions in commands.cpp.
 std::vector<std::string> split_csv(const std::string& s);
+
+// Format-aware dataset factory (#54B → CLI). Auto-detects:
+//   - `<spec>.csv` / `.tsv`                     → FlatDataset
+//   - `<spec>.json`                             → CocoDataset (images_dir
+//                                                  defaults to <spec>'s parent)
+//   - `<spec>/JPEGImages` + `Annotations`       → VocDataset
+//   - `<spec>/images/<split>` + `labels/...`    → YoloDataset (existing)
+//   - `<spec>.yaml` / `.yml`                    → resolve via data.yaml
+//                                                  (root is the resolved dir)
+// All four route through `YoloDataset`'s pre-loaded ctor so trainer
+// + validator stay typed on a single concrete dataset class. `names`
+// supplies class names for formats that don't carry their own
+// (YOLO + Flat); ignored for COCO + VOC where names come from the
+// dataset itself (COCO categories / VOC default-20).
+yolocpp::datasets::YoloDataset make_dataset(
+    const std::string& spec, const std::string& split, int imgsz,
+    const std::vector<std::string>& names,
+    const yolocpp::datasets::AugConfig& aug = {},
+    std::uint64_t seed = 0);
 
 }  // namespace yolocpp::cli

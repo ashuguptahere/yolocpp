@@ -73,6 +73,10 @@ class FlatDataset {
   int        imgsz()       const { return imgsz_; }
   const std::vector<std::string>& names() const { return names_; }
 
+  // Accessors for the `--data` dispatcher (see `cli::make_dataset`).
+  const std::vector<std::string>&   paths()  const { return img_paths_; }
+  const std::vector<torch::Tensor>& labels() const { return labels_; }
+
  private:
   // After parsing, one entry per image; labels_[i] is an [N,5]
   // tensor with normalised (cls, cx, cy, w, h) — shape matches what
