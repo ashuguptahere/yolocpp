@@ -46,4 +46,12 @@ struct StateDict {
 StateDict load_state_dict(const std::string& pt_path,
                           const std::string& submodel = "model");
 
+// Variant for checkpoints saved as `torch.save({'model': model.state_dict(),
+// …})` — i.e. the entry is already a flat `Dict[str, Tensor]` rather
+// than a pickled nn.Module. Used by RF-DETR (`rf-detr-*.pth/.pt`) and
+// many DETR-family checkpoints. Falls through to the module-shaped
+// path if the entry is module-shaped instead.
+StateDict load_flat_state_dict(const std::string& pt_path,
+                                const std::string& submodel = "model");
+
 }  // namespace yolocpp::serialization

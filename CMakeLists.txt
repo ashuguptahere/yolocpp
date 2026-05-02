@@ -140,6 +140,7 @@ add_library(yolocpp_core
   src/serialization/yolov10_weights.cpp
   src/serialization/yolov3_weights.cpp
   src/serialization/onnx_export.cpp
+  src/serialization/rfdetr_weights.cpp
   src/serialization/trt_export.cpp
   src/inference/trt_predictor.cpp
   src/inference/letterbox.cpp

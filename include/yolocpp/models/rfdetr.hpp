@@ -129,11 +129,19 @@ class RFDetrImpl : public torch::nn::Module {
   // for Hungarian-matching loss. Throws.
   std::vector<torch::Tensor> forward_train(torch::Tensor x);
 
-  // Loads upstream Roboflow `rfdetr-<scale>.pt` keys. Throws today;
-  // implementation under #65D will fuse + rename keys to match our
-  // parameter layout.
+  // Loads upstream Roboflow `rfdetr-<scale>.pt` keys. **Transitional:**
+  // until the architecture rewrite (#65A2..D2) lands, the scaffold's
+  // module names don't match upstream — most keys go unmatched. The
+  // count of matched parameters is returned so callers can assert
+  // progress (currently zero; will climb as each #65*2 module lands).
   int load_from_state_dict(
       const std::vector<std::pair<std::string, at::Tensor>>& entries);
+
+  // Direct load from an upstream `.pt` / `.pth` path. Routes through
+  // `serialization::load_rfdetr_pt` (#65E2). Returns matched param
+  // count. Strict mode (post-#65D2) will throw on any unmatched key.
+  int load_from_upstream_pt(const std::string& pt_path,
+                              bool strict = false);
 
   // Stride is conceptual for DETR-family models (output is per-query
   // not per-anchor); `nc` + `num_queries` are the meaningful shape

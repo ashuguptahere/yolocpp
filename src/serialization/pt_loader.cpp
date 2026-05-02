@@ -756,4 +756,49 @@ StateDict load_state_dict(const std::string& pt_path,
   return out;
 }
 
+// Walk a generic dict whose keys are already dotted parameter names and
+// whose values are tensors (possibly wrapped in IValue Object form).
+// Returns true if the dict was flat (any tensor-valued entry encountered).
+static bool flatten_flat_dict(const ValuePtr& v, StateDict& out) {
+  if (!v || !v->is_dict()) return false;
+  bool any = false;
+  for (const auto& [k, val_in] : std::get<7>(v->v)) {
+    if (!k || !k->is_str()) continue;
+    const auto& name = std::get<4>(k->v);
+    auto val = unwrap(val_in);
+    if (val && val->is_tensor()) {
+      out.entries.emplace_back(name, std::get<11>(val->v));
+      any = true;
+    }
+  }
+  return any;
+}
+
+StateDict load_flat_state_dict(const std::string& pt_path,
+                                const std::string& submodel) {
+  auto file_adapter = std::make_shared<caffe2::serialize::FileAdapter>(pt_path);
+  caffe2::serialize::PyTorchStreamReader zip(file_adapter);
+  std::tuple<at::DataPtr, size_t> rec = zip.getRecord("data.pkl");
+  auto&  data_ptr  = std::get<0>(rec);
+  size_t data_size = std::get<1>(rec);
+  Unpickler u(reinterpret_cast<const char*>(data_ptr.get()), data_size, zip);
+  auto root = u.run();
+
+  auto* sub = dict_get(root, submodel);
+  if (sub == nullptr || !*sub)
+    throw std::runtime_error("submodel key not found: " + submodel);
+
+  auto state = unwrap(*sub);
+  StateDict out;
+  // Try flat-dict first (RF-DETR / DETR family).
+  if (flatten_flat_dict(state, out)) return out;
+  // Fall through to module-shaped layout.
+  flatten_module(state, /*prefix=*/"", out);
+  if (out.entries.empty())
+    throw std::runtime_error(
+        "load_flat_state_dict: no tensor entries under submodel '" +
+        submodel + "'");
+  return out;
+}
+
 }  // namespace yolocpp::serialization

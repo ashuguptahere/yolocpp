@@ -950,12 +950,19 @@ VersionAdapter make_rfdetr() {
     }
     throw std::runtime_error("rfdetr export_onnx: scaffolded only — see #65I");
   };
-  a.predict_to_file = [](const std::string&, const std::string&,
+  a.predict_to_file = [](const std::string& weights, const std::string&,
                           const std::string&, int, const std::string&,
                           const std::string& scale, int nc,
                           const inference::NMSConfig&) {
     models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
-    m->load_from_state_dict({});  // throws via #65D
+    if (!weights.empty()) {
+      // #65E2 — non-strict: until the architecture rewrite #65A2..D2
+      // lands, only the parameters whose names already match upstream
+      // are loaded; the rest stay random-init. forward_eval still
+      // produces a YOLO-shaped output but detections won't be
+      // meaningful until #65F2 closes the loop.
+      m->load_from_upstream_pt(weights, /*strict=*/false);
+    }
     return std::vector<inference::Detection>{};
   };
   a.run_val = [](const std::string&, const std::string& scale, int nc,

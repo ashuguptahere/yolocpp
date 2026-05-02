@@ -7,7 +7,11 @@
 
 #include "yolocpp/models/rfdetr.hpp"
 
+#include <iostream>
 #include <stdexcept>
+#include <unordered_map>
+
+#include "yolocpp/serialization/rfdetr_weights.hpp"
 
 namespace yolocpp::models {
 
@@ -127,9 +131,33 @@ std::vector<torch::Tensor> RFDetrImpl::forward_train(torch::Tensor x) {
 }
 
 int RFDetrImpl::load_from_state_dict(
-    const std::vector<std::pair<std::string, at::Tensor>>& /*entries*/) {
-  unimplemented("load_from_state_dict",
-                "#65D (rfdetr-<scale>.pt → our .pt converter)");
+    const std::vector<std::pair<std::string, at::Tensor>>& entries) {
+  // Bind upstream tensors onto same-named parameters/buffers on this
+  // module. During the architecture rewrite (#65A2..D2) the scaffold's
+  // module names DON'T match upstream, so most keys go unmatched —
+  // that's expected and not an error in the transitional period.
+  torch::NoGradGuard ng;
+  std::unordered_map<std::string, at::Tensor*> dst;
+  auto params = named_parameters(/*recurse=*/true);
+  for (auto& kv : params) dst.emplace(kv.key(), &kv.value());
+  auto buffers = named_buffers(/*recurse=*/true);
+  for (auto& kv : buffers) dst.emplace(kv.key(), &kv.value());
+  int matched = 0;
+  for (const auto& [k, t] : entries) {
+    auto it = dst.find(k);
+    if (it == dst.end()) continue;
+    if (it->second->sizes() != t.sizes()) continue;
+    it->second->copy_(t.to(it->second->dtype()));
+    ++matched;
+  }
+  return matched;
+}
+
+int RFDetrImpl::load_from_upstream_pt(const std::string& pt_path,
+                                       bool strict) {
+  auto rep = yolocpp::serialization::load_rfdetr_pt(pt_path, *this, strict);
+  std::cout << rep.summary() << "\n";
+  return rep.matched;
 }
 
 // ─── Segment ─────────────────────────────────────────────────────────────

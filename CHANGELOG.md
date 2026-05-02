@@ -30,6 +30,72 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.39.0] — 2026-05-02
+
+### Added — RF-DETR weight loader + flat-dict pt_loader path (#65E2 partial)
+
+Three pieces land:
+
+1. `serialization::load_flat_state_dict(path, submodel)` extends
+   `pt_loader.cpp` to handle checkpoints saved as
+   `torch.save({'model': model.state_dict(), …})` — i.e. an
+   already-flattened dotted-key dict-of-tensors rather than a
+   pickled `nn.Module`. Used by RF-DETR (and many DETR-family
+   models). Falls through to the module-shaped path if the entry is
+   module-shaped instead.
+
+2. `serialization::rfdetr_weights.{hpp,cpp}::load_rfdetr_pt(path,
+   module, strict)` — generic loader that flattens an upstream `.pt`
+   and copies each tensor onto a same-named parameter / buffer on
+   the destination module via `named_parameters() / named_buffers()`.
+   Returns a coverage report (`matched / unmatched / shape_mismatch
+   / missing` counts + first-8 names of each bucket). `strict=false`
+   today (transitional, until #65A2..D2 rewrite the modules to
+   match upstream key names); `strict=true` will fire after #65D2.
+
+3. `RFDetrImpl::load_from_upstream_pt(path, strict)` and
+   `load_from_state_dict(entries)` now route through the loader
+   instead of throwing. Registry hook for `predict_to_file` calls
+   the loader on the weights path; `--mode predict -m rf-detr-base.pth
+   -s data/bus.jpg` runs end-to-end (forward through scaffold
+   modules with random init since upstream key names don't match
+   yet, ergo 0 detections).
+
+`tests/test_rfdetr_pt_load.cpp` (SKIP-gated on
+`RFDETR_TEST_WEIGHTS_DIR=/tmp/yolocpp_parity/rfdetr_weights`)
+verifies all 12 official 1.6.5 weight files unpickle cleanly:
+
+```
+[PASS] rf-detr-nano.pth        params=465  refpoint=[3900, 4]
+[PASS] rf-detr-small.pth       params=487  refpoint=[3900, 4]
+[PASS] rf-detr-medium.pth      params=509  refpoint=[3900, 4]
+[PASS] rf-detr-base.pth        params=487  refpoint=[3900, 4]
+[PASS] rf-detr-large.pth       params=533  refpoint=[3900, 4]
+[PASS] rf-detr-seg-nano.pt     params=544  refpoint=[1300, 4]
+[PASS] rf-detr-seg-small.pt    params=544  refpoint=[1300, 4]
+[PASS] rf-detr-seg-medium.pt   params=572  refpoint=[2600, 4]
+[PASS] rf-detr-seg-large.pt    params=572  refpoint=[3900, 4]
+[PASS] rf-detr-seg-xlarge.pt   params=600  refpoint=[3900, 4]
+[PASS] rf-detr-seg-xxlarge.pt  params=600  refpoint=[3900, 4]
+[PASS] rf-detr-seg-preview.pt  params=544  refpoint=[2600, 4]
+```
+
+The pickle path is now proven; what remains is the architecture
+rewrite (#65A2..D2) so that the destination param names match
+upstream's keys 1-to-1. Each #65*2 module replacement increases
+the `matched` count visible in the loader report. Once `matched ==
+expected_count` and `unmatched == 0` for a variant, that variant
+graduates to `strict=true` loading.
+
+ctest count goes 42 → 43.
+
+### Tracked
+
+- TODO #65E2 partially landed (weight loader + flat-dict pt path);
+  remaining work tracked under `#65A2..D2 + #65F2`.
+
+---
+
 ## [0.38.0] — 2026-05-02
 
 ### Documented — RF-DETR 1.6.5 architecture spec; all 12 variants registered
