@@ -259,11 +259,12 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #53  | ✅ closed — strict cross-backend parity ctest (#53A) + per-version TRT round-trip in the sweep (#53B). | — | landed | — |
 | #53A | ✅ closed — `tests/test_cross_backend_parity.cpp`. For each cell: export ONNX through the registry, build TRT FP32 + FP16 engines, run libtorch / TRT-FP32 / TRT-FP16 on bus.jpg, assert det count within ±1 of libtorch and IoU ≥ 0.50 same-class match for ≥ N-1 of N libtorch dets. Cells: v8n / v11s / v12s / v13s — 4/4 pass with `matched N/N`. v26 deliberately excluded (NMS-free deploy form's output shape doesn't unpack through the standard TrtPredictor post-process; covered by `test_v26_e2e` separately). Engines cached in `build/parity_cache/` for repeat speed. | — | landed | — |
 | #53B | ✅ closed — `scripts/full_matrix_sweep.sh` phase 7 added: per-version `.pt → .trt → predict` round-trip across all 12 supported versions. **Sweep total now 164/164 PASS (was 152)** — adds the 12 trt-roundtrip cells. Catches export-emitter / TRT-parser / runtime regressions at sweep-time. | — | landed | — |
-| #54  | Dataset / training infra v2 | medium | 2 sessions | partly depends on #46 (factory pattern leaks into dataset format dispatch) |
-| #54A | New single-file dataset format with a `split` column (train/val/test); shuffled deterministically by `--seed` | — | within #54 | — |
-| #54B | Multi-format loader: YOLO (existing) + COCO JSON + the new format (autodetect) | — | within #54 | — |
-| #54C | mAP small/medium/large breakdown (COCO eval style), exposed in `val` output and `results.csv` | — | within #54 | — |
-| #54D | Mosaic + mixup augmentation (existing `datasets/yolo_dataset.hpp:20` TODO) | — | within #54 | — |
+| #54  | ✅ closed — dataset infra v2: flat-format + COCO JSON + Pascal VOC loaders, mAP S/M/L breakdown, Mosaic-4 + Mixup. | — | landed | — |
+| #54A | ✅ closed — `FlatDataset`. Single CSV/TSV with header `split,image_path,class_id,x_center,y_center,width,height`. Auto-detects delimiter; `--seed` for deterministic shuffle. | — | landed | — |
+| #54B | ✅ closed — `VocDataset` + `CocoDataset`. VOC reads `JPEGImages/Annotations/ImageSets`; XML via regex (no libxml2). COCO reads `instances_<split>.json` via a hand-rolled JSON tokenizer (no libjson per `DEPS.md`). Sparse COCO category IDs compressed to dense [0, N). Both yield the standard `YoloExample`. | — | landed | — |
+| #54C | ✅ closed — `metrics::mAPResult` extended with `map_50_95_{small,medium,large}` + `n_gt_*` counts. Three additional passes per call (COCO area buckets ≤32², ≤96², >96²). Surfaced through `cmd_val` to stdout + `runs/val/<stem>_results.txt`. Verified on coco8 (4/7/6 GT counts; mAP 0.06/0.37/0.88 on yolo11s). | — | landed | — |
+| #54D | ✅ closed — Mosaic-4 + Mixup in `YoloDataset::sample_batch`. `AugConfig::mosaic_p`/`mixup_p` (default 0). Mosaic stitches 4 sampled images at a random centre, crops to imgsz×imgsz, drops boxes that shrink to ≤1 px. Mixup blends with α~Beta(8,8) (8-sample uniform-ratio approximation). | — | landed | — |
+| #54E | (optional follow-up) Factor `letterbox + hsv_jitter + label-pixel-remap` shared between YoloDataset / FlatDataset / VocDataset / CocoDataset into one helper. ~80 lines duplicated 4× today; pending until a fifth loader makes it painful. | low | within #54 | — |
 
 ### Group IV — feature add-ons (independent of one another; can land in any order after Group I)
 
