@@ -72,7 +72,7 @@ const std::string kAssetBase = "https://github.com/ultralytics/assets/releases/d
 // upstream URL via `upstream_basename()` below.
 bool looks_like_upstream_weight(const std::string& base) {
   static const std::regex re(
-      R"(^(yolo[0-9]+[nsmlxce]?u?(-cls|-seg|-pose|-obb)?|yolo3(-tiny|-spp)?u?|rtdetr-[lx]|rfdetr-(n|s|b|m|l|nano|small|base|medium|large)(-seg)?)\.pt$)");
+      R"(^(yolo[0-9]+[nsmlxce]?u?(-cls|-seg|-pose|-obb)?|yolo3(-tiny|-spp)?u?|rtdetr-[lx]|rfdetr-(n|s|b|m|l|nano|small|base|medium|large)(-seg)?|rf-detr-(nano|small|medium|base|large|seg-(nano|small|medium|large|xlarge|xxlarge|preview)))\.(pt|pth)$)");
   return std::regex_match(base, re);
 }
 
@@ -627,7 +627,8 @@ std::string version_from_filename(const std::string& path) {
   if (base.rfind("rtdetr", 0) == 0) return "rtdetr";
   // RF-DETR (Roboflow): rfdetr-<n|s|b|m|l>.pt or rfdetr-seg-*.pt.
   // (#65) Currently scaffolded — predict throws until #65A..C land.
-  if (base.rfind("rfdetr", 0) == 0) return "rfdetr";
+  if (base.rfind("rfdetr",  0) == 0) return "rfdetr";
+  if (base.rfind("rf-detr", 0) == 0) return "rfdetr";
 
   // Trained checkpoints (e.g. "best.pt") don't carry the version in their
   // filename. Try the sibling args.yaml: it has a `model: yolo5n.pt` line

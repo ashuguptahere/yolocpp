@@ -12,21 +12,30 @@
 namespace yolocpp::models {
 
 RFDetrScale rfdetr_scale_from_letter(const std::string& letter) {
-  if (letter == "n" || letter == "nano")   return kRfdetrNano;
-  if (letter == "s" || letter == "small")  return kRfdetrSmall;
-  if (letter == "b" || letter == "base"
-      || letter.empty())                   return kRfdetrBase;
-  if (letter == "m" || letter == "medium") return kRfdetrMedium;
-  if (letter == "l" || letter == "large")  return kRfdetrLarge;
+  // Detect variants — single-letter or full-word matchers.
+  if (letter == "n"  || letter == "nano")   return kRfdetrNano;
+  if (letter == "s"  || letter == "small")  return kRfdetrSmall;
+  if (letter == "m"  || letter == "medium") return kRfdetrMedium;
+  if (letter == "b"  || letter == "base"
+      || letter.empty())                    return kRfdetrBase;
+  if (letter == "l"  || letter == "large")  return kRfdetrLarge;
+  // Segment variants — `seg-<n|s|m|l|xl|xxl|preview>`.
+  if (letter == "seg-n"       || letter == "seg-nano")    return kRfdetrSegNano;
+  if (letter == "seg-s"       || letter == "seg-small")   return kRfdetrSegSmall;
+  if (letter == "seg-m"       || letter == "seg-medium")  return kRfdetrSegMedium;
+  if (letter == "seg-l"       || letter == "seg-large")   return kRfdetrSegLarge;
+  if (letter == "seg-xl"      || letter == "seg-xlarge")  return kRfdetrSegXLarge;
+  if (letter == "seg-xxl"     || letter == "seg-xxlarge"
+      || letter == "seg-2xl"  || letter == "seg-2xlarge") return kRfdetrSegXXLarge;
+  if (letter == "seg-preview")                            return kRfdetrSegPreview;
   return kRfdetrBase;  // permissive default
 }
 
 int rfdetr_default_imgsz(const RFDetrScale& scale) {
-  // DINOv2-large was trained at 560 (40 × 14 patches). The smaller
-  // variants were retrained at 640 to fit the YOLO-ecosystem
-  // tooling (letterbox, NMS-free decoders, etc.).
-  if (std::string_view(scale.backbone) == "dinov2-large") return 560;
-  return 640;
+  // Per-variant resolution from upstream `rfdetr.detr.RFDETR<X>Config`
+  // — captured into RFDetrScale.resolution so callers can override
+  // via `--imgsz` but the default tracks the trained config.
+  return scale.resolution;
 }
 
 [[noreturn]] static void unimplemented(const char* area, const char* slice_id) {
@@ -46,20 +55,28 @@ RFDetrImpl::RFDetrImpl(RFDetrScale scale_in, int nc_in)
   // #65A..C landed; train integration (#65G) reads `scale`, `nc`,
   // and `stride` directly as fields (mirrors the YOLO model
   // convention).
+  // The scaffold backbone/encoder/decoder modules are placeholders
+  // until #65A2..F2 replace them with the real RF-DETR 1.6.5
+  // architecture (see `docs/rfdetr_arch.md`). The mapping below
+  // wires the placeholder modules with reasonable shapes so the
+  // forward path stays runnable in the meantime — `load_from_state_dict`
+  // still throws on the converter slice (#65D2) until the modules
+  // are rewritten to match upstream key names.
+  static constexpr const char* kPlaceholderBackbone = "lw-detr-tiny";
   const auto& bcfg =
-      yolocpp::models::rfdetr::backbone_cfg_from_name(scale.backbone);
+      yolocpp::models::rfdetr::backbone_cfg_from_name(kPlaceholderBackbone);
   backbone_ = register_module(
       "backbone", yolocpp::models::rfdetr::ViTBackbone(bcfg));
   std::vector<int> in_channels(bcfg.tap_blocks.size(), bcfg.embed_dim);
   encoder_ = register_module(
       "encoder",
       yolocpp::models::rfdetr::Encoder(
-          in_channels, scale.hidden_dim, scale.num_heads,
-          scale.num_encoder_layers, /*num_points=*/4));
+          in_channels, scale.hidden_dim, scale.sa_nheads,
+          /*num_layers=*/1, /*num_points=*/4));
   head_ = register_module(
       "head",
       yolocpp::models::rfdetr::DetrHead(
-          scale.hidden_dim, scale.num_heads, scale.num_decoder_layers,
+          scale.hidden_dim, scale.sa_nheads, scale.num_dec_layers,
           scale.num_queries, nc, /*num_points=*/4));
 }
 
@@ -119,8 +136,9 @@ int RFDetrImpl::load_from_state_dict(
 
 RFDetrSegmentImpl::RFDetrSegmentImpl(RFDetrScale scale_in, int nc_in)
     : scale(scale_in), nc(nc_in) {
+  static constexpr const char* kPlaceholderBackbone = "lw-detr-tiny";
   const auto& cfg =
-      yolocpp::models::rfdetr::backbone_cfg_from_name(scale.backbone);
+      yolocpp::models::rfdetr::backbone_cfg_from_name(kPlaceholderBackbone);
   backbone_ = register_module(
       "backbone", yolocpp::models::rfdetr::ViTBackbone(cfg));
 }

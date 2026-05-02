@@ -42,27 +42,63 @@
 
 namespace yolocpp::models {
 
-// Scale parameters for RF-DETR. Channel widths + transformer depth +
-// number of queries differ per variant; the actual values get filled
-// in under #65A (backbone) and #65B (transformer) — placeholder
-// constants here just disambiguate the enum identity.
+// Scale parameters for RF-DETR 1.6.5. The values below are the
+// REAL per-variant hyperparameters from the upstream
+// `rfdetr.detr.RFDETR<X>Config` classes — see `docs/rfdetr_arch.md`
+// for the full ground-truth inventory dumped from the 12 official
+// `.pth` / `.pt` files.
+//
+// All variants share `dinov2_windowed_small` (12 ViT blocks,
+// embed=384, separate Q/K/V) — except `rfdetr-large` which uses
+// `dinov2_windowed_base` (12 blocks, embed=768). Variants differ
+// in: input resolution, ViT patch size, number of decoder layers,
+// hidden dim (256 except large=384), and number of object queries.
 struct RFDetrScale {
-  int  num_queries = 300;
-  int  hidden_dim  = 256;
-  int  num_encoder_layers = 6;
-  int  num_decoder_layers = 6;
-  int  num_heads   = 8;
-  // Backbone family — dinov2 only at "large", lw-detr-style at the
-  // smaller variants. Kept as a string until the backbone module is
-  // implemented (#65A).
-  const char* backbone = "lw-detr";
+  int         num_queries     = 300;
+  int         hidden_dim      = 256;
+  int         num_dec_layers  = 3;
+  int         sa_nheads       = 8;       // self-attn heads
+  int         ca_nheads       = 16;      // cross-attn heads (deformable)
+  int         dec_n_points    = 2;       // deformable points per head
+  int         num_classes     = 90;      // upstream COCO schema (cls=91 incl. bg)
+  int         group_detr      = 13;      // training-time query groups
+  int         resolution      = 560;     // letterbox side
+  int         patch_size      = 14;      // ViT patch size
+  int         backbone_embed  = 384;     // 768 for large
+  bool        is_segment      = false;
+  const char* family          = "dinov2_windowed_small";
+  const char* upstream_id     = "base";  // for converter routing
 };
 
-constexpr RFDetrScale kRfdetrNano  {/*Q=*/100, /*hd=*/192, 3, 3, 6, "lw-detr-tiny"};
-constexpr RFDetrScale kRfdetrSmall {/*Q=*/200, /*hd=*/256, 4, 4, 8, "lw-detr-small"};
-constexpr RFDetrScale kRfdetrBase  {/*Q=*/300, /*hd=*/256, 6, 6, 8, "lw-detr-base"};
-constexpr RFDetrScale kRfdetrMedium{/*Q=*/300, /*hd=*/384, 6, 6, 8, "lw-detr-medium"};
-constexpr RFDetrScale kRfdetrLarge {/*Q=*/300, /*hd=*/512, 6, 6, 8, "dinov2-large"};
+// Detect: 5 variants
+constexpr RFDetrScale kRfdetrNano   {300, 256, 2, 8, 16, 2, 90, 13, 384, 16, 384, false,
+                                       "dinov2_windowed_small", "nano"};
+constexpr RFDetrScale kRfdetrSmall  {300, 256, 3, 8, 16, 2, 90, 13, 512, 16, 384, false,
+                                       "dinov2_windowed_small", "small"};
+constexpr RFDetrScale kRfdetrMedium {300, 256, 4, 8, 16, 2, 90, 13, 576, 16, 384, false,
+                                       "dinov2_windowed_small", "medium"};
+constexpr RFDetrScale kRfdetrBase   {300, 256, 3, 8, 16, 2, 90, 13, 560, 14, 384, false,
+                                       "dinov2_windowed_small", "base"};
+constexpr RFDetrScale kRfdetrLarge  {300, 384, 3, 8, 16, 2, 90, 13, 704, 16, 768, false,
+                                       "dinov2_windowed_base", "large"};
+
+// Segment: 7 variants (use the v8/v11 segment-task wrapper at the
+// public-API layer; the underlying RFDetrSegment shares the detect
+// stack + an extra mask head).
+constexpr RFDetrScale kRfdetrSegNano    {100, 256, 4, 8, 16, 2, 90, 13, 368, 14, 384, true,
+                                          "dinov2_windowed_small", "seg-nano"};
+constexpr RFDetrScale kRfdetrSegSmall   {100, 256, 4, 8, 16, 2, 90, 13, 512, 16, 384, true,
+                                          "dinov2_windowed_small", "seg-small"};
+constexpr RFDetrScale kRfdetrSegMedium  {200, 256, 5, 8, 16, 2, 90, 13, 576, 16, 384, true,
+                                          "dinov2_windowed_small", "seg-medium"};
+constexpr RFDetrScale kRfdetrSegLarge   {300, 256, 5, 8, 16, 2, 90, 13, 672, 16, 384, true,
+                                          "dinov2_windowed_small", "seg-large"};
+constexpr RFDetrScale kRfdetrSegXLarge  {300, 256, 6, 8, 16, 2, 90, 13, 624, 12, 384, true,
+                                          "dinov2_windowed_small", "seg-xlarge"};
+constexpr RFDetrScale kRfdetrSegXXLarge {300, 256, 6, 8, 16, 2, 90, 13, 768, 12, 384, true,
+                                          "dinov2_windowed_small", "seg-xxlarge"};
+constexpr RFDetrScale kRfdetrSegPreview {200, 256, 4, 8, 16, 2, 90, 13, 432, 12, 384, true,
+                                          "dinov2_windowed_small", "seg-preview"};
 
 // Letter → scale resolver. Filename convention `rfdetr-<n|s|b|m|l>.pt`
 // (matching the Roboflow release pattern). Falls back to `base` for

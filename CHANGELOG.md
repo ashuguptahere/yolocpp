@@ -30,6 +30,88 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.38.0] — 2026-05-02
+
+### Documented — RF-DETR 1.6.5 architecture spec; all 12 variants registered
+
+Investigation phase of #65D landed: downloaded all 12 official
+`rfdetr==1.6.5` checkpoints (5 detect + 7 segment), dumped per-key
+shape inventories, captured the ground-truth architecture into
+`docs/rfdetr_arch.md`, and updated the in-tree variant table to
+match. The `RFDetrScale` struct now carries **real** per-variant
+hyperparameters from the upstream `RFDETR<X>Config` classes:
+
+| variant | resolution | patch | hidden | dec_layers | num_queries |
+|---------|-----------:|------:|-------:|-----------:|------------:|
+| nano    | 384        | 16    | 256    | 2          | 300         |
+| small   | 512        | 16    | 256    | 3          | 300         |
+| medium  | 576        | 16    | 256    | 4          | 300         |
+| base    | 560        | 14    | 256    | 3          | 300         |
+| large   | 704        | 16    | 384    | 3          | 300         |
+| seg-n   | 368        | 14    | 256    | 4          | 100         |
+| seg-s   | 512        | 16    | 256    | 4          | 100         |
+| seg-m   | 576        | 16    | 256    | 5          | 200         |
+| seg-l   | 672        | 16    | 256    | 5          | 300         |
+| seg-xl  | 624        | 12    | 256    | 6          | 300         |
+| seg-xxl | 768        | 12    | 256    | 6          | 300         |
+| seg-prv | 432        | 12    | 256    | 4          | 200         |
+
+### Added — `rf-detr-*.pth` / `rf-detr-seg-*.pt` filename routing
+
+`src/cli/resolve.cpp::scale_from_filename` /
+`version_from_filename` now recognise the upstream-canonical names
+(`rf-detr-base.pth`, `rf-detr-seg-large.pt`, …) in addition to
+our short `rfdetr-*.pt` form. Both route through the rfdetr
+registry adapter — no separate code path. The regex covers `.pt`
+and `.pth` extensions for both forms.
+
+### Architecture rewrite scoped under #65A2..F2
+
+The current scaffold (#65A..G, 0.31.0..0.37.0) was designed against
+a generic DETR / LW-DETR shape and **does not match RF-DETR 1.6.5**.
+Notable mismatches captured in `docs/rfdetr_arch.md` § "Differences
+from current scaffold":
+
+- Backbone: scaffold uses per-scale LW-DETR with embed_dims
+  varying (192/384/512/768) + fused QKV; reality is a single shared
+  `dinov2_windowed_small` (12 blocks, embed=384, separate Q/K/V,
+  layer_scale1/2 trainable scalars per block) for 11 of the 12
+  variants — `rfdetr-large` uses `dinov2_windowed_base` (embed=768).
+- Encoder: scaffold has a multi-scale deformable encoder; reality
+  has **none** — the "encoder" predictions are `transformer.enc_output*`
+  + 13-deep `enc_out_class_embed` / `enc_out_bbox_embed` heads
+  applied to backbone taps for two-stage query initialisation.
+- Decoder: scaffold uses 3-level deformable cross-attn with
+  separate per-layer cls/bbox heads; reality is **single-level**
+  (`num_levels=1, dec_n_points=2, ca_nheads=16`) deformable
+  cross-attn with shared cls/bbox heads + iterative bbox refinement.
+- Loss: scaffold matches DETR's set loss; reality adds `group_detr=13`
+  query grouping during training (not the matching algorithm
+  itself, which is identical Hungarian).
+
+These are tracked as new sub-tasks `#65A2..F2`:
+
+| sub-task | scope                                                             |
+|----------|-------------------------------------------------------------------|
+| #65A2    | Replace `rfdetr_backbone.{hpp,cpp}` with HF DINOv2 windowed-attn  |
+| #65B2    | Add `rfdetr_projector.{hpp,cpp}` (CSP-style, P4 only)             |
+| #65C2    | Rewrite `rfdetr_decoder.{hpp,cpp}` (fused-QKV SA + 1-level CA + shared heads + iterative bbox refine) |
+| #65D2    | Add `transformer.enc_output*` two-stage encoder-output module     |
+| #65E2    | Add `rfdetr_weights.{hpp,cpp}` direct-loading converter (no key remap, just dtype + shape gates) |
+| #65F2    | End-to-end test: load `rf-detr-base.pth`, forward `data/bus.jpg`, verify ≥ 1 plausible detection |
+
+ctest count unchanged at 42/42. The forward path on the scaffold
+still runs (random init), so `--mode train` for RF-DETR continues
+to work; `load_from_state_dict` still throws on every variant
+until #65E2 lands.
+
+### Tracked
+
+- TODO #65D investigation done; #65A2..F2 filed as the actual
+  rewrite path.
+
+---
+
 ## [0.37.0] — 2026-05-02
 
 ### Added — RF-DETR trainer integration (#65G)
