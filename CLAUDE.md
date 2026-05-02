@@ -443,11 +443,23 @@ Every option sits at the top level. Common flags:
 |       | --seed                | train          |
 |       | --export-after-train  | train          |
 |       | --dataset             | download       |
+|       | --task                | predict, val, train, export (default: detect) |
 
 Per-mode required-flag validation lives in `cmd_dispatch_flag_style`
 in `src/cli/main.cpp`; error messages follow the form
 `[error] --mode=<X> needs --<flag>`. The per-version dispatch within
 each mode goes through the registry (see #46).
+
+**Task routing.** `--task` defaults to `detect` and accepts `detect |
+classify | segment | pose | obb`. Detect routes through the registry
+for every supported YOLO version; the four non-detect tasks route
+through `cmd_val_task` / `cmd_train_task` (val + train) and through
+the task-aware `adapter->export_onnx(... task ...)` hook (export). The
+non-detect paths use the v8 task families (`Yolo8Classify`,
+`Yolo8Segment`, `Yolo8Pose`, `Yolo8OBB`) — those are the
+architectures whose task heads ship with weights upstream. Predict +
+export of v11/v26 task variants additionally route through the
+registry.
 
 The previous kv-style parser (`task=detect mode=predict ...`) and the
 legacy subcommand-style parser (`yolocpp predict -m ... -s ...`) were

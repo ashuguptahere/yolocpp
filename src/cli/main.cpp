@@ -338,6 +338,143 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   return 0;
 }
 
+// Pick a torch device honouring the CLI `--device` value (already
+// normalised by `normalise_device`). Empty / unrecognised → CUDA when
+// available, else CPU.
+torch::Device pick_device(const std::string& device) {
+  if (device == "cpu") return torch::Device(torch::kCPU);
+  if (device.empty() || device == "auto" || device == "cuda" ||
+      device.rfind("cuda:", 0) == 0) {
+    return torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0)
+                                        : torch::Device(torch::kCPU);
+  }
+  return torch::Device(device);
+}
+
+// Validate a non-detect task. The detect path stays in `cmd_val` —
+// it's registry-routed and supports every YOLO version. The
+// classify/segment/pose/obb paths use the v8 task families
+// (Yolo8Classify / Yolo8Segment / Yolo8Pose / Yolo8OBB) — those are
+// the architectures whose task heads ship with weights upstream.
+int cmd_val_task(const std::string& task, const std::string& weights,
+                 const std::string& data, const std::string& names_csv,
+                 int imgsz, const std::string& device,
+                 const std::string& scale_s) {
+  auto load = [&](auto& m) {
+    if (!weights.empty()) {
+      auto sd = yolocpp::serialization::load_state_dict(weights);
+      m->load_from_state_dict(sd.entries);
+    }
+  };
+  auto dev = pick_device(device);
+
+  if (task == "classify") {
+    int sz = (imgsz == 640) ? 224 : imgsz;
+    yolocpp::tasks::ClassifyDataset ds(data, "val", sz, /*augment=*/false);
+    yolocpp::models::Yolo8Classify m(parse_scale(scale_s), ds.num_classes());
+    load(m);
+    auto r = yolocpp::tasks::validate_classify(m, ds, dev);
+    std::cout << "top1=" << r.top1_acc << " top5=" << r.top5_acc
+              << " (n=" << r.n_total << ")\n";
+    return 0;
+  }
+  if (task == "segment") {
+    auto names = split_csv(names_csv);
+    if (names.empty()) names = yolocpp::inference::coco_names();
+    yolocpp::tasks::SegDataset ds(data, "val", imgsz, names, /*augment=*/false);
+    yolocpp::models::Yolo8Segment m(parse_scale(scale_s), ds.num_classes());
+    load(m);
+    auto r = yolocpp::tasks::validate_segment(m, ds, dev);
+    std::cout << "mask mAP@0.5=" << r.map_50
+              << " (pred=" << r.n_predictions
+              << " gt=" << r.n_ground_truths << ")\n";
+    return 0;
+  }
+  if (task == "pose") {
+    yolocpp::tasks::PoseDataset ds(data, "val", imgsz, /*num_kpts=*/17,
+                                    /*kpt_dim=*/3, /*augment=*/false);
+    yolocpp::models::Yolo8Pose m(parse_scale(scale_s), /*nc=*/1, 17, 3);
+    load(m);
+    auto r = yolocpp::tasks::validate_pose(m, ds, dev);
+    std::cout << "OKS mAP@0.5=" << r.oks_map_50 << "\n";
+    return 0;
+  }
+  if (task == "obb") {
+    auto names = split_csv(names_csv);
+    if (names.empty()) names = yolocpp::inference::dota_names();
+    yolocpp::tasks::OBBDataset ds(data, "val", imgsz, names, /*augment=*/false);
+    yolocpp::models::Yolo8OBB m(parse_scale(scale_s), ds.num_classes(), /*ne=*/1);
+    load(m);
+    auto r = yolocpp::tasks::validate_obb(m, ds, dev);
+    std::cout << "rotated mAP@0.5=" << r.map_50 << "\n";
+    return 0;
+  }
+  std::cerr << "[error] cmd_val_task: unknown task '" << task << "'\n";
+  return 2;
+}
+
+// Train a non-detect task. Same v8-family caveat as `cmd_val_task`.
+int cmd_train_task(const std::string& task, const std::string& data,
+                   const std::string& names_csv, int imgsz, int epochs,
+                   int batch, double lr0, const std::string& device,
+                   const std::string& scale_s, const std::string& save_dir,
+                   const std::string& weights) {
+  auto load = [&](auto& m) {
+    if (!weights.empty()) {
+      auto sd = yolocpp::serialization::load_state_dict(weights);
+      m->load_from_state_dict(sd.entries);
+    }
+  };
+
+  if (task == "classify") {
+    int sz = (imgsz == 640) ? 224 : imgsz;
+    yolocpp::tasks::ClassifyDataset tr(data, "train", sz, /*augment=*/true);
+    yolocpp::models::Yolo8Classify m(parse_scale(scale_s), tr.num_classes());
+    load(m);
+    yolocpp::tasks::ClassifyTrainConfig cfg;
+    cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = sz;
+    cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
+    yolocpp::tasks::train_classify(m, tr, /*val=*/nullptr, cfg);
+    return 0;
+  }
+  if (task == "segment") {
+    auto names = split_csv(names_csv);
+    if (names.empty()) names = yolocpp::inference::coco_names();
+    yolocpp::tasks::SegDataset tr(data, "train", imgsz, names, /*augment=*/true);
+    yolocpp::models::Yolo8Segment m(parse_scale(scale_s), tr.num_classes());
+    load(m);
+    yolocpp::tasks::SegTrainConfig cfg;
+    cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
+    cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
+    yolocpp::tasks::train_segment(m, tr, /*val=*/nullptr, cfg);
+    return 0;
+  }
+  if (task == "pose") {
+    yolocpp::tasks::PoseDataset tr(data, "train", imgsz, 17, 3, /*augment=*/true);
+    yolocpp::models::Yolo8Pose m(parse_scale(scale_s), /*nc=*/1, 17, 3);
+    load(m);
+    yolocpp::tasks::PoseTrainConfig cfg;
+    cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
+    cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
+    yolocpp::tasks::train_pose(m, tr, /*val=*/nullptr, cfg);
+    return 0;
+  }
+  if (task == "obb") {
+    auto names = split_csv(names_csv);
+    if (names.empty()) names = yolocpp::inference::dota_names();
+    yolocpp::tasks::OBBDataset tr(data, "train", imgsz, names, /*augment=*/true);
+    yolocpp::models::Yolo8OBB m(parse_scale(scale_s), tr.num_classes(), /*ne=*/1);
+    load(m);
+    yolocpp::tasks::OBBTrainConfig cfg;
+    cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
+    cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
+    yolocpp::tasks::train_obb(m, tr, /*val=*/nullptr, cfg);
+    return 0;
+  }
+  std::cerr << "[error] cmd_train_task: unknown task '" << task << "'\n";
+  return 2;
+}
+
 int cmd_export(const std::string& weights, const std::string& format,
                const std::string& out, int imgsz, const std::string& scale_s_in,
                int nc, const std::string& input_name, bool fp16,
@@ -947,6 +1084,18 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
     return ok;
   };
 
+  // Validate --task once for every mode that consumes it. Detect is
+  // always supported; classify/segment/pose/obb route through the v8
+  // task families (only architecture whose task heads ship upstream).
+  static const std::set<std::string> kKnownTasks = {
+      "detect", "classify", "segment", "pose", "obb"};
+  if (!kKnownTasks.count(task)) {
+    std::cerr << "[error] --task='" << task
+              << "' not recognised (expected: detect | classify | segment | "
+                 "pose | obb)\n";
+    return 2;
+  }
+
   if (mode == "info") return cmd_info();
 
   if (mode == "predict") {
@@ -959,7 +1108,13 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   if (mode == "val") {
     if (!need(mode, "model", !weights.empty())) return 2;
     if (!need(mode, "data",  !data.empty()))    return 2;
-    return cmd_val(weights, data, names_csv, imgsz, device, scale_s);
+    if (task == "detect") {
+      // Detect val is registry-routed and supports every YOLO version.
+      return cmd_val(weights, data, names_csv, imgsz, device, scale_s);
+    }
+    // Non-detect val uses the v8 task families.
+    return cmd_val_task(task, weights, data, names_csv, imgsz, device,
+                        scale_s);
   }
 
   if (mode == "train") {
@@ -974,9 +1129,17 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
       }
       train_version_hint = yolocpp::cli::version_from_filename(weights);
     }
-    int rc = cmd_train(data, names_csv, imgsz, epochs, batch_size, lr0,
-                        device, scale_s, save_dir, weights,
-                        patience, /*args_for_yaml=*/{}, seed);
+    int rc;
+    if (task == "detect") {
+      // Detect train is registry-routed.
+      rc = cmd_train(data, names_csv, imgsz, epochs, batch_size, lr0,
+                      device, scale_s, save_dir, weights,
+                      patience, /*args_for_yaml=*/{}, seed);
+    } else {
+      // Non-detect train uses the v8 task families.
+      rc = cmd_train_task(task, data, names_csv, imgsz, epochs, batch_size,
+                           lr0, device, scale_s, save_dir, weights);
+    }
     if (rc != 0) return rc;
     if (!export_after_train.empty()) {
       std::filesystem::path src = std::filesystem::path(save_dir) / "best.pt";
@@ -1023,7 +1186,8 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
       }
     }
     return cmd_export(weights, export_fmt, out, imgsz, scale_s, nc,
-                       export_input_name, export_fp16);
+                       export_input_name, export_fp16,
+                       /*version_hint=*/"", task);
   }
 
   if (mode == "benchmark") {
@@ -1070,6 +1234,8 @@ int main(int argc, char** argv) {
       "\n"
       "Usage (canonical: `--mode <action>` with flat top-level flags):\n"
       "  yolocpp --mode predict   -m yolo11s.pt -s bus.jpg [-D auto]\n"
+      "  yolocpp --mode predict --task segment -m yolo11s-seg.pt  -s bus.jpg\n"
+      "  yolocpp --mode predict --task pose    -m yolo11s-pose.pt -s bus.jpg\n"
       "  yolocpp --mode predict   -m yolo11s.pt -s images/    -o runs/predict/\n"
       "  yolocpp --mode predict   -m yolo11s.pt -s 'frames/*.jpg'\n"
       "  yolocpp --mode val       -m yolo11s.pt -d coco/data.yaml\n"
@@ -1082,6 +1248,9 @@ int main(int argc, char** argv) {
       "  yolocpp --version\n"
       "\n"
       "Tasks  : detect (default), classify, segment, pose, obb\n"
+      "         (--task <name>; classify/segment/pose/obb use the v8\n"
+      "          task families — the only architectures whose task\n"
+      "          heads ship with weights upstream)\n"
       "Modes  : train, val, predict, export, benchmark, info, download\n"
       "Formats: onnx, trt\n"
       "Precs  : fp32, fp16   (int8/int4/nvfp4 — TODO #51F2)\n"
