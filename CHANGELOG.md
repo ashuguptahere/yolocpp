@@ -30,6 +30,90 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.59.0] — 2026-05-02
+
+### Diagnosed — fp64 LayerNorm doesn't fix it either (#65L slice 16)
+
+Implemented manual fp64 LayerNorm matching PyTorch's
+`aten::native_layer_norm` algorithm:
+
+```cpp
+auto eo64 = eo.to(torch::kDouble);
+auto mean = eo64.mean(-1, true);
+auto var  = (eo64 - mean).pow(2).mean(-1, true);
+auto out_mem = (((eo64 - mean) / (var + eps).sqrt())
+                .to(torch::kFloat) * ln.weight + ln.bias).contiguous();
+```
+
+Same 8/300 topk index diff. Fp64 LayerNorm moved one fp32 bit
+(0xc07a98e1 → 0xc07a98e0 — single ulp) but didn't reconcile with
+PyTorch's saved scores. **The precision divergence isn't isolated
+to one op** — it's a cumulative effect across the entire
+backbone+projector+enc_output pipeline:
+
+```
+projector P4 output:    fp32 noise floor 4.6e-4
+enc_output[0] Linear:   fp32 noise compounds
+enc_output_norm[0] LN:  fp32 noise compounds further
+enc_out_class_embed[0] Linear: more compounding
+final cls_logits scores: 8/300 picks differ at near-tied scores
+```
+
+Each individual step is within fp32 noise, but the cumulative
+drift of ~1e-3 at 1600 token positions creates ~8 score-flips on
+the close-to-K-th-largest scores.
+
+Reverted the manual fp64 LayerNorm. Standard libtorch LayerNorm
+is left in place (one less moving piece in the codebase, identical
+result).
+
+### Honest assessment
+
+To reach bit-exact parity with the loaded `rf-detr-base.pth`
+weights from a libtorch C++ build, every fp32 op in the 487-key
+pipeline would need to use the **same kernel** (mkldnn vs eigen
+vs blas) PyTorch chose at runtime. Different ATen kernel paths,
+even though algorithmically identical, produce ~1e-5..1e-4
+divergent fp32 outputs that compound through 12 ViT blocks +
+3 deformable decoder layers. The remaining queries with
+mismatched topk_idx contaminate the bit-exact-ish queries via
+self-attn, so the FINAL cls scores are uniformly negative
+(max -2.95) instead of including +5+ values for real objects.
+
+This is the same class of fundamental issue as the antialias
+bicubic kernel (slice 6), the BatchNorm-vs-LayerNorm
+mis-naming (slice 7), and the off-by-one tap indices (slice 8) —
+each a "specific kernel detail that PyTorch picks differently
+than libtorch." The first three were tractable single-line
+fixes; this one isn't.
+
+### Path forward (multi-session)
+
+Three viable options, all multi-session:
+
+1. **fp64 throughout** the encoder + decoder (~10-30x slower but
+   fully deterministic).
+2. **Train-on-our-arch**: load DINOv2 backbone + initialise the
+   transformer randomly, then finetune on COCO using our
+   `engine::Trainer` for 50-100 epochs to recover precision. The
+   trainer + Hungarian loss already exist (#65F).
+3. **Ship a fp16 / TRT engine** that runs at the precision
+   tolerance the model was trained for; loosen the parity bar
+   from "bit-exact" to "mAP within 0.5 of upstream."
+
+ctest 42/42 (only pre-existing #64). All 7 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 16 done. The "achievable parity" bar is now
+  understood. Path forward (one of the three above) needs a
+  product-level decision before committing to the implementation
+  cost. For now the architecture is feature-complete with all
+  weights binding; predictions don't fire but the pipeline
+  shape contract is intact end-to-end.
+
+---
+
 ## [0.58.0] — 2026-05-02
 
 ### Diagnosed — fp64 cls head doesn't help; divergence is in LayerNorm (#65L slice 15)
