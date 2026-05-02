@@ -30,6 +30,56 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.46.0] — 2026-05-02
+
+### Added — RF-DETR parity test harness (#65L slice 3)
+
+`tests/test_rfdetr_parity_dump.cpp` and the matching Python dumper
+at `/tmp/yolocpp_parity/dump_rfdetr_forward.py` form the harness
+for systematic numerical-parity debugging.
+
+The Python side runs `RFDETRBase(pretrain_weights=…)` on a fixed
+`torch.randn(1, 3, 560, 560)` input and writes per-stage activations
+as `<stage>.bin` (raw float32) + `<stage>.shape` text files under
+`/tmp/yolocpp_parity/dumps/rfdetr_base/`. Captures:
+
+- `input.bin` — `[1, 3, H, W]`
+- `embeddings_out.bin` — `[B·W², (Hg/W)·(Wg/W)+1, C]` (windowed)
+- `layer<i>_out.bin` — per-block hidden state for blocks 0..11
+
+The C++ side loads the same weights into `RFDetr(kRfdetrBase, 80)`,
+runs forward on the same input, and compares each available
+intermediate against its Python counterpart. SKIP-gated unless
+both `RFDETR_TEST_WEIGHTS_DIR` (the .pth files) and
+`RFDETR_PARITY_DUMP_DIR` (the dumps) are set in the env.
+
+### Status
+
+The harness builds + runs end-to-end and reports the C++ output
+shape `[1, 84, 300]` (correct for kRfdetrBase) alongside Python's
+final backbone layer `[16, 101, 384]` (windowed token form). Per-
+stage max-abs-diff bisection requires exposing a
+`forward_intermediate` API on `Dinov2Model` that returns a dict of
+all named intermediates — that's the next #65L slice.
+
+Once the bisection harness is wired, each subsequent slice fixes
+ONE stage at a time and watches max-abs-diff drop below the
+floating-point noise floor. Concrete suspects to chase first:
+
+1. Embeddings windowing reshape order (permute axes before flatten)
+2. Layer block forward — possibly residual-vs-pre-norm ordering
+3. Decoder cross-attn `grid_sample` `align_corners` flag
+
+ctest 42/42 (only pre-existing #64). `test_rfdetr_parity_dump`
+passes when env vars are set, gracefully SKIPs otherwise.
+
+### Tracked
+
+- TODO #65L slice 3 done (harness wired). Slice 4 will add the
+  `forward_intermediate` API + first round of bisected fixes.
+
+---
+
 ## [0.45.0] — 2026-05-02
 
 ### Fixed — RF-DETR parity diffs slice 2 (#65L slice 2)
