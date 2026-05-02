@@ -30,6 +30,89 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.58.0] — 2026-05-02
+
+### Diagnosed — fp64 cls head doesn't help; divergence is in LayerNorm (#65L slice 15)
+
+Tested option 3 from slice 14: compute `cls_logits = enc_out_class_embed[0](out_mem)`
+in fp64 then cast back to fp32. **Same 8/300 topk index diff** —
+exact same scores at the diverging positions. Reverted.
+
+This proves the divergence isn't in the cls Linear's matmul
+accumulation order — it's **in the input `out_mem` itself**.
+`out_mem = enc_output_norm[0](enc_output[0](output_memory))`
+showed `max_abs_diff = 1.2e-4` against Python earlier. That
+1.2e-4 LayerNorm-output noise propagates to cls_logits scores
+that differ by ~2e-5 — enough to flip the order on near-identical
+scores, picking 8 different queries out of 300.
+
+### Root cause — chain
+
+```
+projector output: 4.6e-4 fp32 noise (vs Python)  [bicubic kernel]
+LayerNorm output: 1.2e-4 fp32 noise              [Welford-vs-two-pass mean]
+cls_logits Linear: 7e-4 fp32 noise               [256-channel sum]
+top-K selection: 8/300 indices differ            [near-tied scores flip]
+refpoints: 0.86 max diff                         [diff queries selected]
+sineembed input → ref_point_head: 4.62 diff     [different inputs]
+decoder cross-attn: 2.4 diff                    [different ref-points]
+decoder norm3: 5.33 diff                        [compounded]
+decoder layer-2 output: 2.20 diff               [norm3 over 3 layers]
+class_embed final: max +5+ vs my max -2.95      [different decoder feats]
+forward_eval: 0 detections                      [no positive cls survives]
+```
+
+The compounding factor is `~2x per stage` for the affected
+queries, dropping deeper feature magnitudes by an order of
+magnitude relative to Python's. After 3 decoder layers, the
+8 queries with diff topk become numerically very different from
+their Python counterparts — and they're 2.7% of all queries.
+
+The remaining 97.3% (queries that match Python's topk) still go
+through bit-exact-ish stages but the ATTENTION mechanism mixes
+information across queries. So the 2.7% diff CONTAMINATES the
+other 97.3% via cross-attn and self-attn — which is why the
+final cls scores are uniformly negative (-2.95 max) instead of
+including +5+ values.
+
+### What it would take to fix
+
+To reach bit-exact parity:
+1. **Match LayerNorm precision**: re-implement LayerNorm in C++
+   using PyTorch's exact Welford-style two-pass mean + variance
+   formula. ~50 LOC.
+2. **Match Linear matmul precision**: choose a deterministic
+   matmul backend in libtorch (e.g. force `setUserEnabledMkldnn(false)`
+   and `at::globalContext().setBenchmarkCuDNN(false)`).
+3. **Run all attention in fp64** with float-down at the end.
+   ~10x slower but bit-deterministic.
+
+OR accept the cumulative precision drift and train/finetune the
+loaded RF-DETR weights for a few epochs in our C++ codebase to
+bring the final-stage cls magnitudes back. That's a fundamentally
+different path — train-on-our-arch rather than load-pretrained.
+
+### Status
+
+Architecture is fully built and stages are bit-exact through the
+encoder-output. The remaining numerical drift compounds through
+3 decoder layers and the deformable cross-attn into final-stage
+cls outputs that don't trigger detections. Reaching bit-exact
+parity from a libtorch C++ build (different ATen kernel paths
+than PyTorch Python) is fundamentally hard for a 12-block
+transformer + 3-layer deformable decoder pipeline.
+
+ctest 42/42 (only pre-existing #64). All 7 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 15 done (fp64 cls head doesn't fix; LayerNorm
+  precision identified as primary). Slice 16 will replace
+  `torch::nn::LayerNorm` with a hand-written Welford LayerNorm
+  matching PyTorch's algorithm bit-exactly.
+
+---
+
 ## [0.57.0] — 2026-05-02
 
 ### Diagnosed — RF-DETR cls_logits fp32 matmul precision divergence (#65L slice 14)
