@@ -42,10 +42,11 @@ int rfdetr_default_imgsz(const RFDetrScale& scale) {
 // ─── Detect ──────────────────────────────────────────────────────────────
 
 RFDetrImpl::RFDetrImpl(RFDetrScale scale, int nc) : scale_(scale), nc_(nc) {
-  // #65A + #65B landed: backbone + encoder are constructed and
-  // registered. #65C decoder/head, #65F loss surface still pending
-  // — `forward_eval` and `forward_train` throw on the decoder
-  // boundary below.
+  // #65A + #65B + #65C landed: backbone, encoder, decoder/head are
+  // constructed and registered. forward_eval now runs end-to-end
+  // and produces YOLO-shaped `[B, 4+nc, num_queries]` output.
+  // forward_train still throws because the per-layer auxiliary
+  // outputs need the Hungarian loss surface (#65F).
   const auto& bcfg =
       yolocpp::models::rfdetr::backbone_cfg_from_name(scale.backbone);
   backbone_ = register_module(
@@ -56,6 +57,11 @@ RFDetrImpl::RFDetrImpl(RFDetrScale scale, int nc) : scale_(scale), nc_(nc) {
       yolocpp::models::rfdetr::Encoder(
           in_channels, scale.hidden_dim, scale.num_heads,
           scale.num_encoder_layers, /*num_points=*/4));
+  head_ = register_module(
+      "head",
+      yolocpp::models::rfdetr::DetrHead(
+          scale.hidden_dim, scale.num_heads, scale.num_decoder_layers,
+          scale.num_queries, nc, /*num_points=*/4));
 }
 
 std::vector<torch::Tensor> RFDetrImpl::forward_backbone(torch::Tensor x) {
@@ -69,15 +75,24 @@ RFDetrImpl::forward_encoder(torch::Tensor x) {
 }
 
 torch::Tensor RFDetrImpl::forward_eval(torch::Tensor x) {
-  // Backbone + encoder run with real shapes; decoder/head still
-  // throws.
-  (void)forward_encoder(std::move(x));
-  unimplemented("forward_eval (decoder→head)",
-                "#65C (decoder + object-query head)");
+  auto enc = forward_encoder(std::move(x));
+  return head_->forward_eval(enc.memory, enc.spatial_shapes,
+                              enc.level_start_index);
 }
 
-std::vector<torch::Tensor> RFDetrImpl::forward_train(torch::Tensor /*x*/) {
-  unimplemented("forward_train", "#65F (Hungarian-matching loss surface)");
+std::vector<torch::Tensor> RFDetrImpl::forward_train(torch::Tensor x) {
+  auto enc = forward_encoder(std::move(x));
+  auto outs = head_->forward_train(enc.memory, enc.spatial_shapes,
+                                     enc.level_start_index);
+  // Pack [(cls, bbox), ...] → flat vector for use by the
+  // (still-pending) Hungarian loss surface (#65F).
+  std::vector<torch::Tensor> flat;
+  flat.reserve(outs.size() * 2);
+  for (auto& [c, b] : outs) {
+    flat.push_back(c);
+    flat.push_back(b);
+  }
+  return flat;
 }
 
 int RFDetrImpl::load_from_state_dict(

@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "yolocpp/models/rfdetr_backbone.hpp"
+#include "yolocpp/models/rfdetr_decoder.hpp"
 #include "yolocpp/models/rfdetr_encoder.hpp"
 
 namespace yolocpp::models {
@@ -121,6 +122,7 @@ class RFDetrImpl : public torch::nn::Module {
   int                                  nc_;
   yolocpp::models::rfdetr::ViTBackbone backbone_{nullptr};
   yolocpp::models::rfdetr::Encoder     encoder_{nullptr};
+  yolocpp::models::rfdetr::DetrHead    head_{nullptr};
 };
 
 TORCH_MODULE(RFDetr);

@@ -30,6 +30,51 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.34.0] — 2026-05-02
+
+### Added — RF-DETR decoder + object-query head (#65C)
+
+`include/yolocpp/models/rfdetr_decoder.hpp` +
+`src/models/rfdetr_decoder.cpp` close the RF-DETR forward path.
+
+- `MLP` — 3-layer ReLU MLP for the bbox regression head.
+- `DecoderLayer` — pre-norm transformer block with vanilla MHA
+  self-attn over queries, MSDeformAttn cross-attn from queries to
+  encoder memory, and an FFN. Reuses the encoder's MSDeformAttn
+  primitive (#65B) for the cross-attn slot.
+- `DetrHead` — `num_queries` learnable query embeddings + per-layer
+  cls/bbox heads. `forward_eval` runs all decoder layers, takes the
+  last layer's outputs, sigmoids cls + bbox, and packs to YOLO's
+  `[B, 4+nc, num_queries]` channel order so the existing
+  NMS-free-friendly downstream code stays generic. `forward_train`
+  returns all per-layer (cls_logits, bbox_unact) pairs for the
+  Hungarian auxiliary loss (#65F).
+
+`RFDetrImpl::forward_eval` now runs end-to-end without throwing —
+producing a YOLO-shaped output tensor with per-channel ranges in
+`[0, 1]`. `forward_train` returns 2N tensors (N = num_decoder_layers)
+for the loss surface that lands under #65F. **Output is meaningless
+without trained weights** — the registry's `predict_to_file` hook
+still throws, gated on `load_from_state_dict` (#65D) which is the
+next slice.
+
+`tests/test_rfdetr_forward.cpp` exercises full forward (eval +
+train) on n (Q=100) + s (Q=200) and asserts:
+- `forward_eval` shape `[1, 84, num_queries]` with channel-0..3 in
+  `[0, 1]` (sigmoided bbox).
+- `forward_train` returns `2 × num_decoder_layers` tensors.
+
+ctest count goes 39 → 40. CLAUDE.md capability matrix unchanged
+(rfdetr stays 🟡 until #65D loads real weights).
+
+### Tracked
+
+- TODO #65C marked landed; #65D (`rfdetr-*.pt` → our format
+  converter) is the next slice and the gate before any meaningful
+  prediction can run.
+
+---
+
 ## [0.33.0] — 2026-05-02
 
 ### Added — RF-DETR multi-scale deformable encoder (#65B)

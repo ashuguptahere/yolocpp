@@ -126,6 +126,7 @@ add_library(yolocpp_core
   src/models/rfdetr.cpp
   src/models/rfdetr_backbone.cpp
   src/models/rfdetr_encoder.cpp
+  src/models/rfdetr_decoder.cpp
   src/inference/task_predictors.cpp
   src/tasks/classify_train.cpp
   src/tasks/segment_train.cpp
