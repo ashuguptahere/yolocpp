@@ -243,7 +243,7 @@ struct LossTraits<models::RFDetr> {
                           const std::vector<torch::Tensor>& feats,
                           const torch::Tensor& tgt,
                           const std::vector<double>& /*strides*/,
-                          int /*imgsz*/, double /*progress*/) {
+                          int imgsz, double /*progress*/) {
     TORCH_CHECK(feats.size() % 2 == 0,
                 "rfdetr forward_train must return [cls, bbox, cls, bbox, …]");
     std::vector<torch::Tensor> cls_per_layer, bbox_per_layer;
@@ -253,6 +253,9 @@ struct LossTraits<models::RFDetr> {
     }
     int64_t B = cls_per_layer[0].size(0);
     std::vector<std::vector<losses::RFDetrTarget>> targets(B);
+    // Dataset emits targets in pixel coords [0, imgsz] (post-letterbox).
+    // RFDetr Hungarian loss expects normalized cxcywh in [0, 1].
+    const float inv = (imgsz > 0) ? (1.0f / static_cast<float>(imgsz)) : 1.0f;
     if (tgt.numel() > 0) {
       auto cpu = tgt.detach().to(torch::kCPU).contiguous();
       auto a   = cpu.accessor<float, 2>();
@@ -260,7 +263,8 @@ struct LossTraits<models::RFDetr> {
         int64_t bi = static_cast<int64_t>(a[r][0]);
         if (bi < 0 || bi >= B) continue;
         targets[bi].push_back({static_cast<int64_t>(a[r][1]),
-                                a[r][2], a[r][3], a[r][4], a[r][5]});
+                                a[r][2] * inv, a[r][3] * inv,
+                                a[r][4] * inv, a[r][5] * inv});
       }
     }
     auto out = losses::rfdetr_set_loss(cls_per_layer, bbox_per_layer, targets);

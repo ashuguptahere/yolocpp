@@ -1037,11 +1037,8 @@ VersionAdapter make_rfdetr() {
                            const engine::TrainConfig& tc) {
     models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
     if (!weights.empty()) {
-      // #65D pending: throws with a slice tag.
-      m->load_from_state_dict({});
+      m->load_from_upstream_pt(weights, /*strict=*/false);
     }
-    // Random-init training is meaningful (Hungarian loss runs);
-    // it just won't converge in a single session.
     engine::TrainerRFDetr t(m, std::move(ds), tc);
     t.run();
   };

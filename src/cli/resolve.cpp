@@ -581,6 +581,11 @@ std::string scale_from_filename(const std::string& path) {
     static const std::regex rdet(
         R"(rf-?detr-(nano|small|medium|base|large|n|s|m|b|l)(?:-2026)?(?:-seg)?\.(?:pt|pth)$)");
     if (std::regex_search(base, ms, rdet)) return ms[1].str();
+    // Same regex with optional .pt/.pth so users can pass a bare model
+    // identifier like `rfdetr-large` without dragging the extension.
+    static const std::regex rdet_noext(
+        R"(rf-?detr-(nano|small|medium|base|large|n|s|m|b|l)(?:-2026)?(?:-seg)?$)");
+    if (std::regex_search(base, ms, rdet_noext)) return ms[1].str();
   }
 
   // Match canonical "yolo<digits><scale>[u]?(-task)?.pt" — and also accept the

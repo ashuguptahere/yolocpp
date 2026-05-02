@@ -53,7 +53,7 @@ std::pair<std::vector<int64_t>, std::vector<int64_t>>
 match_one(torch::Tensor cls_prob, torch::Tensor bbox,
           const std::vector<RFDetrTarget>& tgt, const RFDetrLossCfg& cfg) {
   // cls_prob: [Q, nc] (already sigmoided)
-  // bbox:     [Q, 4]  (already sigmoided cxcywh)
+  // bbox:     [Q, 4]  cxcywh in [0,1] (already bbox_reparam'd by forward_train)
   int64_t Q = cls_prob.size(0);
   int64_t G = static_cast<int64_t>(tgt.size());
   if (G == 0) return {{}, {}};
@@ -141,7 +141,9 @@ RFDetrLossOutput rfdetr_set_loss(
   auto& cls_final  = cls_logits_per_layer.back();
   auto& bbox_final = bbox_unact_per_layer.back();
   auto cls_prob_final = torch::sigmoid(cls_final);
-  auto bbox_sig_final = torch::sigmoid(bbox_final);
+  // bbox_per_layer is now ALREADY in cxcywh [0,1] form (forward_train
+  // applies bbox_reparam internally). Don't re-sigmoid.
+  auto bbox_sig_final = bbox_final;
 
   std::vector<std::pair<std::vector<int64_t>, std::vector<int64_t>>> matches;
   matches.reserve(B);
@@ -165,7 +167,9 @@ RFDetrLossOutput rfdetr_set_loss(
       for (size_t k = 0; k < pred_idx.size(); ++k) {
         int64_t p = pred_idx[k], g = gt_idx[k];
         cls_target[b][p][targets[b][g].class_id] = 1.0;
-        matched_preds.push_back(torch::sigmoid(bbox_l[b][p]).unsqueeze(0));
+        // bbox_l is already in cxcywh [0,1] (forward_train applies
+        // bbox_reparam). Use directly without sigmoid.
+        matched_preds.push_back(bbox_l[b][p].unsqueeze(0));
         std::vector<float> g_xywh = {targets[b][g].cx, targets[b][g].cy,
                                       targets[b][g].w,  targets[b][g].h};
         auto gt_t = torch::from_blob(g_xywh.data(), {1, 4})

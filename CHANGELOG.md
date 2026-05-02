@@ -30,6 +30,40 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.64.0] — 2026-05-02
+
+### Fixed — RF-DETR training: weights load + target normalization + bare model name
+
+Three bugs that together pinned mAP at zero through every epoch of
+RF-DETR training:
+
+1. **Train hook didn't load upstream weights.** `make_rfdetr().run_train_detect`
+   called `m->load_from_state_dict({})` with an empty entries list — the
+   `weights` argument was thrown away. Random init plus a Hungarian set
+   loss is meaningful but won't converge in any reasonable number of
+   epochs. Now calls `m->load_from_upstream_pt(weights, strict=false)`
+   like the predict hook.
+2. **Targets in pixel coords, loss expects normalized.** `CocoDataset` /
+   `YoloDataset` emit cxcywh in pixel coordinates `[0, imgsz]` after
+   letterbox (so YOLO-family DFL/box losses can index strides). The
+   RF-DETR Hungarian loss expects normalized cxcywh in `[0, 1]`. With
+   `imgsz=1536`, this scaled the L1 term by ~1500×; box loss read
+   ~2000 instead of ~1.5. `LossTraits<RFDetr>::compute` now divides
+   `(cx, cy, w, h)` by `imgsz` before building the per-image
+   `RFDetrTarget` list.
+3. **`--model rfdetr-large` (no extension) defaulted to base scale.**
+   `cli::scale_from_filename` only matched `rf-?detr-<scale>.(pt|pth)$`,
+   so a bare identifier like `rfdetr-large` returned `""` →
+   `rfdetr_scale_from_letter("")` → `kRfdetrBase` (num_windows=4) when
+   the user expected `kRfdetrLarge` (num_windows=2). The reshape inside
+   the windowed-attention embeddings layer then crashed with
+   `[B, 4, N/4, 4, N/4, C]` mismatch. Added a no-extension regex
+   variant.
+
+After all three fixes: box loss starts at ~0.5 and stays in [0.2, 1.6]
+through epoch 0; cls loss ~0.005 (well-scaled focal); pred values are
+normalized cxcywh in `[0, 1]` matching the loss path.
+
 ## [0.63.0] — 2026-05-02
 
 ### Fixed — `RFDetrImpl::forward_train` uses real backbone (was legacy)

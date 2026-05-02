@@ -207,27 +207,30 @@ torch::Tensor RFDetrImpl::forward_eval(torch::Tensor x) {
 
 std::vector<torch::Tensor> RFDetrImpl::forward_train(torch::Tensor x) {
   // Match the production forward_eval pipeline (real backbone +
-  // projector + transformer + heads), differing only in that we
-  // return per-decoder-layer (cls_logits, bbox_unact) for the
-  // Hungarian loss surface (#65F). The legacy `_*_legacy` modules
-  // are NOT used.
+  // projector + transformer + heads). Returns
+  // `(cls_logits, bbox_cxcywh_normalised)` for the Hungarian set
+  // loss — bbox is already bbox_reparam'd to cxcywh in [0,1] so
+  // the loss doesn't need to re-sigmoid (which would optimise the
+  // wrong function relative to the inference-time bbox_reparam path).
   auto& slot = *backbone_real_[0]
                     ->as<yolocpp::models::rfdetr::BackboneSlotImpl>();
-  auto memory_2d = slot.forward(std::move(x));        // [B, hidden, Hg, Wg]
+  auto memory_2d = slot.forward(std::move(x));
   int Q = scale.num_queries;
   auto qfeat_first = query_feat_.slice(/*dim=*/0, 0, Q);
   auto rpemb_first = refpoint_embed_.slice(/*dim=*/0, 0, Q);
   auto tf_out = transformer_->forward(memory_2d, qfeat_first, rpemb_first, Q);
-  // For training we need per-layer cls/bbox; the production
-  // transformer.forward only returns the last layer. Apply the
-  // SHARED cls/bbox heads to the last decoder output for the
-  // Hungarian loss; aux-loss across decoder layers is a future
-  // refinement (#65F2 polish).
-  auto cls_logits = class_embed_->forward(tf_out.decoder_out);
-  auto bbox_delta = bbox_embed_->forward(tf_out.decoder_out);
-  // Pack as [cls0, bbox0] (only the last layer, since aux-loss
-  // is opt-in upstream and our trainer doesn't require it).
-  return {cls_logits, bbox_delta};
+  auto cls_logits = class_embed_->forward(tf_out.decoder_out);   // [B, Q, 91]
+  auto bbox_delta = bbox_embed_->forward(tf_out.decoder_out);    // [B, Q, 4]
+  auto& refpts    = tf_out.refpoints;                              // [B, Q, 4]
+  // bbox_reparam: cxcy = delta[..., :2] * ref[..., 2:] + ref[..., :2];
+  //               wh   = delta[..., 2:].exp() * ref[..., 2:].
+  // (Same formula as inference; ensures the loss optimises EXACTLY
+  // the function the inference path uses to produce final boxes.)
+  auto cxcy = bbox_delta.slice(-1, 0, 2) * refpts.slice(-1, 2, 4) +
+                refpts.slice(-1, 0, 2);
+  auto wh   = bbox_delta.slice(-1, 2, 4).exp() * refpts.slice(-1, 2, 4);
+  auto bbox_cxcywh = torch::cat({cxcy, wh}, /*dim=*/-1);
+  return {cls_logits, bbox_cxcywh};
 }
 
 int RFDetrImpl::load_from_state_dict(
