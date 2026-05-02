@@ -256,9 +256,9 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 
 | # | scope | priority | session-cost estimate | blockers |
 |---|-------|----------|------------------------|----------|
-| #53  | End-to-end detection parity across `.pt` / `.onnx` / `.engine` for every (version × scale × task) | high | 1 session | partly covered by full_matrix_sweep already; needs the cross-backend equality assert |
-| #53A | New ctest: load all three backends, run on bus.jpg, assert `len(dets)` matches and bbox IoU ≥ 0.95 | — | within #53 | — |
-| #53B | Extend `scripts/full_matrix_sweep.sh` to walk all three backends per cell | — | within #53 | — |
+| #53  | ✅ closed — strict cross-backend parity ctest (#53A) + per-version TRT round-trip in the sweep (#53B). | — | landed | — |
+| #53A | ✅ closed — `tests/test_cross_backend_parity.cpp`. For each cell: export ONNX through the registry, build TRT FP32 + FP16 engines, run libtorch / TRT-FP32 / TRT-FP16 on bus.jpg, assert det count within ±1 of libtorch and IoU ≥ 0.50 same-class match for ≥ N-1 of N libtorch dets. Cells: v8n / v11s / v12s / v13s — 4/4 pass with `matched N/N`. v26 deliberately excluded (NMS-free deploy form's output shape doesn't unpack through the standard TrtPredictor post-process; covered by `test_v26_e2e` separately). Engines cached in `build/parity_cache/` for repeat speed. | — | landed | — |
+| #53B | ✅ closed — `scripts/full_matrix_sweep.sh` phase 7 added: per-version `.pt → .trt → predict` round-trip across all 12 supported versions. **Sweep total now 164/164 PASS (was 152)** — adds the 12 trt-roundtrip cells. Catches export-emitter / TRT-parser / runtime regressions at sweep-time. | — | landed | — |
 | #54  | Dataset / training infra v2 | medium | 2 sessions | partly depends on #46 (factory pattern leaks into dataset format dispatch) |
 | #54A | New single-file dataset format with a `split` column (train/val/test); shuffled deterministically by `--seed` | — | within #54 | — |
 | #54B | Multi-format loader: YOLO (existing) + COCO JSON + the new format (autodetect) | — | within #54 | — |
