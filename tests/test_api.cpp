@@ -32,12 +32,22 @@ int main() {
   EXPECT(&m2 == &m, "to() must return *this for chaining");
 
   // Predict on an image — exercises the registry-routed v11 path
-  // through the API. Returns an empty vector for now (per #52A); we
-  // verify the on-disk artefact instead.
+  // through the API. Now returns populated dets (#52A2).
   auto out_path = "/tmp/api_pred.jpg";
   fs::remove(out_path);
-  m.predict({.source = "data/bus.jpg", .out = out_path});
+  auto dets = m.predict({.source = "data/bus.jpg", .out = out_path});
   EXPECT(fs::exists(out_path), "predict didn't produce output jpg");
+  EXPECT(!dets.empty(), "predict returned no detections (expected ≥1 on bus.jpg)");
+  // bus.jpg with yolo11s @ default conf=0.25 produces 5 dets — be
+  // tolerant of conf-thresh drift across versions, just require a
+  // reasonable lower bound.
+  EXPECT(dets.size() >= 3, "predict returned suspiciously few detections");
+  // Sanity-check the first det shape: bbox in pixel coords with
+  // x1<x2 and y1<y2, conf in [0,1], non-negative class.
+  const auto& d0 = dets[0];
+  EXPECT(d0.x2 > d0.x1 && d0.y2 > d0.y1, "det bbox malformed");
+  EXPECT(d0.conf >= 0.0f && d0.conf <= 1.0f, "det conf out of range");
+  EXPECT(d0.cls >= 0, "det class index negative");
   fs::remove(out_path);
 
   // Predict on a directory — exercises the dir/glob fan-out via the

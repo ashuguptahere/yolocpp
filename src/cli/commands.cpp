@@ -202,7 +202,8 @@ void write_val_results(const std::string& weights, const std::string& data,
 
 int cmd_predict(const std::string& weights, const std::string& source,
                 const std::string& out, int imgsz, std::string device,
-                std::string scale_s, int nc, float conf, float iou) {
+                std::string scale_s, int nc, float conf, float iou,
+                std::vector<yolocpp::inference::Detection>* out_dets) {
   yolocpp::inference::NMSConfig c;
   c.conf_thresh = conf;
   c.iou_thresh  = iou;
@@ -222,6 +223,7 @@ int cmd_predict(const std::string& weights, const std::string& source,
     auto dets = p.predict_to_file(source, out_path, c);
     std::cout << "[predict] (trt) " << dets.size() << " detections, wrote "
               << out_path << "\n";
+    if (out_dets) *out_dets = std::move(dets);
     return 0;
   }
   // Auto-resolve scale from filename when --scale is not passed.
@@ -236,6 +238,7 @@ int cmd_predict(const std::string& weights, const std::string& source,
   auto dets = p.predict_to_file(source, out_path, c);
   std::cout << "[predict] (libtorch) " << dets.size() << " detections, wrote "
             << out_path << "\n";
+  if (out_dets) *out_dets = std::move(dets);
   return 0;
 }
 
@@ -748,18 +751,21 @@ std::vector<std::string> expand_image_source(const std::string& spec) {
 
 // Inner predict-one-image path: runs the registered `predict_to_file`
 // hook (or the unified Predictor fallback) on a single image. Returns
-// the CLI exit code (0 = ok, 2 = unknown version).
+// the CLI exit code (0 = ok, 2 = unknown version). When `out_dets`
+// is non-null, it's populated with the predicted detections (#52A2).
 int predict_one_image(const std::string& task, const std::string& weights,
                       const std::string& source, const std::string& out,
                       int imgsz, std::string device, std::string scale_s,
                       int nc, float conf, float iou,
-                      const std::string& version_hint);
+                      const std::string& version_hint,
+                      std::vector<yolocpp::inference::Detection>* out_dets);
 
 int cmd_predict_task(const std::string& task, const std::string& weights,
                      const std::string& source, std::string out, int imgsz,
                      std::string device, std::string scale_s, int nc,
                      float conf, float iou,
-                     const std::string& version_hint) {
+                     const std::string& version_hint,
+                     std::vector<yolocpp::inference::Detection>* out_dets) {
   // Auto-resolve scale from the weights filename when the caller
   // didn't pass --scale. The registry's per-version `predict_to_file`
   // hooks need a scale letter (`yolo11s.pt` → "s") to construct the
@@ -915,9 +921,14 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     }
     int sub_rc = predict_one_image(task, weights, in, this_out, imgsz,
                                     device, scale_s, nc, conf, iou,
-                                    version_hint);
+                                    version_hint, out_dets);
     if (sub_rc != 0) rc = sub_rc;  // last non-zero wins, but keep going
   }
+  // For multi-input runs, `out_dets` ends up holding the LAST
+  // processed image's dets (each loop iter overwrites). The CLI
+  // ignores it; the API uses it for single-image predict + treats
+  // multi-input as "intermediate writes to disk only". Future
+  // enhancement (#52A3) could collect per-input dets in a map.
   return rc;
 }
 
@@ -925,7 +936,8 @@ int predict_one_image(const std::string& task, const std::string& weights,
                       const std::string& source, const std::string& out,
                       int imgsz, std::string device, std::string scale_s,
                       int nc, float conf, float iou,
-                      const std::string& version_hint) {
+                      const std::string& version_hint,
+                      std::vector<yolocpp::inference::Detection>* out_dets) {
   yolocpp::inference::NMSConfig c;
   c.conf_thresh = conf; c.iou_thresh = iou;
 
@@ -935,7 +947,8 @@ int predict_one_image(const std::string& task, const std::string& weights,
     // through the TrtPredictor regardless of which YOLO version produced it.
     if (weights.size() >= 4 &&
         weights.substr(weights.size() - 4) == ".trt") {
-      return cmd_predict(weights, source, out, imgsz, device, scale_s, nc, conf, iou);
+      return cmd_predict(weights, source, out, imgsz, device, scale_s, nc,
+                          conf, iou, out_dets);
     }
     // version_hint comes from the dispatcher's state-dict-based inference;
     // fall back to filename heuristics if the caller didn't pass one.
@@ -955,10 +968,11 @@ int predict_one_image(const std::string& task, const std::string& weights,
       yolocpp::inference::NMSConfig nm;
       nm.conf_thresh = conf;
       nm.iou_thresh  = iou;
-      auto n = adapter->predict_to_file(weights, source, out, imgsz,
-                                         device, scale_s, nc, nm);
-      std::cout << "[predict] (" << version << ") " << n
+      auto dets = adapter->predict_to_file(weights, source, out, imgsz,
+                                            device, scale_s, nc, nm);
+      std::cout << "[predict] (" << version << ") " << dets.size()
                 << " detections, wrote " << out << "\n";
+      if (out_dets) *out_dets = std::move(dets);
       return 0;
     }
 
@@ -973,7 +987,8 @@ int predict_one_image(const std::string& task, const std::string& weights,
     // v8 (and any anchor-free model whose state-dict shape is v8-shape)
     // has no dedicated `predict_v<N>_to_file` — fall back to the
     // unified Predictor.
-    return cmd_predict(weights, source, out, imgsz, device, scale_s, nc, conf, iou);
+    return cmd_predict(weights, source, out, imgsz, device, scale_s, nc,
+                        conf, iou, out_dets);
   }
   // For task variants we route on version_hint (or filename inference) too —
   // v11 / v26 task models have a different module layout and can't load

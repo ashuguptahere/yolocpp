@@ -59,18 +59,20 @@ YOLO& YOLO::task(std::string task) {
 std::vector<inference::Detection> YOLO::predict(const PredictArgs& a) {
   auto device = resolve_device(a.device, default_device_);
   auto task   = resolve_task(a.task, default_task_);
-  // cmd_predict_task drives the source classifier, the registry's
-  // per-version `predict_to_file` for image-mode, and the
-  // FramePredictor frame loop for video/URL/webcam (#51C2). It also
-  // writes to disk; we don't surface in-memory dets back here today
-  // (would need a per-source-kind return path — filed as #52A).
+  // `cmd_predict_task` drives the source classifier and the
+  // per-version `predict_to_file` hook (or v8 fallback). When called
+  // with an out-param it also threads the last processed image's
+  // dets back through (#52A2). Video/URL/Webcam frame loops still
+  // return empty here — per-frame dets live in the on-disk mp4.
+  std::vector<inference::Detection> dets;
   int rc = cli::cmd_predict_task(task, weights_, a.source, a.out, a.imgsz,
-                                  device, a.scale, a.nc, a.conf, a.iou);
+                                  device, a.scale, a.nc, a.conf, a.iou,
+                                  /*version_hint=*/"", &dets);
   if (rc != 0) {
     throw std::runtime_error("yolocpp::YOLO::predict failed (rc=" +
                               std::to_string(rc) + ")");
   }
-  return {};
+  return dets;
 }
 
 ValResult YOLO::val(const ValArgs& a) {

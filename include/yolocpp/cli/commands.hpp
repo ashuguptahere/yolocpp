@@ -15,15 +15,21 @@
 #include <utility>
 #include <vector>
 
+#include "yolocpp/inference/predictor.hpp"  // Detection
+
 namespace yolocpp::cli {
 
 int cmd_info();
 
+// `out_dets` is optional; when non-null, populated with the
+// detections for the LAST processed image (single-input → that
+// image; multi-input dir/glob → the last in lex order). #52A2.
 int cmd_predict_task(const std::string& task, const std::string& weights,
                      const std::string& source, std::string out, int imgsz,
                      std::string device, std::string scale_s, int nc,
                      float conf, float iou,
-                     const std::string& version_hint = "");
+                     const std::string& version_hint = "",
+                     std::vector<inference::Detection>* out_dets = nullptr);
 
 int cmd_val(const std::string& weights, const std::string& root,
             const std::string& names_csv, int imgsz, std::string device,

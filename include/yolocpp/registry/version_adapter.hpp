@@ -41,6 +41,7 @@ struct OnnxExportConfig;
 }
 namespace yolocpp::inference {
 struct NMSConfig;
+struct Detection;
 class  FramePredictor;
 }
 namespace yolocpp::datasets {
@@ -103,14 +104,19 @@ struct VersionAdapter {
   // and any anchor-free model whose state-dict shape is v8-compatible)
   // leave this empty — the CLI dispatcher routes those to
   // `cmd_predict` instead. See registry::Registry::find().
-  std::function<std::size_t(const std::string& weights,
-                            const std::string& source,
-                            const std::string& out,
-                            int imgsz,
-                            const std::string& device,
-                            const std::string& scale,
-                            int nc,
-                            const yolocpp::inference::NMSConfig& nm)>
+  // Returns the full detection vector for the processed image (so
+  // both `YOLO::predict()` (#52A2) and the CLI's "[predict] N
+  // detections, wrote ..." print line can read it). v8's hook is
+  // empty — its callers fall back to `inference::Predictor`.
+  std::function<std::vector<yolocpp::inference::Detection>(
+      const std::string& weights,
+      const std::string& source,
+      const std::string& out,
+      int imgsz,
+      const std::string& device,
+      const std::string& scale,
+      int nc,
+      const yolocpp::inference::NMSConfig& nm)>
       predict_to_file;
 
   // Validation: construct the right holder, load_state_dict, run
