@@ -30,6 +30,185 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.30.0] — 2026-05-02
+
+Cross-cutting overhaul. Five MINOR-worthy bodies of work landed in
+one session — bumping a single MINOR digit captures the magnitude
+without backfilling 30+ patch numbers. Going forward every commit
+gets its own version bump per CLAUDE.md policy; this consolidated
+entry covers the gap from 0.25.0.
+
+### Added — per-version registry (#46)
+
+Every supported YOLO version (v3..v13, v26) registers a
+`yolocpp::registry::VersionAdapter` in
+`src/registry/version_registry.cpp`. Each adapter carries
+`std::function`-erased hooks for `export_onnx`, `predict_to_file`,
+`run_val`, `run_train_detect`, `benchmark_pt`, `make_frame_predictor`
+plus metadata (default imgsz per (scale, task), TF32 quirks,
+supported task list). The CLI command bodies (`cmd_export`,
+`cmd_predict_task`, `cmd_val`, `cmd_train`, `engine::run_benchmark`)
+all dispatch through the registry instead of long if-else chains.
+**Adding a new YOLO version is now a one-pass change**: drop the model
+TU + ONNX emitter, write a `make_v<N>()` helper, register it. No
+edits to `cli/main.cpp` or per-task pipelines. v8 leaves most hooks
+empty and falls back to the unified `inference::Predictor` /
+`engine::Trainer` paths. `tests/test_registry.cpp` enforces the
+shape — every non-v8 adapter wires every hook. **Net deletion in the
+CLI: ~890 lines** (cmd_predict_task, dispatch_kv, cmd_train inline
+branches, cmd_export's per-version dispatch, engine::bench_pt's
+per-version dispatch, build_onnx_for, cmd_dispatch_flag_style's val
++ train chains).
+
+### Added — chainable C++ public API (#52)
+
+`#include <yolocpp/api.hpp>` exposes `yolocpp::YOLO("...pt")` with
+designated-initialiser `predict / val / train / export_ / benchmark`
+methods. Every method routes through the same `cmd_*` body the CLI
+uses (in the new `src/cli/commands.cpp`, lifted out of `main.cpp`'s
+anonymous namespace under #52). `predict()` returns
+`vector<Detection>` for image-mode (#52A2) — adapter
+`predict_to_file` hook signature widened from `size_t` →
+`vector<Detection>`. `to(device)` and `task(...)` set per-instance
+defaults. `examples/` directory (#52B) ships seven self-contained
+programs covering image / dir / video predict, train+auto-export,
+ONNX export, benchmark, end-to-end pipeline; toggleable via
+`-DYOLOCPP_BUILD_EXAMPLES` (default ON).
+
+### Added — single canonical CLI parser: `--mode` (#51)
+
+The kv-style (`task=detect mode=predict ...`) and legacy
+subcommand-style (`yolocpp predict --weights ...`) parsers were
+**removed entirely** under #51K. Flag-style is now the only CLI:
+
+```
+yolocpp --mode <train|predict|val|export|benchmark|info|download> [flags...]
+```
+
+Every option sits at the top level. Long + short forms wired
+everywhere: `-m/--model` (alias `--weights`), `-d/--data`,
+`-s/--source`, `-o/--out`, `-D/--device`, `-i/--imgsz`,
+`-e/--epochs`, `-b/--batch`, `-n/--nc`, `-c/--conf`, `-f/--format`,
+`-p/--precision`, `--seed`, `--task`, `--export-after-train`,
+`--dataset`. Per-mode required-flag validation centralised in
+`cmd_dispatch_flag_style` so error messages are uniform
+(`[error] --mode=<X> needs --<flag>`). Removed: `src/cli/args.cpp`
+(91 lines), `include/yolocpp/cli/args.hpp` (51 lines), the entire
+CLI11 subcommand block (~200 lines).
+
+New flag-level features: `--source` classifier handling image / dir
+/ glob (#51C image slice) AND video / URL / webcam frame loop via
+`inference::FramePredictor` + `cv::VideoCapture` + `cv::VideoWriter`
+(#51C2). `--seed` plumbed through trainer + dataset shuffle +
+`args.yaml`. `--task {detect|classify|segment|pose|obb}` plumbed
+through predict / val / train / export with separate
+`cmd_val_task` / `cmd_train_task` helpers for the v8 task families
+(non-detect tasks). `--device` validator accepts `cpu | cuda |
+cuda:N | cuda:0,1,... | mps | auto` and rejects invalid values
+before any subcommand runs. `--precision {fp32|fp16|int8|int4|nvfp4}`
+on export (fp32/fp16 wired; the rest filed under #51F2 with clear
+errors). `--export-after-train` auto-exports `<save>/best.pt` →
+`<save>/best.{onnx,trt}` post-training. `yolocpp --mode download
+--dataset <name|url>` subcommand with built-in registry (coco8,
+coco128, dota8, VOC, xView, ...).
+
+### Added — dataset infra v2 (#54)
+
+Three new dataset loaders + size-stratified mAP + Mosaic/Mixup:
+
+- **FlatDataset** (#54A) — single CSV/TSV with header `split,
+  image_path, class_id, x_center, y_center, width, height`. Multiple
+  labels per image map to multiple rows; empty `class_id` registers
+  a background image. Auto-detects comma/tab/semicolon delimiter.
+- **VocDataset** (#54B) — Pascal VOC layout
+  (`JPEGImages/Annotations/ImageSets/Main`). XML parsed via regex;
+  no libxml2.
+- **CocoDataset** (#54B) — COCO 2017 JSON schema. Parsed by a
+  hand-rolled JSON tokenizer (no libjson per `DEPS.md`). Sparse
+  category IDs compressed to dense [0, N).
+- **`cli::make_dataset(spec, split, ...)` factory** — `--data` now
+  accepts five forms (YOLO dir, VOC dir, `.csv`/`.tsv`, `.json`,
+  `.yaml`/`.yml`); auto-detects by extension/layout. New
+  `YoloDataset` ctor `(img_paths, vector<Tensor> labels, ...)`
+  funnels every loader through one concrete dataset class so
+  trainer + validator stay typed without virtual dispatch.
+- **mAP S/M/L breakdown** (#54C) — `metrics::mAPResult` extended
+  with `map_50_95_{small,medium,large}` + `n_gt_*` counts (COCO
+  area buckets ≤32², ≤96², >96²). Surfaced through `cmd_val`
+  output and `runs/val/<stem>_results.txt`.
+- **Mosaic-4 + Mixup** (#54D) — `AugConfig::mosaic_p` /
+  `mixup_p` (default 0). Mosaic stitches 4 sampled images at a
+  random centre, crops to imgsz, drops boxes that shrink to ≤1 px.
+  Mixup blends with α ~ Beta(8,8) approximation + concatenates
+  label lists.
+
+### Added — cross-backend parity test + TRT sweep phase (#53)
+
+`tests/test_cross_backend_parity.cpp` — for each cell exports ONNX,
+builds TRT FP32 + FP16, runs all three backends on bus.jpg, asserts
+det count within ±1 of libtorch and IoU ≥ 0.50 same-class match for
+≥ N-1 of N libtorch dets. Cells: v8n / v11s / v12s / v13s — 4/4
+pass with `matched N/N`. v26 deliberately excluded (NMS-free deploy
+form needs version-aware decode; covered by `test_v26_e2e`).
+`scripts/full_matrix_sweep.sh` phase 7 added: per-version `.pt →
+.trt → predict` round-trip across all 12 supported versions. Sweep
+total **152/152 → 164/164 PASS**.
+
+### Added — third-party manifest + audit (#48)
+
+`third_party/DEPS.md` — single pinned manifest (libtorch
+2.11.0+cu130, TensorRT 10.14.1.48+cuda13, CUDA 13.0.88, OpenCV
+4.6.0, NCCL 2.23.4, rapidyaml 0.11.1, CLI11 2.4.x). Documents why
+Boost / protobuf / GTest / fmt / json libs / ONNX Runtime are
+explicitly rejected. `scripts/audit_deps.sh` enforces the whitelist
+— any new `find_package` or undocumented `third_party/` entry
+fails the audit.
+
+### Removed — every "ultralytics" trace from the codebase (#49)
+
+Every code-level mention of the upstream vendor neutralised across
+CLI / models / inference / engine / serialization / datasets / tasks
+/ tests / scripts (~75 files). Identifier rename:
+`looks_like_ultralytics_weight` → `looks_like_upstream_weight`. The
+allow-list (kept by design): `kAssetBase` URL constant in
+`cli/resolve.cpp` (real network endpoint), the Meituan v6 release
+URL (same), the pickle wire-format token `"ultralytics.nn.tasks"` /
+`"DetectionModel"` in `pt_save.cpp` (downstream readers expect this
+exact GLOBAL — renaming would break interop), historical
+`CHANGELOG.md` entries, and the `#49` task description itself
+(meta-reference).
+
+### Added — `./VERSION` as version source of truth (#47)
+
+CMake reads `./VERSION` (one-line `MAJOR.MINOR.PATCH`) and feeds it
+into `project(yolocpp VERSION ...)`, which CMake then exports
+through `build/generated/yolocpp/config.hpp` as
+`YOLOCPP_VERSION_STRING`. To bump the version, edit `./VERSION`
+only. New `yolocpp --version` / `-v` / `-V` flag prints it.
+`scripts/check_version_literals.sh` lints the codebase against
+stray `0.MINOR.PATCH` literals outside the allow-list.
+
+### Changed — public registry hook signatures
+
+- `VersionAdapter::predict_to_file` returns `vector<Detection>`
+  (was `size_t`).
+- `VersionAdapter::ValResult` widened with
+  `map_50_95_{small,medium,large}` + `n_gt_*` fields.
+- New `VersionAdapter::make_frame_predictor` hook (returns
+  `unique_ptr<inference::FramePredictor>`).
+- New `VersionAdapter::run_val` / `run_train_detect` /
+  `benchmark_pt` hooks.
+
+### Verification
+
+- `ctest` full suite: **37/37 PASS** (was 31).
+- `scripts/full_matrix_sweep.sh`: **164/164 PASS** (was 152).
+- `scripts/check_version_literals.sh`: clean.
+- `scripts/audit_deps.sh`: clean (4 packages, 9 third_party/
+  entries; no new deps added in this body of work).
+
+---
+
 ## [0.25.0] — 2026-05-01
 
 ### Changed — `runs/<mode>/` default output convention for predict / val / export
