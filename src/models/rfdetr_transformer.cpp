@@ -290,51 +290,66 @@ RFDetrTransformerImpl::RFDetrTransformerImpl(int hidden, int n_dec_layers,
 
 TransformerOutput RFDetrTransformerImpl::forward(
     torch::Tensor memory_2d, torch::Tensor query_feat_first_group,
-    int num_queries) {
+    torch::Tensor refpoint_embed_first_group, int num_queries) {
   // memory_2d: [B, C, H, W] — projector output.
   auto B = memory_2d.size(0);
-  int  C = static_cast<int>(memory_2d.size(1));
   int  H = static_cast<int>(memory_2d.size(2));
   int  W = static_cast<int>(memory_2d.size(3));
-  // Flatten to tokens [B, L, C].
   auto memory = memory_2d.flatten(2).transpose(1, 2).contiguous();
 
-  // Two-stage: enc_output[0] + LN[0] → cls + bbox proposals.
-  // At eval only the first of group_detr groups is used.
+  // Generate dense per-token proposals + masked memory (matches
+  // upstream `gen_encoder_output_proposals(memory, ..., unsigmoid=False)`).
+  auto props = gen_encoder_output_proposals_1l(memory, H, W);
+  auto& output_memory     = props.output_memory;     // memory MASKED at invalid positions
+  auto& output_proposals  = props.output_proposals;  // [B, L, 4] cxcywh in [0,1]
+
+  // Two-stage: enc_output[0] + LN[0] applied to MASKED memory (NOT
+  // raw memory — upstream applies enc_output to `output_memory`).
   auto out_mem = enc_output_norm[0]->as<torch::nn::LayerNormImpl>()->forward(
-      enc_output[0]->as<torch::nn::LinearImpl>()->forward(memory));
+      enc_output[0]->as<torch::nn::LinearImpl>()->forward(output_memory));
 
   auto cls_logits = enc_out_class_embed[0]
                         ->as<torch::nn::LinearImpl>()->forward(out_mem);
   auto bbox_delta = enc_out_bbox_embed[0]
                         ->as<RFDetrMLPImpl>()->forward(out_mem);
 
-  // Generate dense per-token proposals (cxcy on grid, wh fixed prior).
-  auto props = gen_encoder_output_proposals_1l(memory, H, W);
-  // bbox_reparam: cx = delta_xy * wh + xy; wh = exp(delta_wh) * wh.
+  // bbox_reparam encoder output: cx = delta_xy * wh + xy;
+  // wh = exp(delta_wh) * wh.
   auto coord_cxcy = bbox_delta.slice(-1, 0, 2) *
-                        props.output_proposals.slice(-1, 2, 4) +
-                    props.output_proposals.slice(-1, 0, 2);
+                        output_proposals.slice(-1, 2, 4) +
+                    output_proposals.slice(-1, 0, 2);
   auto coord_wh   = bbox_delta.slice(-1, 2, 4).exp() *
-                        props.output_proposals.slice(-1, 2, 4);
+                        output_proposals.slice(-1, 2, 4);
   auto coord = torch::cat({coord_cxcy, coord_wh}, -1);   // [B, L, 4]
 
   // Top-K by max-cls score.
   auto top_scores = std::get<0>(cls_logits.max(-1));     // [B, L]
   int  K          = std::min<int>(num_queries, static_cast<int>(top_scores.size(1)));
-  auto topk = top_scores.topk(K, /*dim=*/1);
-  auto idx  = std::get<1>(topk);                          // [B, K]
+  auto topk_idx   = std::get<1>(top_scores.topk(K, /*dim=*/1));  // [B, K]
+  auto idx_4      = topk_idx.unsqueeze(-1).expand({B, K, 4});
+  auto refpoint_embed_ts = torch::gather(coord, /*dim=*/1, idx_4);  // [B, K, 4]
 
-  // Gather top-K refpoints.
-  auto idx_4 = idx.unsqueeze(-1).expand({B, K, 4});
-  auto topk_refpts = torch::gather(coord, /*dim=*/1, idx_4);  // [B, K, 4]
+  // Combine the LEARNED `refpoint_embed[:Q]` with `refpoint_embed_ts`
+  // via bbox_reparam (matches upstream transformer.forward lines
+  // 313-322 — the two-stage initialisation that perturbs the learned
+  // anchors by the encoder's top-K proposal):
+  //   cxcy = subset[..., :2] * ts[..., 2:] + ts[..., :2]
+  //   wh   = subset[..., 2:].exp() * ts[..., 2:]
+  auto subset = refpoint_embed_first_group.unsqueeze(0).expand({B, K, 4})
+                    .contiguous();
+  auto rp_cxcy = subset.slice(-1, 0, 2) *
+                    refpoint_embed_ts.slice(-1, 2, 4) +
+                  refpoint_embed_ts.slice(-1, 0, 2);
+  auto rp_wh   = subset.slice(-1, 2, 4).exp() *
+                  refpoint_embed_ts.slice(-1, 2, 4);
+  auto refpoints = torch::cat({rp_cxcy, rp_wh}, -1);     // [B, K, 4]
 
   // Initial query feats from the LEARNED query_feat[:Q] (broadcast to B).
   auto tgt = query_feat_first_group.unsqueeze(0).expand({B, K, hidden_})
                   .contiguous();
 
-  auto out = decoder->forward(tgt, topk_refpts, memory, H, W);
-  return {out, topk_refpts};
+  auto out = decoder->forward(tgt, refpoints, memory, H, W);
+  return {out, refpoints};
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────

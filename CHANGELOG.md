@@ -30,6 +30,76 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.53.0] — 2026-05-02
+
+### Fixed — RF-DETR two-stage init: masked memory + refpoint reparam (#65L slice 10)
+
+Two real bugs in `RFDetrTransformerImpl::forward`:
+
+1. **`enc_output[0]` should consume MASKED memory.** Upstream's
+   `gen_encoder_output_proposals` returns `(output_memory,
+   output_proposals)` where `output_memory` has been zeroed at
+   positions whose proposal coords aren't in `(0.01, 0.99)`. Then
+   `enc_output[g_idx](output_memory)` runs on the masked tensor.
+   My code applied `enc_output[0]` to the RAW memory — leaking
+   edge-token noise into the encoder-output predictions. Fixed.
+
+2. **Decoder refpoints = bbox_reparam(learned[:Q], topk_refpts).**
+   Upstream's two-stage logic combines the LEARNED `refpoint_embed`
+   parameter's first-group slice with the encoder's top-K
+   refpoints via:
+
+   ```
+   cxcy = learned_subset[..., :2] * topk[..., 2:] + topk[..., :2]
+   wh   = learned_subset[..., 2:].exp() * topk[..., 2:]
+   refpoints_to_decoder = cat([cxcy, wh], -1)
+   ```
+
+   My code passed raw `topk_refpts` directly, ignoring the learned
+   prior entirely. Now `RFDetrTransformerImpl::forward` takes a
+   `refpoint_embed_first_group` parameter (`[Q, 4]` slice of the
+   top-level Parameter) and applies the bbox_reparam combination
+   before feeding the decoder.
+
+`RFDetrImpl::forward_eval` updated to pass `refpoint_embed_[:Q]`
+through.
+
+### Status
+
+```
+                          BEFORE      AFTER
+[probe] cls_logits max:   -2.88   →   -2.95
+[probe] forward_eval cls:  0.053  →    0.050
+```
+
+Marginal change in numerics — the **decoder element-wise output
+still differs** from upstream (0.78/0.58/-0.03/... vs
+-0.53/1.49/1.51/...). The two-stage initialisation is now correct
+at the contract level, but a deeper bug remains inside the
+decoder cross-attn / self-attn / sinusoidal-embed path. Likely
+candidates for slice 11:
+
+- Sinusoidal `gen_sineembed_for_position` — element ordering
+  (sin(0::2), cos(1::2), then concat (y, x, w, h)) may differ in
+  the interleave step.
+- Decoder cross-attn (`MSDeformAttn1L::forward`) — sampling
+  location formula `ref_xy + offset/n_points * ref_wh * 0.5`
+  details vs upstream `ms_deform_attn_core_pytorch`.
+- Self-attn fused-QKV slicing of `in_proj_weight` (rows for Q/K/V
+  may be in a different order than [0:hidden, hidden:2hidden,
+  2hidden:3hidden]).
+
+Each candidate is a single-target probe in the harness.
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 10 done (two-stage init bugs fixed). Slice 11
+  bisects the decoder path further.
+
+---
+
 ## [0.52.0] — 2026-05-02
 
 ### Diagnosed — RF-DETR transformer path divergence (#65L slice 9)

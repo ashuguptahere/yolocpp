@@ -167,11 +167,12 @@ torch::Tensor RFDetrImpl::forward_eval(torch::Tensor x) {
   auto& slot = *backbone_real_[0]->as<yolocpp::models::rfdetr::BackboneSlotImpl>();
   auto memory_2d = slot.forward(std::move(x));        // [B, hidden, Hg, Wg]
 
-  // First-group query feats: query_feat[:Q] (group_detr=1 at eval).
+  // First-group query feats / refpoints: [:Q] (group_detr=1 at eval).
   int Q = scale.num_queries;
-  auto qfeat_first = query_feat_.slice(/*dim=*/0, 0, Q);
+  auto qfeat_first  = query_feat_.slice(/*dim=*/0, 0, Q);
+  auto rpemb_first  = refpoint_embed_.slice(/*dim=*/0, 0, Q);
 
-  auto tf_out = transformer_->forward(memory_2d, qfeat_first, Q);
+  auto tf_out = transformer_->forward(memory_2d, qfeat_first, rpemb_first, Q);
   auto& out_feat = tf_out.decoder_out;                // [B, Q, hidden]
   auto& refpts   = tf_out.refpoints;                  // [B, Q, 4] cxcywh in [0,1]
 

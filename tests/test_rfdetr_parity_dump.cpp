@@ -238,9 +238,11 @@ int main() {
     int Q = m->scale.num_queries;
     auto qfeat = m->named_parameters()["query_feat.weight"]
                       .slice(0, 0, Q);
+    auto rpemb = m->named_parameters()["refpoint_embed.weight"]
+                      .slice(0, 0, Q);
     auto tf_out = m->named_modules()["transformer"]
                       ->as<yolocpp::models::rfdetr::RFDetrTransformerImpl>()
-                      ->forward(memory_2d, qfeat, Q);
+                      ->forward(memory_2d, qfeat, rpemb, Q);
     std::cout << "[stage] transformer.decoder_out  shape="
               << tf_out.decoder_out.sizes()
               << "  cpp_sum=" << tf_out.decoder_out.sum().item<float>() << "\n";

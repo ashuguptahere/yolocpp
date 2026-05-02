@@ -166,9 +166,12 @@ class RFDetrTransformerImpl : public torch::nn::Module {
   // decoder refinement. `memory_2d`: [B, C, Hg, Wg] from projector.
   // `query_feat_first_group`: [Q, C] pre-sliced learned query feats
   // (= query_feat[:Q] from the top-level Parameter at eval).
+  // `refpoint_embed_first_group`: [Q, 4] pre-sliced learned refpoints
+  // (= refpoint_embed[:Q] from the top-level Parameter at eval).
   // Returns the last-layer query output + the final refined refpoints.
   TransformerOutput forward(torch::Tensor memory_2d,
                               torch::Tensor query_feat_first_group,
+                              torch::Tensor refpoint_embed_first_group,
                               int num_queries);
   RFDetrDecoder    decoder{nullptr};
   torch::nn::ModuleList enc_output{nullptr};
