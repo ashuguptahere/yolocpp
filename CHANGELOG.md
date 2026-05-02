@@ -30,6 +30,73 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.50.0] — 2026-05-02
+
+### Fixed — RF-DETR projector ConvX bn=LayerNorm + per-tap layernorm (#65L slice 7)
+
+Two related parity bugs in the projector path:
+
+1. **Per-tap `layernorm` application.** Upstream
+   `WindowedDinov2WithRegistersBackbone.forward`
+   (`if self.config.apply_layernorm: hidden_state = self.layernorm(hidden_state)`)
+   applies the encoder's final `layernorm` to **every** out-feature
+   tap, not just the last one (verified `cfg.apply_layernorm = True`
+   for rf-detr-base via Python). Fixed in `Dinov2ModelImpl::forward`
+   to LN every tap before un-windowing.
+
+2. **ConvBN's `bn` is actually a `ChannelLastLayerNorm`.** Despite
+   the parameter name `bn.weight` / `bn.bias` in the upstream
+   checkpoint, the actual module is a custom channel-last
+   LayerNorm — verified by introspecting `proj.stages[0][0].cv1`
+   in Python (`(bn): LayerNorm()` not `BatchNorm2d`). My earlier
+   implementation used `BatchNorm2d(track_running_stats=False)`
+   which has totally different forward semantics. Replaced with
+   `ChannelLastLNImpl` (which already existed for the outer
+   `stages.<i>.1` slot — same module, different sub-module path).
+
+Result on `rf-detr-base.pth` parity:
+
+```
+                       BEFORE   AFTER
+backbone_feat_0   max  15.5374  →  2.3961
+                  sum  +7437.78 →  -6221.67  (Python: -6446.04)
+```
+
+Magnitude now matches within 5%, sign is correct. Remaining 2.4
+diff is likely accumulated fp32 round-off through the
+`cv1 → m₀ → m₁ → m₂ → cv2` cascade — same kind of compounding
+that the backbone showed before `antialias=True` closed it.
+Diagnostic harness covers all 4 taps + projector output for
+continued bisection.
+
+The custom `bicubic_interpolate_2d` from #65L slice 6 stays as
+the canonical reference; libtorch's `interpolate(antialias=True)`
+remains the production path.
+
+### Tooling
+
+`tests/test_rfdetr_parity_dump.cpp` extended with:
+- `[stage] backbone_feat_0` — projector output diff + sum
+- `[stage] tap0..3` — per-tap shape + sum + abs.max for visibility
+
+The Python dumper at
+`/tmp/yolocpp_parity/dump_rfdetr_forward.py` now also captures
+`backbone_feat_0` (via `forward_export`), `dec_layer<i>_out`
+(via forward hooks), `dec_norm_out`, `class_embed_out`,
+`bbox_embed_last_out`, and the 4-tuple `transformer_out_*`. These
+become the next bisection targets once the projector closes
+fully.
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 7 done (projector down to 2.4 diff via BN→LN
+  fix + per-tap LN). Slice 8 closes the residual 2.4 in the
+  projector cascade, then bisects the transformer.
+
+---
+
 ## [0.49.0] — 2026-05-02
 
 ### Fixed — RF-DETR backbone bit-exact parity via `antialias=True` (#65L slice 6)

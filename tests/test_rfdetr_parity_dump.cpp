@@ -218,5 +218,30 @@ int main() {
               << blocks[i].sizes() << "  max_abs_diff=" << diff << "\n";
   }
 
+  // ── Backbone+projector → transformer intermediates ──
+  std::cout << "\n--- transformer-stage diffs ---\n";
+  auto& slot_inner = bs;   // BackboneSlotImpl
+  auto memory_2d = slot_inner.forward(inp);   // [B, hidden, Hg, Wg]
+  {
+    auto py = load_dump(d, "backbone_feat_0");
+    if (py.defined()) {
+      float diff = max_abs_diff(memory_2d.to(torch::kFloat).contiguous(),
+                                  py.to(torch::kFloat).contiguous());
+      std::cout << "[stage] backbone_feat_0   shape="
+                << memory_2d.sizes() << "  max_abs_diff=" << diff
+                << "  cpp_sum=" << memory_2d.sum().item<float>()
+                << "  py_sum="  << py.sum().item<float>() << "\n";
+    }
+  }
+  // Probe the 4 taps fed to the projector.
+  {
+    auto taps = dmodel.forward(inp);  // [B, C, Hg, Wg] × 4 (layernormed + un-windowed)
+    for (size_t i = 0; i < taps.size(); ++i) {
+      std::cout << "[stage] tap" << i << "  shape=" << taps[i].sizes()
+                << "  sum=" << taps[i].sum().item<float>()
+                << "  abs.max=" << taps[i].abs().max().item<float>() << "\n";
+    }
+  }
+
   return 0;
 }

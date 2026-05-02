@@ -38,15 +38,26 @@
 
 namespace yolocpp::models::rfdetr {
 
-// Conv2d + BatchNorm2d (track_running_stats=False, matching upstream's
-// `get_norm` default for `layer_norm=False`) + SiLU. Submodules
-// `conv` and `bn` named to match upstream.
+// Conv2d (no bias) + ChannelLastLayerNorm + SiLU. Despite the
+// `bn` name in upstream's checkpoint, this is actually a custom
+// channel-last LayerNorm (verified via `print(proj.stages[0].cv1)`
+// showing `(bn): LayerNorm()` with `[C]` weight + bias and no BN
+// running stats). Submodules `conv` and `bn` named to match
+// upstream's checkpoint key paths.
 class ConvBNImpl : public torch::nn::Module {
  public:
   ConvBNImpl(int in_ch, int out_ch, int kernel, int padding);
   torch::Tensor forward(torch::Tensor x);
-  torch::nn::Conv2d      conv{nullptr};
-  torch::nn::BatchNorm2d bn{nullptr};
+  torch::nn::Conv2d  conv{nullptr};
+  // The "bn" sub-module is actually a channel-last LayerNorm —
+  // matches `[C]` weight + bias shape from upstream `.pth`.
+  torch::Tensor      weight;   // bn.weight
+  torch::Tensor      bias;     // bn.bias
+ private:
+  // Internal-only LN module so the parameter dotted-paths come out
+  // as `bn.weight` / `bn.bias` matching upstream.
+  torch::nn::Module bn_{};
+  int channels_;
 };
 TORCH_MODULE(ConvBN);
 

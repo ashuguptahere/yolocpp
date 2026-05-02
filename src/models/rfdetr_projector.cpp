@@ -7,23 +7,26 @@
 
 namespace yolocpp::models::rfdetr {
 
-ConvBNImpl::ConvBNImpl(int in_ch, int out_ch, int kernel, int padding) {
+ConvBNImpl::ConvBNImpl(int in_ch, int out_ch, int kernel, int padding)
+    : channels_(out_ch) {
   conv = register_module(
       "conv",
       torch::nn::Conv2d(torch::nn::Conv2dOptions(in_ch, out_ch, kernel)
                             .padding(padding)
                             .bias(false)));
-  // Upstream uses `track_running_stats=False` (the saved
-  // checkpoints have no running_mean/running_var buffers). At eval,
-  // BN with track_running_stats=False still computes batch statistics
-  // — effectively InstanceNorm-by-channel for B=1.
-  bn = register_module(
-      "bn",
-      torch::nn::BatchNorm2d(
-          torch::nn::BatchNorm2dOptions(out_ch).track_running_stats(false)));
+  // Upstream's "bn" is actually a channels-last LayerNorm. Wrap as
+  // a sub-module named "bn" so the loaded `<...>.bn.weight` /
+  // `bn.bias` dotted paths match.
+  auto bn_mod = register_module("bn", std::make_shared<ChannelLastLNImpl>(out_ch));
+  weight = bn_mod->weight;
+  bias   = bn_mod->bias;
 }
 torch::Tensor ConvBNImpl::forward(torch::Tensor x) {
-  return torch::silu(bn->forward(conv->forward(x)));
+  // Apply convolution → channels-last LayerNorm → SiLU.
+  // ChannelLastLN does the NCHW↔NHWC permute internally.
+  auto bn_mod = std::dynamic_pointer_cast<ChannelLastLNImpl>(
+      named_children()["bn"]);
+  return torch::silu(bn_mod->forward(conv->forward(x)));
 }
 
 ChannelLastLNImpl::ChannelLastLNImpl(int channels) : channels_(channels) {

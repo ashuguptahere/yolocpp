@@ -519,8 +519,10 @@ std::vector<torch::Tensor> Dinov2ModelImpl::forward(torch::Tensor x) {
   auto taps   = encoder->forward(tokens);
   if (taps.empty()) return {};
 
-  // Apply final LN on the last tap's output (matches HF behaviour).
-  taps.back() = layernorm->forward(taps.back());
+  // Upstream `WindowedDinov2WithRegistersBackbone.forward` applies
+  // `layernorm` to EVERY out_features tap (not just the last one)
+  // when `apply_layernorm=True` (verified True for rf-detr-base).
+  for (auto& t : taps) t = layernorm->forward(t);
 
   // Compute window count from token shape.
   auto C = taps[0].size(-1);
