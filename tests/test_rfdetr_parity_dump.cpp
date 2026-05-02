@@ -233,6 +233,71 @@ int main() {
                 << "  py_sum="  << py.sum().item<float>() << "\n";
     }
   }
+  // Run the full transformer + heads, then compare against upstream.
+  {
+    int Q = m->scale.num_queries;
+    auto qfeat = m->named_parameters()["query_feat.weight"]
+                      .slice(0, 0, Q);
+    auto tf_out = m->named_modules()["transformer"]
+                      ->as<yolocpp::models::rfdetr::RFDetrTransformerImpl>()
+                      ->forward(memory_2d, qfeat, Q);
+    std::cout << "[stage] transformer.decoder_out  shape="
+              << tf_out.decoder_out.sizes()
+              << "  cpp_sum=" << tf_out.decoder_out.sum().item<float>() << "\n";
+    auto py_dec = load_dump(d, "dec_norm_out");
+    if (py_dec.defined()) {
+      float diff = max_abs_diff(tf_out.decoder_out.to(torch::kFloat).contiguous(),
+                                  py_dec.to(torch::kFloat).contiguous());
+      std::cout << "[stage]                Py "
+                << py_dec.sizes() << " sum=" << py_dec.sum().item<float>()
+                << "  →  max_abs_diff=" << diff << "\n";
+    }
+    // Final cls + bbox head outputs.
+    auto cls_logits = m->named_modules()["class_embed"]
+                          ->as<torch::nn::LinearImpl>()
+                          ->forward(tf_out.decoder_out);
+    std::cout << "[stage] class_embed_out  shape="
+              << cls_logits.sizes()
+              << "  cpp_sum=" << cls_logits.sum().item<float>()
+              << "  abs.max=" << cls_logits.abs().max().item<float>() << "\n";
+    // Top-K cls scores.
+    auto cls_sigmoid = torch::sigmoid(cls_logits);   // [1, 300, 91]
+    auto top_per_query = std::get<0>(cls_sigmoid.max(-1));
+    auto top_K = top_per_query.topk(10);
+    auto vals = std::get<0>(top_K).contiguous();
+    std::cout << "[probe] top-10 cls scores:";
+    for (int i = 0; i < 10; ++i)
+        std::cout << " " << vals.flatten()[i].item<float>();
+    std::cout << "\n";
+    std::cout << "[probe] cls_logits min/max: "
+              << cls_logits.min().item<float>() << " / "
+              << cls_logits.max().item<float>() << "\n";
+    // Verify class_embed weights loaded properly.
+    auto& cls_w = m->named_parameters()["class_embed.weight"];
+    auto& cls_b = m->named_parameters()["class_embed.bias"];
+    std::cout << "[probe] class_embed.weight  shape=" << cls_w.sizes()
+              << "  sum=" << cls_w.sum().item<float>()
+              << "  abs.max=" << cls_w.abs().max().item<float>() << "\n";
+    std::cout << "[probe] class_embed.bias    shape=" << cls_b.sizes()
+              << "  sum=" << cls_b.sum().item<float>()
+              << "  abs.max=" << cls_b.abs().max().item<float>() << "\n";
+    // Verify decoder_out vs py.
+    auto py_dec_out = load_dump(d, "transformer_out_2");  // [1, 300, 256] = memory_ts
+    if (!py_dec_out.defined()) py_dec_out = load_dump(d, "dec_norm_out");
+    if (py_dec_out.defined()) {
+      std::cout << "[probe] decoder_out cpp[0,0,:6]: ";
+      for (int i = 0; i < 6; ++i)
+          std::cout << tf_out.decoder_out[0][0][i].item<float>() << " ";
+      std::cout << "\n[probe] decoder_out py [0,0,:6]: ";
+      for (int i = 0; i < 6; ++i)
+          std::cout << py_dec_out[0][0][i].item<float>() << " ";
+      std::cout << "\n";
+    }
+    // Run forward_eval through the public API for comparison.
+    auto eval_out = m->forward_eval(inp);
+    std::cout << "[stage] forward_eval     shape=" << eval_out.sizes()
+              << "  cls slice abs.max=" << eval_out.slice(1, 4).abs().max().item<float>() << "\n";
+  }
   // Compare per-tap against Python's `proj_input_*`.
   {
     auto taps = dmodel.forward(inp);   // [B, C, Hg, Wg] × 4

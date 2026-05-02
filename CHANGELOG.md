@@ -30,6 +30,84 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.52.0] — 2026-05-02
+
+### Diagnosed — RF-DETR transformer path divergence (#65L slice 9)
+
+Backbone + projector + cls/bbox heads + final query selection
+all bit-exact (slice 8). The remaining 0-detection bug is **inside
+the transformer decoder forward**. Probe results:
+
+```
+[probe] cls_logits min/max: -9.44 / -2.88   (Python: -9.47 / +5.0+)
+[probe] class_embed.weight  abs.max=0.389
+[probe] class_embed.bias    sum=-423.5      (~-4.65 per slot — heavy "no-object" prior)
+[probe] decoder_out cpp[0,0,:6]: -0.58 1.35 1.26 0.06 0.38 -0.01
+[probe] decoder_out  py [0,0,:6]:  0.78 0.58 -0.03 -0.43 0.94 0.86
+```
+
+`class_embed.weight` and `class_embed.bias` load with shape match,
+but the **decoder_out values are element-wise different** from
+upstream — every position has a different value, despite the
+sums being numerically close (279.3 vs 279.9). That points to
+**a different query selection** at the two-stage encoder-output
+top-K step, which then propagates through 3 decoder layers
+producing entirely different per-query feature vectors.
+
+`cls_logits.max()` of -2.88 means **no positive cls predictions**
+— sigmoid maps every query's best cls to ≤ 0.05, so no
+detection survives even the lowest threshold. Python sees max
+~5+ values that sigmoid to >0.99 for real objects.
+
+The likely root causes (in order of probability):
+
+1. **Top-K selection mismatch**: my code uses
+   `cls_unselected.max(-1)` then `topk()`. Upstream uses
+   `enc_outputs_class_unselected_gidx.max(-1)[0]` then `topk` on
+   that — need to verify both match.
+
+2. **`refpoint_embed` learnable prior**: at eval, upstream
+   combines the top-K selected refpoints with the FIRST GROUP of
+   the learnable `refpoint_embed`'s `[Q, 4]` slice using
+   `bbox_reparam`. My code uses ONLY the top-K selected refpoints
+   without this combination.
+
+3. **`gen_encoder_output_proposals` validity mask** discrepancy
+   that masks differently than upstream's logic for the 1369 → 1600
+   token grid.
+
+4. **Sinusoidal embedding** in `gen_sineembed_for_position` —
+   Python's interleave order may differ.
+
+5. **Deformable attention** — sample location formula
+   `sample_loc = ref_xy + offset/n_points × ref_wh × 0.5` may have
+   the wrong factor for fp32-bit-exact match.
+
+### Tooling
+
+`tests/test_rfdetr_parity_dump.cpp` now includes:
+
+```cpp
+[probe] cls_logits min/max
+[probe] class_embed.weight stats
+[probe] decoder_out cpp[0,0,:6] vs py[0,0,:6]
+```
+
+The Python dumper at `/tmp/yolocpp_parity/dump_rfdetr_forward.py`
+captures the 4-tuple `transformer_out_*` (hs, references,
+memory_ts, boxes_ts) so the C++ side can compare each.
+
+ctest 42/42 (only pre-existing #64). All 6 rfdetr tests pass.
+
+### Tracked
+
+- TODO #65L slice 9 done (decoder path divergence localised).
+  Slice 10: bisect inside the transformer's two-stage path —
+  start with `enc_output[0]` applied to memory, then the top-K
+  cls selection, then the refpoint combination with `refpoint_embed`.
+
+---
+
 ## [0.51.0] — 2026-05-02
 
 ### Fixed — RF-DETR tap-block off-by-one (#65L slice 8) → backbone+projector bit-exact
