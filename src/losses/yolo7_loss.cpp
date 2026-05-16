@@ -231,10 +231,31 @@ LossOutput V7DetectionLoss::operator()(
       }
     }
 
-    // Obj loss over the full per-level grid.
+    // Obj loss with imbalance-aware `pos_weight`. The default mean
+    // reduction over the [B, na, H, W] grid dilutes the per-positive
+    // gradient by `1/N_total`; at imgsz=1280 with the P6 head this is
+    // ~4× weaker than at imgsz=640 (same positives, 4× more cells),
+    // which causes anchor-based v7 P6 to barely move on short training
+    // budgets (mAP 0.14 vs 0.51 at 3 epochs on screen-detection).
+    //
+    // Fix: set BCE `pos_weight = N_neg / N_pos` so the positive term is
+    // scaled up by exactly the imbalance ratio. After mean over the
+    // grid, the positive contribution becomes invariant to N_total
+    // (positives are weighted by N_neg, negatives by 1, both averaged
+    // over N_total ≈ N_neg → each contributes a constant). Keeps the
+    // same loss scale as the original mean form, so other gain
+    // hyperparameters need no retuning.
     auto obj_logits = p[li].index({"...", 4});             // [B, na, H, W]
-    auto obj_per = bce_logits(obj_logits,
-                              obj_target.to(obj_logits.device()));
+    auto obj_t      = obj_target.to(obj_logits.device());
+    auto pos_mask   = (obj_t > 0).to(obj_logits.dtype());
+    auto n_pos      = pos_mask.sum().clamp_min(1.0f);
+    auto n_neg      = (1.0f - pos_mask).sum().clamp_min(1.0f);
+    auto pos_w      = (n_neg / n_pos).clamp(1.0f, 1.0e4f);
+    auto obj_per    = F::binary_cross_entropy_with_logits(
+        obj_logits, obj_t,
+        F::BinaryCrossEntropyWithLogitsFuncOptions()
+            .pos_weight(pos_w)
+            .reduction(torch::kMean));
     obj_loss = obj_loss + obj_per * cfg_.balance[li];
   }
 

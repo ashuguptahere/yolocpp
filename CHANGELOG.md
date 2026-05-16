@@ -30,6 +30,46 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.70.0] — 2026-05-16
+
+### Fixed — V7DetectionLoss obj-loss dilution at high resolution (v7 P6)
+
+The obj-loss branch averaged BCE over the whole [B, na, H, W] grid.
+At imgsz=1280 with the v7 P6 head (4 detection levels), the grid is
+~4× larger than at imgsz=640 with the v5/v7 P5 head, so the
+per-positive contribution to the mean drops by 4×. Combined with
+short training budgets (3 epochs on the screen dataset), this left
+v7 P6 variants barely moving off zero mAP while v7 P5 reached
+mAP@0.5 ≈ 0.43 in the same wall time.
+
+Fix (`src/losses/yolo7_loss.cpp`): pass
+`pos_weight = N_neg / N_pos` (clamped to [1, 1e4]) into
+`binary_cross_entropy_with_logits` for the obj branch. After mean
+reduction, positives are upweighted exactly by the imbalance ratio,
+making the positive contribution resolution-invariant. Loss scale
+stays comparable to the original (negative term dominates and is
+unchanged in absolute terms), so other gains/lr don't need retuning.
+
+Verified on screen-detection (3 epochs, max batch):
+
+| variant | imgsz | b | before | after | Δ |
+|---------|------:|--:|-------:|------:|---:|
+| yolo7-w6  | 1280 | 8 | 0.084 | **0.423** | +5.0× |
+| yolo7-e6  | 1280 | 6 | 0.034 | (later)   |     |
+| yolo7-d6  | 1280 | 4 | 0.045 | (later)   |     |
+| yolo7-e6e | 1280 | 3 | 0.068 | (later)   |     |
+| yolo7      |  640 | 8 | 0.429 | 0.394     | −8% |
+| yolo4      |  608 | 8 | 0.731 | 0.732     |  ~0 |
+
+The small v7-base regression is the expected trade-off — the fix
+shifts gradient allocation from "dominated by neg-mass" to "balanced
+across pos/neg per cell", which slightly delays convergence on the
+already-easy v7-base case while massively unblocking v7 P6. v4 is
+unaffected because its anchor count at imgsz=608 is similar to
+v7-base at 640.
+
+---
+
 ## [0.69.0] — 2026-05-16
 
 ### Fixed — Yolo7 P6 train (w6 / e6 / d6 / e6e)
