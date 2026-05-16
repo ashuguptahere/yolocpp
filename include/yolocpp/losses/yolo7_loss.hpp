@@ -55,22 +55,48 @@ struct V7LossConfig {
   std::vector<float> balance = {4.0f, 1.0f, 0.4f};   // per-level obj weight
   // Auto-balance the per-level `balance` based on observed per-level
   // positive counts during training. When enabled, `balance[li]` is
-  // updated each step to be proportional to the inverse of the EMA of
-  // per-level positive count, normalized so the mean balance stays
-  // close to the static prior. This compensates for datasets whose
-  // size distribution doesn't match COCO (e.g. screen-detection has
-  // large objects landing exclusively at P5/P6; upstream's COCO-tuned
-  // balance down-weights those levels by 16–64× — wrong direction).
-  // Default ON; set false to use the static `balance` above.
+  // updated each step to be proportional to the EMA of per-level
+  // positive count, clamped to [0.1, 10]×. Compensates for datasets
+  // whose size distribution doesn't match COCO (e.g. screen-detection
+  // has large objects landing exclusively at P5/P6; upstream's COCO-
+  // tuned balance down-weights those levels by 16–64× — wrong
+  // direction). Default ON; set false to use the static `balance`.
   bool  autobalance = true;
+  // Reseed the anchor table from the training-set GT distribution via
+  // K-means with IoU distance. Only helpful when the GT size
+  // distribution diverges from COCO enough to drop BPR (best possible
+  // recall under anchor_t=4) below ~0.98. For COCO-similar fine-tuning
+  // this REGRESSES results in short training budgets because it breaks
+  // the pretrained anchor-decoding alignment. Default OFF; flip on via
+  // a custom `LossTraits` specialization or by mutating the cfg.
+  bool  autoanchor  = false;
   // Center-prior offset (cells with center within `offset_t` of cell
   // boundary also become positives). 0 = disabled, 0.5 = standard.
   float offset_t   = 0.5f;
 };
 
+// Reseed the loss's `anchors` table from a list of GT (w, h) pixel
+// dimensions via K-means with IoU distance. Returns the per-level
+// anchor table that callers can also inspect; `out_cfg.anchors` gets
+// updated in place. K = `out_cfg.na * out_cfg.strides.size()`.
+//
+// IoU-distance K-means matches upstream YOLO's "autoanchor": it picks
+// centroids that maximize the recall of a fixed threshold (anchor_t=4)
+// against the GT distribution, which on a custom dataset can shift
+// anchor sizes by 5–10× from the COCO-tuned defaults.
+std::vector<std::vector<std::pair<float, float>>>
+kmeans_anchors(const std::vector<std::pair<float, float>>& gt_whs,
+               V7LossConfig& out_cfg, int kmeans_iters = 30);
+
 class V7DetectionLoss {
  public:
   explicit V7DetectionLoss(V7LossConfig cfg);
+
+  // Re-cluster anchors from the training-set GT distribution.
+  // Convenience wrapper around `kmeans_anchors()` that updates the
+  // loss's internal config in place. `gt_whs` are (width, height) in
+  // pixel units of the training-time image (after letterbox to imgsz).
+  void recluster_anchors(const std::vector<std::pair<float, float>>& gt_whs);
 
   // feats : per-level [B, na*(5+nc), H_i, W_i] in stride-ascending order
   //         (P3, P4, P5). Caller (Yolo4 forward_train) reverses if needed.

@@ -4,11 +4,108 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
+#include <numeric>
+#include <random>
 #include <vector>
 
 namespace yolocpp::losses {
 
 namespace F = torch::nn::functional;
+
+// ─── Autoanchor: K-means with IoU distance ───────────────────────────────
+//
+// Standard "autoanchor" routine matching upstream YOLO's k-means step.
+// GT boxes are treated as origin-anchored w×h rectangles and clustered
+// by 1 − IoU rather than Euclidean distance — Euclidean would bias
+// toward larger boxes (their squared error dominates).
+std::vector<std::vector<std::pair<float, float>>>
+kmeans_anchors(const std::vector<std::pair<float, float>>& gt_whs,
+               V7LossConfig& out_cfg, int kmeans_iters) {
+  const int nl = (int)out_cfg.strides.size();
+  const int na = out_cfg.na;
+  const int K  = nl * na;
+  std::vector<std::vector<std::pair<float, float>>> result(nl);
+
+  if ((int)gt_whs.size() < K * 2) {
+    std::cerr << "[autoanchor] only " << gt_whs.size()
+              << " GT boxes; need >= " << (K * 2)
+              << " for K-means. Keeping the configured anchors.\n";
+    return out_cfg.anchors;
+  }
+
+  // 1) Seed K centroids by uniform random sampling without replacement.
+  std::mt19937 rng(/*seed=*/0xC0FFEEu);
+  std::vector<int> indices(gt_whs.size());
+  std::iota(indices.begin(), indices.end(), 0);
+  std::shuffle(indices.begin(), indices.end(), rng);
+  std::vector<std::pair<float, float>> centers(K);
+  for (int k = 0; k < K; ++k) centers[k] = gt_whs[indices[k]];
+
+  auto iou_wh = [](float w1, float h1, float w2, float h2) {
+    float iw = std::min(w1, w2);
+    float ih = std::min(h1, h2);
+    float inter = iw * ih;
+    float u = w1 * h1 + w2 * h2 - inter;
+    return u > 0 ? inter / u : 0.0f;
+  };
+
+  // 2) Lloyd's algorithm with IoU distance.
+  std::vector<int> assign(gt_whs.size(), 0);
+  for (int it = 0; it < kmeans_iters; ++it) {
+    // Assign each GT to its closest centroid.
+    for (size_t i = 0; i < gt_whs.size(); ++i) {
+      float best = -1.0f; int best_k = 0;
+      for (int k = 0; k < K; ++k) {
+        float s = iou_wh(gt_whs[i].first, gt_whs[i].second,
+                         centers[k].first, centers[k].second);
+        if (s > best) { best = s; best_k = k; }
+      }
+      assign[i] = best_k;
+    }
+    // Update each centroid to the median (more robust than mean for
+    // skewed GT distributions; matches upstream's `np.median`).
+    for (int k = 0; k < K; ++k) {
+      std::vector<float> ws, hs;
+      for (size_t i = 0; i < gt_whs.size(); ++i) {
+        if (assign[i] == k) {
+          ws.push_back(gt_whs[i].first);
+          hs.push_back(gt_whs[i].second);
+        }
+      }
+      if (ws.empty()) continue;
+      std::nth_element(ws.begin(), ws.begin() + ws.size() / 2, ws.end());
+      std::nth_element(hs.begin(), hs.begin() + hs.size() / 2, hs.end());
+      centers[k] = { ws[ws.size() / 2], hs[hs.size() / 2] };
+    }
+  }
+
+  // 3) Sort centroids by area and assign in 3-per-level slabs.
+  std::sort(centers.begin(), centers.end(),
+            [](auto& a, auto& b) {
+              return a.first * a.second < b.first * b.second;
+            });
+  for (int li = 0; li < nl; ++li) {
+    for (int a = 0; a < na; ++a) {
+      result[li].push_back(centers[li * na + a]);
+    }
+  }
+  out_cfg.anchors = result;
+
+  // 4) Log resulting per-level anchors so the user can see what the
+  // reclustering produced.
+  std::cerr << "[autoanchor] reclustered " << gt_whs.size()
+            << " GT boxes → " << K << " anchors across " << nl << " levels:\n";
+  for (int li = 0; li < nl; ++li) {
+    std::cerr << "[autoanchor]   P" << (li + 3) << " (/" << out_cfg.strides[li]
+              << "): ";
+    for (auto& a : result[li]) {
+      std::cerr << "(" << (int)a.first << "," << (int)a.second << ") ";
+    }
+    std::cerr << "\n";
+  }
+  return result;
+}
 
 namespace {
 
@@ -48,6 +145,11 @@ torch::Tensor bbox_ciou_xywh(const torch::Tensor& a_xywh,
 }
 
 }  // anonymous namespace
+
+void V7DetectionLoss::recluster_anchors(
+    const std::vector<std::pair<float, float>>& gt_whs) {
+  kmeans_anchors(gt_whs, cfg_);
+}
 
 V7DetectionLoss::V7DetectionLoss(V7LossConfig cfg) : cfg_(std::move(cfg)) {
   TORCH_CHECK(cfg_.anchors.size() == cfg_.strides.size(),

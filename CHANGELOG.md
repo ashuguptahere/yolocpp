@@ -30,6 +30,51 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.72.0] — 2026-05-16
+
+### Added — Autoanchor (K-means anchor reclustering) for V7DetectionLoss
+
+K-means anchor reclustering with IoU distance, behind the new
+`V7LossConfig.autoanchor` flag (default **off**). When enabled, the
+trainer walks the train set once after constructing the loss,
+collects up to 10k GT (w, h) pairs in pixel units (post letterbox),
+runs IoU-distance K-means with K = `na * nl`, sorts centroids by
+area, and replaces both:
+
+1. `V7LossConfig.anchors` (loss-side, used for positive matching), and
+2. the v7 `IDetect.anchor_grid` + `IDetect.anchors` buffers
+   (inference-time decode), so train and eval see the same anchors.
+
+### Default off — important caveat
+
+For COCO-pretrained → similar-distribution fine-tuning (most real
+use cases), the upstream anchors at `anchor_t = 4` already match the
+GT distribution well, and re-seeding regresses results in short
+training budgets because it breaks the pretrained anchor-decode
+alignment.
+
+Verified on screen-detection (3 ep, max batch, 0.71.0 baseline
+includes Fix #1 + Fix #2):
+
+| variant | imgsz | baseline | + autoanchor | Δ |
+|---------|------:|---------:|-------------:|--:|
+| yolo7   | 640   | 0.49     | 0.38         | −22% |
+| yolo7-w6| 1280  | 0.41     | 0.41         |  ~0  |
+
+Use `autoanchor = true` only when:
+- training from scratch (no COCO-pretrained anchor prior), OR
+- the dataset's GT size distribution is far from COCO (low BPR at
+  the upstream anchors — measurable via the anchor-recall check
+  added in a later session).
+
+### Public helper
+
+`losses::kmeans_anchors(gt_whs, cfg, iters=30)` is exposed in
+`yolocpp/losses/yolo7_loss.hpp` for users who want to script their
+own anchor analysis without touching the trainer.
+
+---
+
 ## [0.71.0] — 2026-05-16
 
 ### Added — Auto-balance per-level obj-loss (V7DetectionLoss)

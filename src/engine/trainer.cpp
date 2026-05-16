@@ -87,6 +87,67 @@ ParamGroups split_params(torch::nn::Module& m) {
 //   - a configurable nc field at construction
 //   - operator()(feats, tgt, strides, imgsz [, progress]) → LossOutput-like
 // LossOutput-like must have .total / .box / .cls / .dfl scalar tensors.
+// Walk the training set once and return every GT (w, h) in pixel
+// units (after the dataset's letterbox to imgsz). Sampling cap of
+// ~10000 boxes is plenty for stable K-means.
+inline std::vector<std::pair<float, float>>
+collect_train_gt_whs(const datasets::YoloDataset& train) {
+  std::vector<std::pair<float, float>> gt_whs;
+  gt_whs.reserve(10000);
+  const std::size_t cap = 10000;
+  for (std::size_t i = 0; i < train.size() && gt_whs.size() < cap; ++i) {
+    auto ex = train.get(i);
+    if (!ex.targets.defined() || ex.targets.size(0) == 0) continue;
+    auto t = ex.targets.to(torch::kCPU).to(torch::kFloat32);
+    auto acc = t.accessor<float, 2>();
+    for (int j = 0; j < t.size(0); ++j) {
+      float w = acc[j][3], h = acc[j][4];
+      if (w > 1.0f && h > 1.0f) gt_whs.emplace_back(w, h);
+      if (gt_whs.size() >= cap) break;
+    }
+  }
+  return gt_whs;
+}
+
+// Post-construction hook: gives anchor-based losses (v4/v7) a chance
+// to recluster anchors from the training-set GT distribution AND
+// sync the matching model anchor buffers so eval/decoding sees the
+// same anchors as training. Default no-op — DFL-headed losses
+// (v8/v11/v12/v13/v10/v26) have no static anchors. Specialized below
+// for v7 (and shareable for v4 via the model holder's `anchors` field
+// if added later).
+template <typename M, typename LossT>
+void loss_after_init(M& /*model*/, LossT& /*loss*/,
+                     const datasets::YoloDataset& /*train*/) {}
+
+template <>
+inline void loss_after_init<models::Yolo7, losses::V7DetectionLoss>(
+    models::Yolo7& model, losses::V7DetectionLoss& loss,
+    const datasets::YoloDataset& train) {
+  if (!loss.config().autoanchor) return;
+  auto gt_whs = collect_train_gt_whs(train);
+  loss.recluster_anchors(gt_whs);
+  // Sync the model's IDetect anchor buffers so eval/decoding uses
+  // the reclustered table — otherwise training optimizes against
+  // the new anchors but inference decodes with the COCO ones.
+  const auto& cfg = loss.config();
+  const int nl = (int)cfg.strides.size();
+  const int na = cfg.na;
+  // Find IDetect in the model's ModuleList — it's the last entry.
+  auto& yaml = models::yolo7_yaml_for(model->scale);
+  auto* d = model->model[yaml.size() - 1]->as<models::IDetectImpl>();
+  if (!d || !d->anchor_grid.defined() || !d->anchors.defined()) return;
+  torch::NoGradGuard ng;
+  for (int li = 0; li < nl; ++li) {
+    for (int a = 0; a < na; ++a) {
+      d->anchor_grid[li][0][a][0][0][0] = cfg.anchors[li][a].first;
+      d->anchor_grid[li][0][a][0][0][1] = cfg.anchors[li][a].second;
+      d->anchors[li][a][0] = cfg.anchors[li][a].first  / (float)cfg.strides[li];
+      d->anchors[li][a][1] = cfg.anchors[li][a].second / (float)cfg.strides[li];
+    }
+  }
+}
+
 template <typename M>
 struct LossTraits {
   using LossT   = losses::V8DetectionLoss;
@@ -613,6 +674,10 @@ void TrainerT<M>::run() {
 
   using Traits = LossTraits<M>;
   auto loss = Traits::make(model_);
+  // Anchor-based losses recluster from the train GTs (autoanchor)
+  // and re-sync the matching model anchor buffers. No-op for DFL-
+  // based losses.
+  loss_after_init<M, typename Traits::LossT>(model_, loss, train_);
 
   // Seed every RNG when --seed is non-zero. Order: torch's CPU + CUDA
   // generators (operator-level), then the trainer's batch-sampler RNG.
