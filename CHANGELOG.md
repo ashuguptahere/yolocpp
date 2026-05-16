@@ -30,6 +30,24 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.67.0] — 2026-05-16
+
+### Added — `docs/screen_sweep.md` and the sweep scripts
+
+`scripts/screen_variant_sweep.sh` walks every applicable YOLO
+(version, scale, variant) cell on a 5-class screen-detection dataset
+and writes per-variant logs + an aggregated CSV.
+`scripts/screen_rfdetr_sweep.sh` queues the five RF-DETR variants
+after the YOLO sweep finishes (avoids GPU contention). Full result
+table + per-failure root-cause analysis lives in
+`docs/screen_sweep.md`. **56/71 variants pass** under the
+0.65.0–0.66.0 fixes; the 15 failures break into four pre-existing
+issues (v6 P6 forward bug, v7 P6 loss-config mismatch, v26 STAL
+cold-start collapse on custom-nc transfer, rfdetr-base imgsz
+auto-resolution gap).
+
+---
+
 ## [0.66.0] — 2026-05-16
 
 ### Fixed — Transfer-learning to a custom `nc` was silently broken
