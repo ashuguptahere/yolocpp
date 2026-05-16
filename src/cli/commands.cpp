@@ -314,6 +314,23 @@ int cmd_train(const std::string& root, const std::string& names_csv,
               std::vector<std::pair<std::string, std::string>> args_for_yaml,
               uint64_t seed) {
   auto names = split_csv(names_csv);
+  // If --names wasn't passed, prefer the data.yaml's `names:` over the
+  // COCO 80 fallback. Without this, training on a 5-class dataset
+  // builds an nc=80 model (cls head retains all upstream channels) and
+  // the val mAP collapses because the predictions span classes that
+  // don't exist in the dataset.
+  if (names.empty()) {
+    namespace fs = std::filesystem;
+    fs::path rp(root);
+    std::string rext = rp.extension().string();
+    for (auto& c : rext) c = (char)std::tolower((unsigned char)c);
+    if (rext == ".yaml" || rext == ".yml") {
+      try {
+        auto dy = yolocpp::cli::parse_data_yaml(root);
+        if (!dy.names.empty()) names = dy.names;
+      } catch (const std::exception&) { /* fall through to COCO */ }
+    }
+  }
   if (names.empty()) names = yolocpp::inference::coco_names();
   int nc = (int)names.size();
 

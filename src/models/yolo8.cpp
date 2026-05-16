@@ -539,16 +539,14 @@ int Yolo8DetectImpl::load_from_state_dict(
   for (auto& kv : buffs)  ours.emplace(kv.key(), kv.value());
 
   torch::NoGradGuard ng;
-  int copied = 0;
+  int copied = 0, skipped_shape = 0;
   for (const auto& [k, t] : entries) {
     auto it = ours.find(k);
     if (it == ours.end()) continue;
     auto& dst = it->second;
     if (dst.sizes() != t.sizes()) {
-      std::ostringstream ss;
-      ss << "load_from_state_dict: shape mismatch for " << k
-         << ": ours=" << dst.sizes() << " ckpt=" << t.sizes();
-      throw std::runtime_error(ss.str());
+      ++skipped_shape;
+      continue;
     }
     auto src = t.to(dst.dtype()).to(dst.device());
     dst.copy_(src);
@@ -556,6 +554,9 @@ int Yolo8DetectImpl::load_from_state_dict(
   }
   if (copied == 0)
     throw std::runtime_error("load_from_state_dict: copied 0 tensors");
+  if (skipped_shape > 0)
+    std::cerr << "[yolo8 load] skipped " << skipped_shape
+              << " tensors with shape mismatch (cls head re-purposed for custom nc)\n";
   return copied;
 }
 

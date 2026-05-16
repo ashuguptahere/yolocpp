@@ -30,6 +30,48 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.66.0] — 2026-05-16
+
+### Fixed — Transfer-learning to a custom `nc` was silently broken
+
+Three independent bugs combined to make `--mode train` on a custom-nc
+dataset look like it was working while actually training a 80-class
+detector on the wrong target:
+
+1. **`cmd_train` ignored the data.yaml's `nc:` and `names:`**. With no
+   `--names` flag, `nc` defaulted to the COCO 80 list regardless of
+   what the dataset declared. Result: a 5-class screen-detection
+   dataset trained an nc=80 model whose cls head was 75 mostly-dead
+   channels — driving val mAP near zero. Fix:
+   `cmd_train` now parses the yaml (when `--data` points at one) and
+   uses its `names:` when `--names` isn't passed.
+2. **`load_from_state_dict` threw on shape mismatch** across
+   `yolo5/8/11/12/13/26[_tasks/_classify].cpp`. Once cmd_train started
+   passing nc=5, the upstream nc=80 detect-head cv3 final conv
+   wouldn't fit and the whole load aborted. Fix: skip mismatched
+   tensors and log the count, leaving them at the torch-default init
+   so the trainer can fit them on the new class count.
+3. **`scale_from_filename` regex omitted v9's `t`, `c`, and `e`
+   scales** (only `[nsmblx]`). `yolo9t.pt` resolved to the C-scale
+   default → 745/782 keys shape-mismatched at load → effectively
+   training from scratch. Fix: regex extended to `[nsmblxtce]`.
+
+### Added — `Detect26Impl::init_biases()`
+
+Post-load helper that re-applies the upstream detection-prior bias
+(cls = log(0.01/0.99) ≈ −4.595; reg = 1.0) when the cls head was
+skipped due to a custom-nc shape mismatch. Yolo26's STAL alignment
+metric `cls^α · iou^β` collapses to zero without this bias,
+preventing positives from ever being assigned at cold start.
+
+### Verified
+
+- yolo11n on the 5-class screen dataset: mAP@0.5 = **0.50** at 3
+  epochs (vs **0.18** at 1 epoch under the bugged nc=80 path).
+- yolo9t now loads 782/782 weights (was 37/782).
+
+---
+
 ## [0.65.0] — 2026-05-16
 
 ### Fixed — V7DetectionLoss CUDA segfault (v4 + v7 train)

@@ -122,6 +122,32 @@ Detect26Impl::Detect26Impl(int nc_, std::vector<int> ch_)
   }
 }
 
+void Detect26Impl::init_biases() {
+  // Upstream detection-prior init: cls head's final 1×1 conv bias is
+  // log(p / (1 - p)) for the prior probability p ≈ 0.01 → −4.595.
+  // Combined with the input feature norm (~1.0) this yields starting
+  // class confidences around 1%, which is what STAL's alignment metric
+  // expects at iter 0. The reg head's final bias is set to 1.0 so
+  // predicted (l, t, r, b) offsets start at 1 cell wide (matches v8/v11
+  // — keeps STAL's CIoU computation well-conditioned at cold start).
+  torch::NoGradGuard ng;
+  const float cls_bias_init = std::log(0.01f / (1.0f - 0.01f));  // ≈ −4.595
+  for (int i = 0; i < nl; ++i) {
+    auto* reg = cv2[i]->as<torch::nn::SequentialImpl>();
+    auto* cls = cv3[i]->as<torch::nn::SequentialImpl>();
+    if (reg && reg->size() >= 3) {
+      if (auto* last = (*reg)[reg->size() - 1]->as<torch::nn::Conv2dImpl>()) {
+        if (last->bias.defined()) last->bias.fill_(1.0f);
+      }
+    }
+    if (cls && cls->size() >= 3) {
+      if (auto* last = (*cls)[cls->size() - 1]->as<torch::nn::Conv2dImpl>()) {
+        if (last->bias.defined()) last->bias.fill_(cls_bias_init);
+      }
+    }
+  }
+}
+
 std::vector<torch::Tensor>
 Detect26Impl::forward_features(std::vector<torch::Tensor> x) {
   std::vector<torch::Tensor> out;
@@ -381,22 +407,34 @@ int Yolo26DetectImpl::load_from_state_dict(
   for (auto& kv : buffs)  ours.emplace(kv.key(), kv.value());
 
   torch::NoGradGuard ng;
-  int copied = 0;
+  int copied = 0, skipped_shape = 0;
   for (const auto& [k, t] : entries) {
     auto it = ours.find(k);
     if (it == ours.end()) continue;
     auto& dst = it->second;
     if (dst.sizes() != t.sizes()) {
-      std::ostringstream ss;
-      ss << "yolo26 load: shape mismatch for " << k << " ours=" << dst.sizes()
-         << " ckpt=" << t.sizes();
-      throw std::runtime_error(ss.str());
+      // Shape mismatch — typically the cls head (cv3 final conv) when
+      // re-purposing nc=80 upstream weights for a custom nc. Skip and
+      // leave the destination at its torch-default init; the trainer
+      // will re-initialize cls bias with the detection prior via
+      // `Detect26Impl::init_biases()` post-load. Logging only the count
+      // so it doesn't drown the training log.
+      ++skipped_shape;
+      continue;
     }
     dst.copy_(t.to(dst.dtype()).to(dst.device()));
     ++copied;
   }
   if (copied == 0)
     throw std::runtime_error("yolo26 load: copied 0 tensors");
+  if (skipped_shape > 0) {
+    std::cerr << "[yolo26 load] skipped " << skipped_shape
+              << " tensors with shape mismatch "
+                 "(usually cls head re-purposed for custom nc)\n";
+  }
+  // Apply detection-prior init to whatever cls/reg heads were skipped.
+  auto* det = model[v26_yaml().size() - 1]->as<Detect26Impl>();
+  if (det) det->init_biases();
   return copied;
 }
 

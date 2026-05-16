@@ -590,12 +590,13 @@ std::string scale_from_filename(const std::string& path) {
 
   // Match canonical "yolo<digits><scale>[u]?(-task)?.pt" — and also accept the
   // legacy upstream "yolov<digits>..." spelling for v3..v10 weights. Scales:
-  //   v5/v8/v9/v11/v12/v13/v26: {n, s, m, l, x}
-  //   v9 also has {t, c}; v9c is an alias for "c", v9t for "t" (handled below).
-  //   v10 adds {b} between m and l.
+  //   v5/v8/v11/v12/v13/v26: {n, s, m, l, x}
+  //   v9 adds {t, c, e}; v10 adds {b}. Including t/c/e here means a
+  //   `yolo9t.pt` → scale="t" instead of falling through to the C default
+  //   (which silently shape-mismatched 745/782 keys at load time).
   std::smatch m;
   static const std::regex re(
-      R"(yolov?[0-9]+([nsmblx])u?(?:-(?:cls|seg|pose|obb))?\.pt$)");
+      R"(yolov?[0-9]+([nsmblxtce])u?(?:-(?:cls|seg|pose|obb))?\.pt$)");
   if (std::regex_search(base, m, re)) return m[1].str();
 
   // Trained checkpoint (best.pt / last.pt) → look at sibling args.yaml's

@@ -110,6 +110,10 @@ struct Detect26Impl : torch::nn::Module {
   Detect26Impl(int nc, std::vector<int> ch);
   std::vector<torch::Tensor> forward_features(std::vector<torch::Tensor> x);
   torch::Tensor              decode(const std::vector<torch::Tensor>& feats);
+  // Apply the upstream detection-prior bias to the cls head's final 1×1
+  // conv and the reg head's bias. Idempotent — safe to call after a
+  // partial state-dict load that left cls heads at torch defaults.
+  void                        init_biases();
 };
 TORCH_MODULE(Detect26);
 

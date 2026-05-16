@@ -1004,21 +1004,22 @@ int Yolo13DetectImpl::load_from_state_dict(
   by_name.reserve(entries.size());
   for (auto& [k, t] : entries) by_name[k] = t;
 
-  int copied = 0;
+  int copied = 0, skipped_shape = 0;
   auto try_load = [&](const std::string& k, torch::Tensor t) {
     auto it = by_name.find(k);
     if (it == by_name.end()) return;
     if (!t.sizes().equals(it->second.sizes())) {
-      throw std::runtime_error(
-          "yolo13 load: shape mismatch for '" + k + "': ours=" +
-          std::string(c10::str(t.sizes())) + " ckpt=" +
-          std::string(c10::str(it->second.sizes())));
+      ++skipped_shape;
+      return;
     }
     t.copy_(it->second.to(t.dtype()));
     ++copied;
   };
   for (auto& p : this->named_parameters()) try_load(p.key(), p.value());
   for (auto& p : this->named_buffers())    try_load(p.key(), p.value());
+  if (skipped_shape > 0)
+    std::cerr << "[yolo13 load] skipped " << skipped_shape
+              << " tensors with shape mismatch (cls head re-purposed for custom nc)\n";
   return copied;
 }
 
