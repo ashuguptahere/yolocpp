@@ -292,10 +292,26 @@ double lr_scale(int epoch_step, int warmup_steps, int total_steps,
 
 }  // anonymous namespace
 
+// Build an EMA-clone of `src`. Default: invoke `M(scale, nc)`. Specialized
+// per-model when the `(scale, nc)` ctor would erase config the EMA needs
+// to share with the live model — currently `Yolo6Impl::is_p6` (the
+// P5/P6 head topology is not part of `Yolo6Scale`, so `Yolo6(scale, nc)`
+// always builds a P5 even when the live model is P6, and the subsequent
+// `ema_->named_parameters().copy_(...)` in this ctor fails with a shape
+// mismatch on the first P6-only parameter — historically reported as
+// "tensor a (256) must match tensor b (192) at dim 0").
+template <typename M>
+M make_ema_clone(const M& src) { return M(src->scale, src->nc); }
+
+template <>
+models::Yolo6 make_ema_clone<models::Yolo6>(const models::Yolo6& src) {
+  return models::Yolo6(src->nc, src->scale, src->reg_max, src->is_p6);
+}
+
 template <typename M>
 TrainerT<M>::TrainerT(M model, datasets::YoloDataset train, TrainConfig cfg)
     : model_(std::move(model)),
-      ema_(M(model_->scale, model_->nc)),
+      ema_(make_ema_clone(model_)),
       train_(std::move(train)),
       cfg_(std::move(cfg)),
       device_(pick_device(cfg_.device)) {

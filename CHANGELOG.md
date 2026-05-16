@@ -30,6 +30,45 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.68.0] — 2026-05-16
+
+### Fixed — Yolo6 P6 train: EMA-clone topology mismatch
+
+`TrainerT<M>` constructs the EMA model via `M(model_->scale,
+model_->nc)` and then `ema_->copy_(model_->...)`. For Yolo6, the
+`(scale, nc)` ctor hardcodes `p6=false` (the P6 head topology isn't
+part of `Yolo6Scale` — only the depth/width multipliers + variant
+flag are). Running this on a P6 model (`yolo6{n,s,m,l}6.pt`) built a
+P5 EMA, and the first `ema_->named_parameters().copy_(...)` over a
+P6-only parameter died with
+`tensor a (256) must match tensor b (192) at non-singleton dim 0`
+— the exact channel widths of the P5/P6 stride-32 stage. Train was
+hard-failing on all 4 v6 P6 variants since the trainer landed.
+
+Fix: introduce a `make_ema_clone(const M& src)` helper template in
+`src/engine/trainer.cpp`. Default is the previous `M(scale, nc)`
+behaviour; specialized for `Yolo6` to forward `(nc, scale, reg_max,
+is_p6)` so the EMA matches the live model's head topology. Verified
+end-to-end:
+
+| variant | mAP@0.5 (1 ep, b=8) |
+|---------|--------------------:|
+| yolo6n6 | 0.101 |
+| yolo6s6 | 0.037 |
+| yolo6m6 | **0.637** |
+| yolo6l6 | 0.607 |
+
+### Investigated — v6n apparent slowness
+
+Re-running v6n in isolation: 12.7 s/ep train + 75 s/ep val = 87 s/ep
+wall. The sweep's 172 s/ep was transient GPU contention from the
+concurrent rfdetr-weight downloads running at sweep launch; not
+reproducible. The val pass is slower for v6n than for v6m/l because
+v6n's higher post-1-epoch cls loss leaves more candidates above the
+NMS confidence threshold (expected, not a bug). No change required.
+
+---
+
 ## [0.67.0] — 2026-05-16
 
 ### Added — `docs/screen_sweep.md` and the sweep scripts
