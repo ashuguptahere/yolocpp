@@ -698,8 +698,15 @@ void TrainerT<M>::run() {
   // Floor at 100 steps for big datasets, but never exceed half the total —
   // otherwise on tiny datasets all of training stays in linear warmup and
   // cosine decay never kicks in.
+  // Cap warmup at 10% of total steps (not 50%). The upstream
+  // warmup_epochs=3 default assumes 100+ epochs of training; for the
+  // short 2–10 epoch budgets common in fine-tuning, 50% of training
+  // spent in warmup leaves the effective LR <10% of `lr0` for the
+  // entire run, which is what caused DETR/v26 fine-tuning to look
+  // "stuck" — convergence was fine but LR was wasted.
   int          warmup_target = std::max(100, steps * cfg_.warmup_epochs);
-  int          warmup_steps  = std::min(warmup_target, total_steps / 2);
+  int          warmup_cap    = std::max(100, total_steps / 10);
+  int          warmup_steps  = std::min(warmup_target, warmup_cap);
   warmup_steps = std::max(1, warmup_steps);
   int          ema_step      = 0;
 

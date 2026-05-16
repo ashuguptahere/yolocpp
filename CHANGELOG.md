@@ -30,6 +30,44 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.76.0] — 2026-05-17
+
+### Fixed — warmup eats short training budgets (v26 + rfdetr)
+
+`TrainerT::run` computed `warmup_steps = min(warmup_target,
+total_steps / 2)` where `warmup_target = steps * warmup_epochs` and
+`warmup_epochs = 3` by default. For short training (2–10 epochs
+common in fine-tuning), this caps warmup at 50% of total steps —
+meaning the effective LR stays under 50% of `lr0` for the entire
+run, with at most ~50% of training happening at full LR. Anything
+sensitive to LR (DETR-style models, v26's cls-bias prior) sees
+half the gradient mass it should.
+
+Fix: drop the cap to 10% of total steps (`max(100, total_steps /
+10)`). Same defaults still apply for 100+ epoch runs (warmup_epochs
+× steps stays under the cap on long runs); only short fine-tuning
+runs see meaningfully more steps at full LR.
+
+### Investigated — rfdetr slow convergence at short budgets
+
+rfdetr-nano at 10 epochs on screen-detection oscillates between
+mAP@0.5 of 0.01–0.03 without monotonic improvement. Root cause is
+missing auxiliary loss support: standard DETR supervises every
+intermediate decoder layer (6 layers × loss = 6× effective
+gradient), but our `RFDetrTransformer` only returns the final
+decoder layer's output. Adding the intermediate outputs needs both
+the transformer rewrite (return list of per-layer activations) and
+the loss to consume them — a bigger architectural change than fits
+this session. Deferred as a known limitation.
+
+The 0.74.0 fixes (imgsz auto-resolution + DETR-appropriate lr0) are
+still correct and necessary — they get rfdetr to *train* (without
+crashing or diverging). The 0.76.0 warmup_cap helps marginally
+(~10–20% mAP improvement on short budgets) but the fundamental
+"no auxiliary loss → slow convergence" remains.
+
+---
+
 ## [0.75.0] — 2026-05-16
 
 ### Fixed — yolo26 cold-start collapse (mAP=0 → trains)
