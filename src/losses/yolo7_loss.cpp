@@ -120,7 +120,10 @@ LossOutput V7DetectionLoss::operator()(
     const float sxy      = cfg_.scale_xy[li];
     auto anc_cell = anchors_cell[li];                  // [na, 2]
 
-    auto obj_target = torch::zeros({B, na, H, W}, opts);
+    // obj_target accumulated on CPU (accessor<> only works on CPU); moved
+    // to `dev` right before the obj-loss BCE call below. Keeping it on
+    // the GPU and indexing with accessor<> segfaults on CUDA.
+    auto obj_target = torch::zeros({B, na, H, W}, opts.device(torch::kCPU));
     auto pos_box_pred = std::vector<torch::Tensor>{};  // [P, 4] decoded xywh in cell units
     auto pos_box_tgt  = std::vector<torch::Tensor>{};  // [P, 4] gt xywh in cell units
     auto pos_cls_pred = std::vector<torch::Tensor>{};  // [P, nc]

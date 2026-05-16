@@ -30,6 +30,42 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.65.0] — 2026-05-16
+
+### Fixed — V7DetectionLoss CUDA segfault (v4 + v7 train)
+
+`V7DetectionLoss::operator()` (`src/losses/yolo7_loss.cpp`) allocated
+`obj_target` on the same device as the feature tensors (CUDA when the
+model is on CUDA), then called `obj_target.accessor<float, 4>()` to
+write per-positive IoU weights. Accessors only work on CPU tensors —
+on CUDA this is undefined behavior and segfaulted on the first
+training step. v4 and v7 share this loss, so both train modes
+core-dumped on GPU; CPU training silently worked because the device
+options put `obj_target` on CPU there.
+
+Fix: build `obj_target` on CPU regardless of model device, then move
+to the prediction device just before the obj-loss BCE call. Verified
+v4 + v7 train end-to-end on CUDA with mAP > 0.4 after a single epoch.
+
+### Fixed — CLI weight auto-resolve wiring
+
+`resolve_weights()` (`src/cli/resolve.cpp`) existed but was never
+called — every command went directly through `load_state_dict()`,
+which `fopen()`s the literal path. That meant `--model yolo3u.pt`
+errno-2'd instead of cache-checking and downloading from the
+upstream asset host. The v4 `.weights → .pt` and v6 upstream-pt
+conversion paths inside `resolve_weights` were also unreachable.
+
+Fix: call `resolve_weights(weights)` once in
+`cmd_dispatch_flag_style` after CLI11 parsing, before any mode
+branches (`src/cli/main.cpp`). Skips on `--mode download` and on
+empty `weights`. Verified: v3/v4/v6/v7/v9/v10 download to
+`~/.cache/yolocpp/weights/` on first run for both training and
+predict; v4 `.weights` → `.pt` conversion now triggers automatically
+when only a Darknet binary is on disk.
+
+---
+
 ## [0.64.0] — 2026-05-02
 
 ### Fixed — RF-DETR training: weights load + target normalization + bare model name

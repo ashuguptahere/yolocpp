@@ -91,6 +91,21 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   CLI11_PARSE(app, argc, argv);
   device = normalise_device(device);
 
+  // Auto-resolve weights: searches cwd, ./data/, ~/.cache/yolocpp/weights/,
+  // and falls back to downloading from upstream for recognised
+  // basenames (e.g. yolo3n.pt → cached under canonical name). Also
+  // routes yolo4 .weights → .pt conversion and yolo6 upstream-pt →
+  // canonical-pt conversion. Skipped for trt engines (.trt) and any
+  // file that already exists at the given path.
+  if (!weights.empty() && mode != "download") {
+    try {
+      weights = resolve_weights(weights);
+    } catch (const std::exception& e) {
+      std::cerr << "[error] resolve weights: " << e.what() << "\n";
+      return 2;
+    }
+  }
+
   // Mode dispatch. Per-mode validation lives here (single place to
   // read for "what does each mode need?") rather than scattered
   // across cmd_*().
