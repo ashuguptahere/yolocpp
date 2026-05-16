@@ -91,8 +91,8 @@ template <typename M>
 struct LossTraits {
   using LossT   = losses::V8DetectionLoss;
   using OutputT = losses::LossOutput;
-  static LossT make(int nc) {
-    losses::LossConfig c; c.nc = nc; c.reg_max = 16;
+  static LossT make(const M& model) {
+    losses::LossConfig c; c.nc = model->nc; c.reg_max = 16;
     return LossT(c);
   }
   static OutputT compute(const LossT& l,
@@ -108,8 +108,8 @@ template <>
 struct LossTraits<models::Yolo26Detect> {
   using LossT   = losses::Yolo26Loss;
   using OutputT = losses::Yolo26LossOutput;
-  static LossT make(int nc) {
-    losses::Yolo26LossConfig c; c.nc = nc;
+  static LossT make(const models::Yolo26Detect& model) {
+    losses::Yolo26LossConfig c; c.nc = model->nc;
     return LossT(c);
   }
   static OutputT compute(const LossT& l,
@@ -127,9 +127,9 @@ template <>
 struct LossTraits<models::Yolo4> {
   using LossT   = losses::V7DetectionLoss;
   using OutputT = losses::LossOutput;
-  static LossT make(int nc) {
+  static LossT make(const models::Yolo4& model) {
     losses::V7LossConfig c;
-    c.nc = nc; c.na = 3;
+    c.nc = model->nc; c.na = 3;
     // v4 anchors at imgsz=608 (yolov4.cfg). P3 → P4 → P5 order.
     c.anchors = {
       {{12.f, 16.f}, {19.f, 36.f}, {40.f, 28.f}},        // P3
@@ -159,8 +159,8 @@ template <>
 struct LossTraits<models::Yolo10> {
   using LossT   = losses::Yolo10LossAdapter;
   using OutputT = losses::LossOutput;
-  static LossT make(int nc) {
-    losses::LossConfig c; c.nc = nc; c.reg_max = 16;
+  static LossT make(const models::Yolo10& model) {
+    losses::LossConfig c; c.nc = model->nc; c.reg_max = 16;
     return LossT(c);
   }
   static OutputT compute(const LossT& l,
@@ -174,23 +174,46 @@ struct LossTraits<models::Yolo10> {
 
 // Specialised for Yolo7 → V7DetectionLoss with WongKinYiu's anchors and
 // uniform scale_xy=2.0 + (sigmoid*2)^2 wh decode.
+//
+// Picks 3-level P5 anchors for base/tiny/x, 4-level P6 anchors for
+// w6/e6/d6/e6e — all four P6 variants share the same yolov7-w6.yaml
+// anchor table. Without this, the P6 head's 4 feature maps were fed
+// into a 3-level loss config and the trainer segfaulted on the first
+// batch.
 template <>
 struct LossTraits<models::Yolo7> {
   using LossT   = losses::V7DetectionLoss;
   using OutputT = losses::LossOutput;
-  static LossT make(int nc) {
+  static LossT make(const models::Yolo7& model) {
+    using S = models::Yolo7Scale;
+    const bool p6 = (model->scale == S::W6 || model->scale == S::E6 ||
+                     model->scale == S::D6 || model->scale == S::E6e);
     losses::V7LossConfig c;
-    c.nc = nc; c.na = 3;
-    // v7-base anchors at imgsz=640 (yolov7.yaml). P3 → P4 → P5.
-    c.anchors = {
-      {{12.f, 16.f},   {19.f, 36.f},   {40.f, 28.f}},    // P3
-      {{36.f, 75.f},   {76.f, 55.f},   {72.f, 146.f}},   // P4
-      {{142.f, 110.f}, {192.f, 243.f}, {459.f, 401.f}},  // P5
-    };
-    c.strides  = {8, 16, 32};
-    c.scale_xy = {2.0f, 2.0f, 2.0f};
+    c.nc = model->nc; c.na = 3;
+    if (p6) {
+      // yolov7-w6.yaml / -e6.yaml / -d6.yaml / -e6e.yaml all use the
+      // same anchor table at imgsz=1280. P3 → P4 → P5 → P6.
+      c.anchors = {
+        {{ 19.f,  27.f}, { 44.f,  40.f}, { 38.f,  94.f}},    // P3 / 8
+        {{ 96.f,  68.f}, { 86.f, 152.f}, {180.f, 137.f}},    // P4 / 16
+        {{140.f, 301.f}, {303.f, 264.f}, {238.f, 542.f}},    // P5 / 32
+        {{436.f, 615.f}, {739.f, 380.f}, {925.f, 792.f}},    // P6 / 64
+      };
+      c.strides  = {8, 16, 32, 64};
+      c.scale_xy = {2.0f, 2.0f, 2.0f, 2.0f};
+      c.balance  = {4.0f, 1.0f, 0.4f, 0.1f};
+    } else {
+      // v7-base/tiny/x anchors at imgsz=640 (yolov7.yaml).
+      c.anchors = {
+        {{ 12.f,  16.f}, { 19.f,  36.f}, { 40.f,  28.f}},    // P3
+        {{ 36.f,  75.f}, { 76.f,  55.f}, { 72.f, 146.f}},    // P4
+        {{142.f, 110.f}, {192.f, 243.f}, {459.f, 401.f}},    // P5
+      };
+      c.strides  = {8, 16, 32};
+      c.scale_xy = {2.0f, 2.0f, 2.0f};
+      c.balance  = {4.0f, 1.0f, 0.4f};
+    }
     c.wh_sigmoid = true;
-    c.balance = {4.0f, 1.0f, 0.4f};
     return LossT(c);
   }
   static OutputT compute(const LossT& l,
@@ -213,8 +236,8 @@ template <>
 struct LossTraits<models::Yolo6> {
   using LossT   = losses::V6DetectionLoss;
   using OutputT = losses::LossOutput;
-  static LossT make(int nc) {
-    losses::V6LossConfig c; c.nc = nc; c.reg_max = 16;
+  static LossT make(const models::Yolo6& model) {
+    losses::V6LossConfig c; c.nc = model->nc; c.reg_max = 16;
     return LossT(c);
   }
   static OutputT compute(const LossT& l,
@@ -238,7 +261,7 @@ template <>
 struct LossTraits<models::RFDetr> {
   using LossT   = int;            // unused — closure captures cfg
   using OutputT = losses::LossOutput;
-  static LossT make(int /*nc*/) { return 0; }
+  static LossT make(const models::RFDetr& /*model*/) { return 0; }
   static OutputT compute(const LossT& /*l*/,
                           const std::vector<torch::Tensor>& feats,
                           const torch::Tensor& tgt,
@@ -589,7 +612,7 @@ void TrainerT<M>::run() {
   torch::optim::SGD optim(groups, opt_options);
 
   using Traits = LossTraits<M>;
-  auto loss = Traits::make(model_->nc);
+  auto loss = Traits::make(model_);
 
   // Seed every RNG when --seed is non-zero. Order: torch's CPU + CUDA
   // generators (operator-level), then the trainer's batch-sampler RNG.

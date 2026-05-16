@@ -30,6 +30,43 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.69.0] — 2026-05-16
+
+### Fixed — Yolo7 P6 train (w6 / e6 / d6 / e6e)
+
+`LossTraits<Yolo7>::make(int nc)` hardcoded the 3-level P5 anchor /
+stride / scale_xy / balance arrays. The P6 variants emit 4 feature
+maps (P3..P6), so the loss inner loop walked off the end of every
+config vector and the trainer segfaulted on the first batch. Train
+was hard-failing on all 4 v7 P6 variants since the trainer landed.
+
+Fix:
+
+1. Changed every `LossTraits<M>::make(int nc)` static to
+   `make(const M& model)` so the trait can branch on
+   `model->scale`. Default + Yolo26/Yolo4/Yolo10/Yolo6/RFDetr traits
+   updated accordingly. Call site in `TrainerT<M>::run` switched to
+   `Traits::make(model_)`.
+2. `LossTraits<Yolo7>::make` now picks the 4-level P6 anchor table
+   (from `yolov7-w6.yaml` — shared by w6/e6/d6/e6e at imgsz=1280)
+   when `model->scale ∈ {W6, E6, D6, E6e}`, else the 3-level base
+   table. `strides`, `scale_xy`, and `balance` are sized to match.
+
+Verified end-to-end:
+
+| variant | mAP@0.5 (1 ep) | s/ep | params |
+|---------|---------------:|-----:|------:|
+| yolo7-w6  | 0.058 | 108 | 517 weights loaded |
+| yolo7-e6  | 0.011 | 165 | 707 weights loaded |
+| yolo7-d6  | 0.020 | 194 | 817 weights loaded |
+| yolo7-e6e | 0.055 | 278 | 1202 weights loaded |
+
+(Single-epoch mAPs are low because all four are imgsz=1280 with
+batch≤4 — they need many more epochs to converge on the screen
+dataset. The point is they train end-to-end without segfault.)
+
+---
+
 ## [0.68.0] — 2026-05-16
 
 ### Fixed — Yolo6 P6 train: EMA-clone topology mismatch
