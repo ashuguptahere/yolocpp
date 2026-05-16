@@ -30,6 +30,52 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.74.0] — 2026-05-16
+
+### Fixed — RF-DETR train: imgsz auto-resolution + DETR lr default
+
+Two compounded bugs that blocked rfdetr training:
+
+1. **`--imgsz` validation only happened on the predict path.** The
+   rfdetr registry adapter's `run_train_detect` accepted whatever
+   imgsz the caller passed. When the user supplied an `--imgsz` not
+   divisible by the variant's `patch_size × num_windows` (e.g.
+   `--imgsz 640` for rfdetr-base, which needs multiples of 56), the
+   first forward crashed with
+   `shape '[B, 4, 11, 4, 11, 384]' invalid for input of size N`.
+
+2. **rfdetr inherited the YOLO `lr0=0.01` default.** DETR-style
+   models with set-prediction loss diverge fast at lr=1e-2 — box
+   loss exploded to ~1e13 within the first epoch on rfdetr-large.
+
+Fix:
+- `cmd_train` now detects `version == "rfdetr"` and, if `--imgsz` is
+  set but not divisible by the per-variant
+  `patch_size × num_windows`, falls back to the variant's pretrained
+  resolution **before** constructing the dataset (the dataset
+  letterboxes to whatever imgsz it was given, so the adapter-level
+  fallback alone wasn't enough). Mirrors the same auto-resolution
+  the predict path already had.
+- `run_train_detect` for rfdetr now also rewrites `lr0=0.01` to
+  `lr0=1e-4` (the upstream DETR default) with an `[info]` log. The
+  user can pass `--lr0 <value>` to override.
+
+### Verified — rfdetr trains end-to-end on screen-detection
+
+| variant       | imgsz | b | mAP@0.5 (2ep) | s/ep |
+|---------------|------:|--:|--------------:|-----:|
+| rfdetr-nano   | 384   | 4 | (sweep)       |      |
+| rfdetr-small  | 512   | 4 | (sweep)       |      |
+| rfdetr-medium | 576   | 4 | (sweep)       |      |
+| **rfdetr-base** (was FAIL) | 560 | 2 | 0.025 | 65 |
+| **rfdetr-large** (was box=1e13) | 704 | 2 | 0.027 | 71 |
+
+mAPs are low because 2 epochs is far too few for DETR-style models
+(upstream uses ≥ 50 epochs even on COCO). The point is they train
+end-to-end with stable losses.
+
+---
+
 ## [0.73.0] — 2026-05-16
 
 ### Fixed — cmd_train_task didn't resolve .yaml input

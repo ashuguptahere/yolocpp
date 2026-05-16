@@ -1035,11 +1035,45 @@ VersionAdapter make_rfdetr() {
   a.run_train_detect = [](const std::string& weights, const std::string& scale,
                            int nc, datasets::YoloDataset ds,
                            const engine::TrainConfig& tc) {
-    models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
+    auto rfscale = models::rfdetr_scale_from_letter(scale);
+    models::RFDetr m(rfscale, nc);
     if (!weights.empty()) {
       m->load_from_upstream_pt(weights, /*strict=*/false);
     }
-    engine::TrainerRFDetr t(m, std::move(ds), tc);
+    // Same imgsz validation as the predict path: the windowed-
+    // attention embedding requires the input dim to be a multiple of
+    // patch_size × num_windows. If the caller's --imgsz doesn't meet
+    // that constraint, fall back to the variant default rather than
+    // letting the first forward crash with `shape '[B,4,11,4,11,384]'
+    // invalid for input of size N`.
+    engine::TrainConfig tc_eff = tc;
+    int default_side = models::rfdetr_default_imgsz(rfscale);
+    if (tc_eff.imgsz > 0 && tc_eff.imgsz != default_side) {
+      auto& bcfg = yolocpp::models::rfdetr::dinov2_cfg_for(
+          rfscale.upstream_id, rfscale.patch_size, rfscale.pretrain_grid,
+          rfscale.backbone_embed);
+      int stride = bcfg.patch_size * std::max(1, bcfg.num_windows);
+      if (tc_eff.imgsz % stride == 0) {
+        // user-supplied imgsz is valid for this variant → keep it
+      } else {
+        std::cerr << "[warn] rfdetr-" << rfscale.upstream_id
+                  << " train: --imgsz=" << tc_eff.imgsz
+                  << " not divisible by patch×num_windows=" << stride
+                  << "; falling back to variant default "
+                  << default_side << "\n";
+        tc_eff.imgsz = default_side;
+      }
+    }
+    // DETR-style models diverge fast at the YOLO-default lr0=0.01.
+    // If the user didn't override (cfg comes in with the default
+    // 0.01), drop to 1e-4 which matches upstream rf-detr training.
+    if (std::abs(tc_eff.lr0 - 0.01) < 1e-9) {
+      std::cerr << "[info] rfdetr-" << rfscale.upstream_id
+                << " train: lr0=0.01 (YOLO default) → 1e-4 "
+                   "(DETR-appropriate). Pass --lr0 to override.\n";
+      tc_eff.lr0 = 1e-4;
+    }
+    engine::TrainerRFDetr t(m, std::move(ds), tc_eff);
     t.run();
   };
   a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat&,

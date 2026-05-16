@@ -68,6 +68,8 @@
 #include "yolocpp/models/yolo8.hpp"
 #include "yolocpp/models/yolo8_classify.hpp"
 #include "yolocpp/models/yolo8_tasks.hpp"
+#include "yolocpp/models/rfdetr.hpp"
+#include "yolocpp/models/rfdetr_backbone.hpp"
 #include "yolocpp/serialization/onnx_export.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
 #include "yolocpp/serialization/trt_export.hpp"
@@ -341,6 +343,36 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   if (scale_s.empty() && !init_weights.empty()) {
     auto fs_scale = yolocpp::cli::scale_from_filename(init_weights);
     if (!fs_scale.empty()) scale_s = fs_scale;
+  }
+
+  // For rfdetr, the windowed-attention embedding requires imgsz to be
+  // a multiple of patch_size × num_windows (e.g. base = 56). If the
+  // caller's --imgsz doesn't satisfy that, fall back to the variant's
+  // pretrained resolution BEFORE constructing the dataset (which
+  // letterboxes to the imgsz it was given). Without this, the dataset
+  // gets the user's invalid imgsz and the adapter's later imgsz
+  // correction has no effect because the dataset is already wrong.
+  {
+    std::string v_hint_pre =
+        init_weights.empty() ? "" : yolocpp::cli::version_from_filename(init_weights);
+    if (v_hint_pre == "rfdetr") {
+      auto rfscale = yolocpp::models::rfdetr_scale_from_letter(scale_s);
+      int default_side = yolocpp::models::rfdetr_default_imgsz(rfscale);
+      if (imgsz > 0 && imgsz != default_side) {
+        auto& bcfg = yolocpp::models::rfdetr::dinov2_cfg_for(
+            rfscale.upstream_id, rfscale.patch_size, rfscale.pretrain_grid,
+            rfscale.backbone_embed);
+        int stride = bcfg.patch_size * std::max(1, bcfg.num_windows);
+        if (imgsz % stride != 0) {
+          std::cerr << "[cmd_train] rfdetr-" << rfscale.upstream_id
+                    << ": --imgsz=" << imgsz
+                    << " not divisible by patch×num_windows=" << stride
+                    << "; falling back to variant default "
+                    << default_side << "\n";
+          imgsz = default_side;
+        }
+      }
+    }
   }
 
   // Format-aware dispatch: `root` accepts every loader the
