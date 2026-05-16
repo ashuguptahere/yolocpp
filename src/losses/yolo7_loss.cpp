@@ -256,8 +256,40 @@ LossOutput V7DetectionLoss::operator()(
         F::BinaryCrossEntropyWithLogitsFuncOptions()
             .pos_weight(pos_w)
             .reduction(torch::kMean));
-    obj_loss = obj_loss + obj_per * cfg_.balance[li];
+
+    // Auto-balance the per-level obj weight to follow where positives
+    // actually live: scale balance proportional to (this level's EMA
+    // positive count / mean EMA positive count). Levels with above-
+    // average positives get amplified; levels with few positives still
+    // contribute (clamped floor 0.1×) to maintain negative supervision.
+    //
+    // On a COCO-like distribution where pos counts roughly match the
+    // upstream prior, the ratio stays near 1 and behavior matches the
+    // static `balance`. On a custom dataset where positives concentrate
+    // at deep levels (e.g. screen-detection where most objects land at
+    // P5/P6), this shifts gradient toward those levels — undoing the
+    // 16–64× downweighting that upstream's [4.0, 1.0, 0.25, 0.06] prior
+    // imposes on large-object data.
+    if (cfg_.autobalance) {
+      double n_pos_li = n_pos.item<double>();
+      if ((int)ema_pos_count_.size() != nl) ema_pos_count_.assign(nl, 0.0);
+      double alpha = std::min(1.0 / (step_count_ / nl + 1.0), 0.02);
+      ema_pos_count_[li] =
+          (1.0 - alpha) * ema_pos_count_[li] + alpha * n_pos_li;
+      double mean_ema = 0.0;
+      for (double v : ema_pos_count_) mean_ema += v;
+      mean_ema = std::max(mean_ema / (double)nl, 1.0);
+      double auto_scale = ema_pos_count_[li] / mean_ema;
+      // Clamp: floor 0.1× so empty levels still train negatives;
+      // ceiling 10× to prevent runaway on highly imbalanced datasets.
+      auto_scale = std::clamp(auto_scale, 0.1, 10.0);
+      double effective = (double)cfg_.balance[li] * auto_scale;
+      obj_loss = obj_loss + obj_per * (float)effective;
+    } else {
+      obj_loss = obj_loss + obj_per * cfg_.balance[li];
+    }
   }
+  if (cfg_.autobalance) ++step_count_;
 
   LossOutput out;
   out.box   = box_loss * cfg_.box_gain;

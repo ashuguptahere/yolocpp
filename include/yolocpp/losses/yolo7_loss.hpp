@@ -53,6 +53,16 @@ struct V7LossConfig {
   float anchor_t   = 4.0f;
   float gr         = 1.0f;        // obj target = (1-gr) + gr * IoU.detach()
   std::vector<float> balance = {4.0f, 1.0f, 0.4f};   // per-level obj weight
+  // Auto-balance the per-level `balance` based on observed per-level
+  // positive counts during training. When enabled, `balance[li]` is
+  // updated each step to be proportional to the inverse of the EMA of
+  // per-level positive count, normalized so the mean balance stays
+  // close to the static prior. This compensates for datasets whose
+  // size distribution doesn't match COCO (e.g. screen-detection has
+  // large objects landing exclusively at P5/P6; upstream's COCO-tuned
+  // balance down-weights those levels by 16–64× — wrong direction).
+  // Default ON; set false to use the static `balance` above.
+  bool  autobalance = true;
   // Center-prior offset (cells with center within `offset_t` of cell
   // boundary also become positives). 0 = disabled, 0.5 = standard.
   float offset_t   = 0.5f;
@@ -74,7 +84,11 @@ class V7DetectionLoss {
   const V7LossConfig& config() const { return cfg_; }
 
  private:
-  V7LossConfig cfg_;
+  mutable V7LossConfig cfg_;
+  // Per-level EMA of positive count. Initialized lazily on first call
+  // (sized to feats.size()). Used by the autobalance loop in operator().
+  mutable std::vector<double> ema_pos_count_;
+  mutable int64_t              step_count_ = 0;
 };
 
 }  // namespace yolocpp::losses

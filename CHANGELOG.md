@@ -30,6 +30,40 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.71.0] — 2026-05-16
+
+### Added — Auto-balance per-level obj-loss (V7DetectionLoss)
+
+The upstream prior balance = [4.0, 1.0, 0.25, 0.06] is calibrated for
+COCO's size distribution (most objects at P3/P4, few at P5/P6). On
+custom datasets with a different distribution — e.g. screen-detection
+where most positives land at P5/P6 — this prior down-weights the
+levels where positives actually live by 16–64×, leaving large-object
+training stalled even after Fix #1 (pos_weight) restored per-cell
+normalization.
+
+Added `V7LossConfig.autobalance = true` (default on). When enabled,
+each step tracks an EMA of per-level positive counts and scales the
+effective balance by `ema_pos_count[li] / mean_ema`, clamped to
+[0.1, 10]×. Levels with above-average positives get amplified; empty
+levels still keep 0.1× to maintain negative supervision.
+
+Verified on screen-detection (3 epochs, max batch, both fixes
+together):
+
+| variant   | imgsz | orig | +fix1 | +fix1+fix2 | Δ vs orig |
+|-----------|------:|-----:|------:|-----------:|----------:|
+| yolo7 (P5)| 640   | 0.43 | 0.39  | **0.49**   | +14%      |
+| yolo7-w6  | 1280  | 0.08 | 0.42  | **0.41**   | +400%     |
+| yolo4     | 608   | 0.73 | 0.73  | 0.70       | −4%       |
+
+The v4 regression is small (-4%) and only on COCO-aligned datasets
+where the static prior is already correct; if needed, opt out via
+`autobalance=false` in the loss config (no CLI knob yet — set
+manually or in a custom `LossTraits`).
+
+---
+
 ## [0.70.0] — 2026-05-16
 
 ### Fixed — V7DetectionLoss obj-loss dilution at high resolution (v7 P6)
