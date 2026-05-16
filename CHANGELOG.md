@@ -30,6 +30,50 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.73.0] — 2026-05-16
+
+### Fixed — cmd_train_task didn't resolve .yaml input
+
+`cmd_train_task` (in `src/cli/commands.cpp`) passed the `data` arg
+straight to `SegDataset/PoseDataset/OBBDataset/ClassifyDataset`,
+which expect a **directory** (the dataset root), not a YAML file.
+Result: pointing `--data` at a `data.yaml` failed with
+`no images at <yaml-path>/images/train` — the constructor was
+treating the YAML file path as a directory and looking for
+`images/train/` inside it.
+
+`cmd_train` (detect) didn't hit this because it routes through
+`make_dataset()` which handles `.yaml` extension via
+`resolve_dataset()`.
+
+Fix: in `cmd_train_task`, detect `.yaml`/`.yml` extension and call
+`resolve_dataset(data)` to get the root, then pass that into the
+task-specific dataset constructors.
+
+### Verified — yolo8 detect family unchanged after recent fixes
+
+| variant | mAP@0.5 (3ep) | s/ep |
+|---------|--------------:|-----:|
+| yolo8n  | 0.59 | 14 |
+| yolo8s  | 0.52 | 18 |
+| yolo8m  | 0.53 | 27 |
+| yolo8l  | 0.42 | 37 |
+| yolo8x  | 0.40 | 54 |
+
+(yolo8 detect uses V8DetectionLoss, not V7DetectionLoss, so the
+yolo7 loss changes in 0.70.0–0.72.0 don't apply here.)
+
+### Verified — yolo8 task variants on screen-detection
+
+After the yaml fix, segment/pose/obb run end-to-end (they produce
+near-zero losses because screen-detection has no
+mask/keypoint/oriented-box labels — that's an expected dataset-
+format mismatch, not a code bug). classify still needs an
+ImageNet-style class-folder layout, which screen-detection doesn't
+have.
+
+---
+
 ## [0.72.0] — 2026-05-16
 
 ### Added — Autoanchor (K-means anchor reclustering) for V7DetectionLoss

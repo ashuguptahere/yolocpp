@@ -486,6 +486,27 @@ int cmd_train_task(const std::string& task, const std::string& data,
                    int batch, double lr0, const std::string& device,
                    const std::string& scale_s, const std::string& save_dir,
                    const std::string& weights) {
+  // Resolve .yaml input to a dataset-root directory so the task-
+  // specific dataset constructors (Seg/Pose/OBB/Classify) — which
+  // expect a directory, not a yaml file — get the path they need.
+  // Previously cmd_train_task passed `data` straight through and the
+  // dataset ctor tried to open `<data.yaml-path>/images/train`.
+  std::string data_root = data;
+  {
+    namespace fs = std::filesystem;
+    fs::path p(data);
+    std::string ext = p.extension().string();
+    for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+    if (ext == ".yaml" || ext == ".yml") {
+      try {
+        data_root = yolocpp::cli::resolve_dataset(data);
+      } catch (const std::exception& e) {
+        std::cerr << "[error] cmd_train_task: " << e.what() << "\n";
+        return 2;
+      }
+    }
+  }
+
   auto load = [&](auto& m) {
     if (!weights.empty()) {
       auto sd = yolocpp::serialization::load_state_dict(weights);
@@ -495,7 +516,7 @@ int cmd_train_task(const std::string& task, const std::string& data,
 
   if (task == "classify") {
     int sz = (imgsz == 640) ? 224 : imgsz;
-    yolocpp::tasks::ClassifyDataset tr(data, "train", sz, /*augment=*/true);
+    yolocpp::tasks::ClassifyDataset tr(data_root, "train", sz, /*augment=*/true);
     yolocpp::models::Yolo8Classify m(parse_scale(scale_s), tr.num_classes());
     load(m);
     yolocpp::tasks::ClassifyTrainConfig cfg;
@@ -507,7 +528,7 @@ int cmd_train_task(const std::string& task, const std::string& data,
   if (task == "segment") {
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::coco_names();
-    yolocpp::tasks::SegDataset tr(data, "train", imgsz, names, /*augment=*/true);
+    yolocpp::tasks::SegDataset tr(data_root, "train", imgsz, names, /*augment=*/true);
     yolocpp::models::Yolo8Segment m(parse_scale(scale_s), tr.num_classes());
     load(m);
     yolocpp::tasks::SegTrainConfig cfg;
@@ -517,7 +538,7 @@ int cmd_train_task(const std::string& task, const std::string& data,
     return 0;
   }
   if (task == "pose") {
-    yolocpp::tasks::PoseDataset tr(data, "train", imgsz, 17, 3, /*augment=*/true);
+    yolocpp::tasks::PoseDataset tr(data_root, "train", imgsz, 17, 3, /*augment=*/true);
     yolocpp::models::Yolo8Pose m(parse_scale(scale_s), /*nc=*/1, 17, 3);
     load(m);
     yolocpp::tasks::PoseTrainConfig cfg;
@@ -529,7 +550,7 @@ int cmd_train_task(const std::string& task, const std::string& data,
   if (task == "obb") {
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::dota_names();
-    yolocpp::tasks::OBBDataset tr(data, "train", imgsz, names, /*augment=*/true);
+    yolocpp::tasks::OBBDataset tr(data_root, "train", imgsz, names, /*augment=*/true);
     yolocpp::models::Yolo8OBB m(parse_scale(scale_s), tr.num_classes(), /*ne=*/1);
     load(m);
     yolocpp::tasks::OBBTrainConfig cfg;
