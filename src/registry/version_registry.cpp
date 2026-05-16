@@ -903,7 +903,30 @@ VersionAdapter make_v26() {
                           int nc, datasets::YoloDataset ds,
                           const engine::TrainConfig& cfg) {
     models::Yolo26Detect m(models::yolo26_scale_from_letter(scale), nc);
-    run_train_with(m, init, std::move(ds), cfg);
+    // v26 cold-start fix: when re-purposing nc=80 upstream weights for
+    // a custom nc, `Detect26Impl::init_biases()` sets the cls bias to
+    // log(0.01/0.99)≈−4.6 (1% prior) so STAL can bootstrap. Two
+    // trainer knobs default to YOLO values that destroy this prior
+    // bias within the first ~30 steps and collapse cls predictions to
+    // ~0 everywhere (the classic v26 mAP=0 pattern):
+    //   1. `lr0=0.01` (YOLO default) — at clip_grad_norm=10, the cls
+    //      bias accumulates >0.1 per step from the negative-mass
+    //      gradient and overshoots to deeply negative within 30 steps.
+    //   2. `warmup_bias_lr=0.1` — boosts biases 10× during warmup,
+    //      compounding the overshoot.
+    // Override both to DETR/STAL-appropriate values. Caller can still
+    // pass `--lr0 <value>` to opt back into a higher rate.
+    engine::TrainConfig tc = cfg;
+    if (std::abs(tc.lr0 - 0.01) < 1e-9) {
+      std::cerr << "[info] yolo26 train: lr0=0.01 (YOLO default) → 1e-4 "
+                   "(preserves the cls-head prior bias under STAL cold-"
+                   "start). Pass --lr0 to override.\n";
+      tc.lr0 = 1e-4;
+    }
+    if (std::abs(tc.warmup_bias_lr - 0.1) < 1e-9) {
+      tc.warmup_bias_lr = tc.lr0;
+    }
+    run_train_with(m, init, std::move(ds), tc);
   };
   a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
                       const std::string& scale) {

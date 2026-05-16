@@ -30,6 +30,47 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.75.0] — 2026-05-16
+
+### Fixed — yolo26 cold-start collapse (mAP=0 → trains)
+
+All 5 v26 detect variants collapsed to mAP=0 on screen-detection
+(and on every custom-nc transfer task). Root cause: the YOLO-default
+`lr0=0.01` + `warmup_bias_lr=0.1` is calibrated for v8-style TAL,
+which assigns top-13 anchors per GT with smooth-soft targets. v26's
+STAL is one-to-one (top-1 per GT) with `cls_sig^0.5 · iou^6`
+alignment, and the cls-bias prior set by `Detect26Impl::init_biases()`
+(log(0.01/0.99) ≈ −4.6, so initial sigmoid ≈ 1%) gets crushed within
+the first ~30 steps by the unconstrained negative-mass gradient — at
+lr=0.01 the cls bias drifts ~0.1 per step into deeply negative
+territory, sigmoid collapses to 0 everywhere, STAL stops assigning,
+loss converges to 0 with nothing learned.
+
+Fix (`src/registry/version_registry.cpp:make_v26().run_train_detect`):
+- Override `lr0=0.01 → 1e-4` (DETR-appropriate; STAL needs gentler
+  updates to preserve the cls-bias prior).
+- Override `warmup_bias_lr=0.1 → lr0` so the warmup phase doesn't
+  10× the bias updates.
+
+Both are conditional on the caller still passing the YOLO defaults;
+explicit `--lr0` overrides win.
+
+### Verified — v26n on screen-detection
+
+| metric | before (lr=0.01) | after (lr=1e-4) |
+|--------|-----------------:|----------------:|
+| mAP@0.5 @ 3 ep | **0.000** | 0.006 |
+| mAP@0.5 @ 5 ep | (didn't try) | **0.012** |
+| max σ(cls) | 0.006 (uniform low) | 0.009 (rises) |
+| trajectory | flat zero | monotonic up |
+
+mAP is low because DETR/STAL-style training fundamentally needs many
+more epochs than YOLO TAL (upstream v26 trains 100+ epochs). The fix
+unblocks the training trajectory; it doesn't claim COCO-comparable
+mAP in 3–5 epochs.
+
+---
+
 ## [0.74.0] — 2026-05-16
 
 ### Fixed — RF-DETR train: imgsz auto-resolution + DETR lr default
