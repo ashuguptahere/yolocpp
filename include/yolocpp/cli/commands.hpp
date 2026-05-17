@@ -48,7 +48,8 @@ int cmd_train(const std::string& root, const std::string& names_csv,
               const std::string& init_weights,
               int patience = 0,
               std::vector<std::pair<std::string, std::string>> args_for_yaml = {},
-              std::uint64_t seed = 0);
+              std::uint64_t seed = 0,
+              double lrf = -1.0);  // -1 → trainer default (cosine to 1% of lr0)
 
 int cmd_train_task(const std::string& task, const std::string& data,
                    const std::string& names_csv, int imgsz, int epochs,

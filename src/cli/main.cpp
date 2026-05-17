@@ -40,6 +40,10 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   int    imgsz = 640, epochs = 100, batch_size = 16, nc = 80;
   int    patience = 0, warmup = 10, iters = 100;
   double lr0   = 0.01;
+  // -1 → use trainer default (0.01 = cosine to 1% of lr0). Set to
+  // 1.0 for constant LR (no cosine decay). Threaded through cmd_train
+  // → TrainConfig.lrf.
+  double lrf   = -1.0;
   float  conf  = 0.25f, iou = 0.45f;
   bool   export_fp16 = true;
   uint64_t seed = 0;
@@ -59,6 +63,9 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   app.add_option("--epochs,-e",  epochs,      "epochs (train)");
   app.add_option("--batch,-b",   batch_size,  "batch size (train)");
   app.add_option("--lr0",        lr0,         "initial LR (train)");
+  app.add_option("--lrf",        lrf,
+                  "final LR fraction of lr0 (cosine schedule end). "
+                  "Default 0.01 = decay to 1%% of lr0; pass 1.0 for constant LR.");
   app.add_option("--device,-D",  device,
                   "cpu | cuda | cuda:N | cuda:0,1,... | mps | auto");
   app.add_option("--scale",      scale_s,
@@ -167,7 +174,7 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
       // Detect train is registry-routed.
       rc = cmd_train(data, names_csv, imgsz, epochs, batch_size, lr0,
                       device, scale_s, save_dir, weights,
-                      patience, /*args_for_yaml=*/{}, seed);
+                      patience, /*args_for_yaml=*/{}, seed, lrf);
     } else {
       // Non-detect train uses the v8 task families.
       rc = cmd_train_task(task, data, names_csv, imgsz, epochs, batch_size,

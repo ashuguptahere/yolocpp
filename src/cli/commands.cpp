@@ -314,7 +314,8 @@ int cmd_train(const std::string& root, const std::string& names_csv,
               const std::string& init_weights,
               int patience,
               std::vector<std::pair<std::string, std::string>> args_for_yaml,
-              uint64_t seed) {
+              uint64_t seed,
+              double lrf) {
   auto names = split_csv(names_csv);
   // If --names wasn't passed, prefer the data.yaml's `names:` over the
   // COCO 80 fallback. Without this, training on a 5-class dataset
@@ -385,6 +386,7 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   cfg.batch_size = batch_size;
   cfg.imgsz      = imgsz;
   cfg.lr0        = lr0;
+  if (lrf >= 0.0) cfg.lrf = lrf;          // CLI override; -1 = trainer default
   cfg.device     = std::move(device);
   cfg.save_dir   = save_dir;
   cfg.patience   = patience;

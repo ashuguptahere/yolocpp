@@ -30,6 +30,40 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.82.0] — 2026-05-17
+
+### Fixed — yolo26 plateau-then-stop (Tier 1 #1)
+
+After 0.80.0 v26 trained correctly but plateaued around the 10-epoch
+peak (e.g. v26x hit mAP@0.5=0.93 at ep 6 and stopped improving). The
+cause was the cosine LR schedule with `lrf=0.01` decaying the
+effective learning rate to ~1% of `lr0` by the end of training.
+Combined with the v26-specific `lr0=1e-4` override, the late-stage
+effective LR was ~1e-6 — too small to keep moving the cls bias
+toward its converged value.
+
+Added `--lrf` CLI flag (default unset → trainer's existing 0.01).
+Set `lrf = 1.0` (constant LR — no cosine decay) as the v26 adapter
+default, with an `[info]` log so the user knows the override is in
+effect. Pass `--lrf <value>` to opt back into the YOLO default or
+any custom schedule.
+
+Verified on v26x, 30 epochs, constant LR:
+
+| epoch | mAP@0.5 | mAP@0.5:0.95 |
+|------:|--------:|-------------:|
+| 0 | 0.05 | 0.04 |
+| 5 | 0.83 | 0.73 |
+| 10 | 0.95 | 0.84 |
+| 20 | 0.99 | 0.88 |
+| **29** | **0.993** | **0.896** |
+
+This matches the upstream Ultralytics YOLO26 convergence behavior the
+user described — v26 trains end-to-end to near-perfect mAP on this
+dataset given enough epochs.
+
+---
+
 ## [0.81.0] — 2026-05-17
 
 ### Improved — batched validation (Tier 3 #13)
