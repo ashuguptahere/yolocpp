@@ -30,6 +30,67 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.80.0] — 2026-05-17
+
+### Fixed — yolo26 anchor-unit bug (the actual reason v26 wasn't converging)
+
+After the dual-head + detach + L1 fixes in 0.79.0 the trajectory was
+better (peak 0.028) but still oscillated. Cross-referenced our
+`make_anchors` in `src/losses/yolo26_loss.cpp` against
+`ultralytics/utils/tal.py::make_anchors` and found the bug:
+
+```cpp
+// OURS (wrong)
+auto sx = (torch::arange(w, opts) + 0.5) * st;   // PIXEL units (× stride)
+
+// UPSTREAM
+sx = torch.arange(w, device=device, dtype=dtype) + grid_cell_offset
+// → CELL units (no × stride)
+```
+
+The decode path then mixed units and double-scaled by stride:
+```cpp
+// pred is in CELL units, anc_pts in PIXEL units — wrong mix
+(anc_pts.pixel - softplus(pred).cell) * stride_t
+```
+
+The actual box coordinates were off by a factor of ~10× (anchor pixel
+coordinate at stride 8 is ~4 instead of 0.5 cell). This produced
+boxes that were impossibly large/small for the input image, so CIoU
+gave near-zero gradient signal and the L1 loss couldn't recover
+either. Net effect: v26's box predictions were essentially random
+noise even after "training" — explaining why all our attempts to
+tune the loss landed at mAP ≤ 0.03.
+
+Fix: `make_anchors` now returns CELL-unit anchor coordinates (matches
+upstream exactly). `compute_head_loss` decodes in cell space then
+multiplies by stride once at the end for pixel-space xyxy, and
+passes `anchor_points × stride_tensor` to STAL separately so the
+in-GT check works against pixel-space GT boxes. Also removed the
+`softplus` on `pred_box_raw` — upstream uses raw predictions (which
+can be negative). Softplus was both shifting the activation point
+AND capping gradient magnitude, slowing convergence further.
+
+### Verified — v26n now converges fast
+
+| epoch | mAP@0.5 | mAP@0.5:0.95 |
+|------:|--------:|-------------:|
+| 0 | 0.045 | 0.029 |
+| 1 | 0.139 | 0.117 |
+| 2 | 0.194 | 0.163 |
+| 5 | 0.376 | 0.320 |
+| 8 | **0.426** | **0.366** |
+| 9 | 0.425 | 0.367 |
+
+At 8 epochs v26n hits **0.426 mAP@0.5** — finally in the same regime
+as the other YOLO families on this dataset. The user's intuition
+that "v26 should converge fast, like DETR models" was correct; the
+blocker was a unit-conversion bug in our anchor builder, not the
+fundamental architecture or any cls-bias / lr / decay schedule
+issue.
+
+---
+
 ## [0.79.0] — 2026-05-17
 
 ### Licensing — added AGPL-3.0 LICENSE file

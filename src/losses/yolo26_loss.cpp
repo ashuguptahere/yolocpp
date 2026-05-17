@@ -47,7 +47,12 @@ torch::Tensor bbox_ciou(const torch::Tensor& a, const torch::Tensor& b,
   return iou - rho2 / c2 - alpha * v;
 }
 
-// Build anchor centers and a per-anchor stride tensor.
+// Build anchor centers (in CELL units — NOT × stride) and a per-anchor
+// stride tensor. Matches upstream `make_anchors(grid_cell_offset=0.5)`:
+//   anchor_points = arange(W) + 0.5  (cell-space center coordinates)
+//   stride_tensor = repeated stride value per anchor
+// Callers that need pixel-space anchors multiply `anchor_points *
+// stride_tensor` themselves.
 torch::Tensor make_anchors(const std::vector<double>& strides,
                            const std::vector<std::pair<int, int>>& sizes,
                            const torch::TensorOptions& opts,
@@ -57,8 +62,8 @@ torch::Tensor make_anchors(const std::vector<double>& strides,
     int   h  = sizes[i].first;
     int   w  = sizes[i].second;
     double st = strides[i];
-    auto sx = (torch::arange(w, opts) + 0.5) * st;
-    auto sy = (torch::arange(h, opts) + 0.5) * st;
+    auto sx = (torch::arange(w, opts) + 0.5);   // CELL units (no × stride)
+    auto sy = (torch::arange(h, opts) + 0.5);
     auto gy = sy.reshape({h, 1}).expand({h, w});
     auto gx = sx.reshape({1, w}).expand({h, w});
     a.push_back(torch::stack({gx, gy}, /*dim=*/-1).reshape({h * w, 2}));
@@ -270,17 +275,26 @@ static HeadLossOut compute_head_loss(
 
   auto anc_opts = opts.device(head_feats[0].device());
   torch::Tensor stride_t;
-  auto anc_pts = make_anchors(strides, sizes, anc_opts, &stride_t);
+  auto anc_pts_cell = make_anchors(strides, sizes, anc_opts, &stride_t);  // CELL units, [A, 2]
+  // For STAL's in-GT check and IoU computation, anchors and predicted
+  // boxes both need to be in PIXEL units (GT boxes are in pixels).
+  auto anc_pts_pix  = anc_pts_cell * stride_t.unsqueeze(-1);  // [A, 2]
 
-  // Decoded box distances (softplus → positive l/t/r/b in cell units).
-  auto box_pos = F::softplus(pred_box_raw);                  // [B, A, 4]
+  // Decode pred distances. Upstream uses RAW pred (no clamp/softplus)
+  // so the loss can supervise the (l, t, r, b) values directly — we
+  // were applying softplus which both shifts the activation point and
+  // caps the gradient magnitude, slowing convergence. Use raw here.
+  auto pred_dist_cell = pred_box_raw;                       // [B, A, 4] cell units
+  // Cell-space decode → pixel-space xyxy:
+  //   x1y1 = (anc_cell − ltrb_cell[:2]) × stride
+  //   x2y2 = (anc_cell + ltrb_cell[2:]) × stride
   auto pred_xyxy = torch::cat({
-      anc_pts.unsqueeze(0) - box_pos.slice(-1, 0, 2),
-      anc_pts.unsqueeze(0) + box_pos.slice(-1, 2, 4)
+      anc_pts_cell.unsqueeze(0) - pred_dist_cell.slice(-1, 0, 2),
+      anc_pts_cell.unsqueeze(0) + pred_dist_cell.slice(-1, 2, 4)
   }, -1) * stride_t.unsqueeze(-1);
 
   auto pd_scores_sig = pred_cls.detach().sigmoid();
-  StalOutput sa = stal_assign(pd_scores_sig, pred_xyxy.detach(), anc_pts,
+  StalOutput sa = stal_assign(pd_scores_sig, pred_xyxy.detach(), anc_pts_pix,
                               gt_labels, gt_bboxes, mask_gt,
                               nc, cfg.alpha, cfg.beta, topk);
 
@@ -309,41 +323,30 @@ static HeadLossOut compute_head_loss(
 
     // Upstream BboxLoss-with-reg_max=1: L1 between normalized
     // pred-distances and target-distances. Critical second box
-    // supervision term — CIoU alone optimizes IoU which is invariant
-    // to absolute box size for small overlaps, so the box coordinates
-    // can drift even when the loss appears stable. The L1 anchors
-    // both predicted and target distances to image-relative [0, 1]
-    // space and supervises them directly.
-    //   target_ltrb = (anchor - gt_lt, gt_rb - anchor)  in cell units
-    //   then × stride / imgsz       to get image-relative
-    //   pred_ltrb = box_pos (softplus(raw))
-    //   then × stride / imgsz
-    //   loss = L1(pred, target).mean(-1) × weight / target_scores_sum
-    auto box_pos_flat = box_pos.reshape({-1, 4});  // [B*A, 4] in cell units
-    auto pp_dist = box_pos_flat.index_select(0, pos_idx);  // [P, 4]
-    // Target distance: from anchor_points to target_bboxes corners,
-    // in cell units (anchor_points are also in cell units after we
-    // divide by stride_t).
-    auto str_flat = stride_t.reshape(-1);  // [A] in pixel units
-    auto str_per_pos = str_flat.index_select(0, pos_idx % str_flat.size(0))
-                          .unsqueeze(-1);  // [P, 1]
-    auto anc_flat = anc_pts.unsqueeze(0).expand({B, -1, -1}).reshape({-1, 2});
-    auto anc_per_pos = anc_flat.index_select(0, pos_idx);  // [P, 2] (in cell × stride units)
-    // anc_pts/stride is in CELL units (no stride); but we built anc_pts
-    // with `(arange + 0.5) * stride` so anc_pts is in pixel units. To
-    // recover cell units for ltrb, divide by stride.
-    auto anc_cell = anc_per_pos / str_per_pos;            // [P, 2] cell units
-    auto gt_lt    = tt_bb.slice(-1, 0, 2) / str_per_pos;  // [P, 2]
-    auto gt_rb    = tt_bb.slice(-1, 2, 4) / str_per_pos;
-    auto t_dist   = torch::cat({anc_cell - gt_lt, gt_rb - anc_cell}, -1);  // [P, 4]
-    // Normalize both pred and target by (imgsz / stride) — equivalent
-    // to upstream's `× stride / imgsz`.
+    // supervision term — CIoU alone is scale-invariant for small
+    // overlaps, so the box coordinates can drift even when CIoU
+    // looks stable. L1 anchors both predicted and target distances
+    // to image-relative [0, 1] space and supervises them directly.
+    //   pred_dist_cell = pred_box_raw (cell units, raw — matches upstream)
+    //   target_dist_cell = (anchor_cell − gt_lt_cell,  gt_rb_cell − anchor_cell)
+    //   both × stride / imgsz → image-relative [0, 1]
+    //   L1(pred_norm, target_norm).mean(-1) × weight / target_scores_sum
+    auto pred_dist_flat = pred_dist_cell.reshape({-1, 4});
+    auto pp_dist = pred_dist_flat.index_select(0, pos_idx);  // [P, 4]
+    auto str_flat = stride_t.reshape(-1);  // [A]
+    // pos_idx is in [0, B*A); map to per-image anchor idx via modulo.
+    auto a_idx_per_pos = pos_idx.remainder(str_flat.size(0));
+    auto str_per_pos   = str_flat.index_select(0, a_idx_per_pos).unsqueeze(-1);  // [P, 1]
+    auto anc_per_pos   = anc_pts_cell.index_select(0, a_idx_per_pos);            // [P, 2] cell units
+    auto gt_lt_cell = tt_bb.slice(-1, 0, 2) / str_per_pos;
+    auto gt_rb_cell = tt_bb.slice(-1, 2, 4) / str_per_pos;
+    auto t_dist = torch::cat({anc_per_pos - gt_lt_cell, gt_rb_cell - anc_per_pos}, -1);
     float inv_imgsz = (imgsz > 0) ? (1.0f / (float)imgsz) : 1.0f;
     auto pp_norm = pp_dist * str_per_pos * inv_imgsz;
     auto tt_norm = t_dist  * str_per_pos * inv_imgsz;
     auto l1 = F::l1_loss(pp_norm, tt_norm,
                           F::L1LossFuncOptions().reduction(torch::kNone));
-    auto l1_per = l1.mean(-1).unsqueeze(-1) * w.unsqueeze(-1);
+    auto l1_per = l1.mean(-1) * w;
     l1_loss = l1_per.sum() / target_scores_sum;
   }
   return {box_loss, cls_loss, l1_loss};
