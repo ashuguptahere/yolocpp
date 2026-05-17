@@ -406,9 +406,65 @@ int Yolo26DetectImpl::load_from_state_dict(
   for (auto& kv : params) ours.emplace(kv.key(), kv.value());
   for (auto& kv : buffs)  ours.emplace(kv.key(), kv.value());
 
+  // Upstream yolo26 checkpoints store BOTH heads:
+  //   model.23.cv2/cv3.*           — one2many TAL head (for training
+  //                                   stability via ProgLoss)
+  //   model.23.one2one_cv2/cv3.*   — one2one STAL head (deployed for
+  //                                   the e2e NMS-free inference path)
+  // Our Detect26Impl has just one branch (named cv2/cv3) and is
+  // trained with STAL loss, so it's the one2one head functionally.
+  // Without remapping, we'd load the one2many TAL-trained weights
+  // into a STAL-loss model — the per-anchor confidence calibration
+  // is totally different (TAL spreads conf across top-k, STAL puts
+  // it all on the single best anchor), and the model never recovers
+  // from the wrong prior in short fine-tuning runs.
+  //
+  // Remap `one2one_cv2/3.*` → `cv2/3.*` (preferred). If only
+  // `cv2/3.*` exists in the ckpt (e.g. a checkpoint we saved from
+  // our own training), it still loads via the unmodified key match.
+  std::vector<std::pair<std::string, at::Tensor>> remapped;
+  remapped.reserve(entries.size());
+  bool have_one2one = false;
+  for (const auto& [k, t] : entries) {
+    if (k.find(".one2one_cv2.") != std::string::npos ||
+        k.find(".one2one_cv3.") != std::string::npos) {
+      have_one2one = true; break;
+    }
+  }
+  if (have_one2one) {
+    // The DETECT-HEAD prefix is `model.<idx>.` — find the index by
+    // matching the one2one keys. Every head key is
+    // `model.<idx>.{cv2,cv3,one2one_cv2,one2one_cv3}.*`. Backbone
+    // blocks ALSO have `.cv2.`/`.cv3.` (inside C2f, C3k2, etc.), so
+    // we must filter on the full head prefix, not just the substring.
+    std::string head_prefix;
+    for (const auto& [k, _] : entries) {
+      auto pos = k.find(".one2one_cv");
+      if (pos != std::string::npos) {
+        head_prefix = k.substr(0, pos);  // e.g. "model.23"
+        break;
+      }
+    }
+    for (const auto& [k, t] : entries) {
+      // Skip ONLY the one2many head's cv2/cv3 (NOT backbone cv2/cv3).
+      bool is_one2many_head =
+          (!head_prefix.empty()) &&
+          (k.rfind(head_prefix + ".cv2.", 0) == 0 ||
+           k.rfind(head_prefix + ".cv3.", 0) == 0);
+      if (is_one2many_head) continue;
+      std::string nk = k;
+      // Strip the "one2one_" prefix so one2one_cv2/3 bind to cv2/3.
+      auto pos = nk.find(".one2one_cv");
+      if (pos != std::string::npos) nk = nk.substr(0, pos + 1) + nk.substr(pos + 9);
+      remapped.emplace_back(std::move(nk), t);
+    }
+  } else {
+    remapped = entries;
+  }
+
   torch::NoGradGuard ng;
   int copied = 0, skipped_shape = 0;
-  for (const auto& [k, t] : entries) {
+  for (const auto& [k, t] : remapped) {
     auto it = ours.find(k);
     if (it == ours.end()) continue;
     auto& dst = it->second;

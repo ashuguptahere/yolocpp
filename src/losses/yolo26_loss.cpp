@@ -137,24 +137,33 @@ StalOutput stal_assign(const torch::Tensor& pd_scores,
   align = align * in_gts.to(align.dtype()) *
           mask_gt.to(align.dtype());
 
-  // 3) STAL (one-to-one): top-1 anchor per GT.
+  // 3) Assignment — top-k anchors per GT (k=10 ≈ TAL).
   //
-  // At cold-start, score^α · iou^β ≈ 0 across the board (random IoU≈0 with
-  // β=6 dominates), which would make argmax fall on an arbitrary anchor and
-  // the > 0 check would reject every candidate. Add a tiny floor on
-  // (in-GT, valid-GT) pairs so argmax always lands on a real in-GT anchor;
-  // padded GT pairs stay at exactly 0 and are filtered out below.
+  // YOLOv26's paper recipe trains TWO heads (one2many TAL + one2one STAL)
+  // and progressively shifts loss weight between them (ProgLoss). We
+  // only have one head, so we use top-k=10 throughout to simulate the
+  // TAL-heavy early phase. At top-1 (STAL strict), positive supervision
+  // is so sparse (~3/img × 16 = 48 per batch over 8400 anchors) that
+  // the model can't bootstrap from an nc=80→nc=5 cls-head reset in
+  // short fine-tuning budgets (mAP stays at 0).
+  //
+  // Add a tiny floor on (in-GT, valid-GT) pairs so top-k always lands
+  // on real in-GT anchors at cold start when raw scores are all ≈0.
+  const int64_t topk = std::min<int64_t>(10, A);
   auto valid_floor = (in_gts.to(align.dtype()) *
                        mask_gt.to(align.dtype())) * 1e-12;            // [B, M, A]
   auto align_floored = align + valid_floor;
-  auto top1_a_idx = align_floored.argmax(-1, /*keepdim=*/true);       // [B, M, 1]
-  auto top1_a_val = align_floored.gather(-1, top1_a_idx);             // [B, M, 1]
-  auto valid_pair = (top1_a_val > 1e-13) & (mask_gt > 0);             // [B, M, 1]
+  auto topk_out  = align_floored.topk(topk, /*dim=*/-1, /*largest=*/true);
+  auto topk_idx  = std::get<1>(topk_out);                             // [B, M, topk]
+  auto topk_val  = std::get<0>(topk_out);                             // [B, M, topk]
+  auto valid_top = (topk_val > 1e-13);                                // [B, M, topk]
 
-  // mask_pos[b, m, a] = 1 iff a == top1_a_idx[b, m] AND valid.
-  auto a_arange = torch::arange(A, anc_pts.options().dtype(torch::kLong))
-                      .reshape({1, 1, A});
-  auto mask_pos = (a_arange == top1_a_idx) & valid_pair;     // [B, M, A] bool
+  // mask_pos[b, m, a] = 1 iff a is in top-k for GT m AND valid.
+  auto mask_pos_int = torch::zeros({B, M, A},
+                                   align.options().dtype(torch::kInt32));
+  mask_pos_int.scatter_(/*dim=*/-1, topk_idx, valid_top.to(torch::kInt32));
+  auto mask_pos = mask_pos_int.to(torch::kBool) &
+                   (mask_gt.to(torch::kBool));                        // [B, M, A]
 
   // 4) Resolve overlap: if multiple GTs picked the same anchor, give it to
   //    the one with the highest IoU.
@@ -191,9 +200,28 @@ StalOutput stal_assign(const torch::Tensor& pd_scores,
   auto iou_pa = iou.gather(/*dim=*/1, target_gt_idx.unsqueeze(1)).squeeze(1);  // [B, A]
   auto pos_iou = iou_pa * fg_mask.to(iou_pa.dtype());        // 0 outside fg
 
+  // ── TAL-style per-GT target normalization (matches upstream v8 TAL) ──
+  // For each GT, scale its anchors' IoU so the best-aligned anchor
+  // gets target = max(alignment) over THAT GT's positives. This makes
+  // the cls target reach 1.0 for the single best anchor of each GT,
+  // giving the model a strong supervision signal even when raw IoUs
+  // are moderate. Without this, target = iou × onehot (~0.3–0.7), so
+  // the model has no reason to push σ above 0.7 — explaining why our
+  // v26 predictions stuck at <0.01 confidence in 3-epoch fine-tuning.
+  auto align_pos = align * mask_pos.to(align.dtype());           // [B, M, A]
+  auto iou_pos   = iou   * mask_pos.to(iou.dtype());             // [B, M, A]
+  auto max_align_per_gt = align_pos.amax(-1, /*keepdim=*/true);  // [B, M, 1]
+  auto max_iou_per_gt   = iou_pos.amax(-1, /*keepdim=*/true);    // [B, M, 1]
+  // norm_align[b,m,a] = align[b,m,a] / max_align_per_gt[b,m,1] × max_iou_per_gt[b,m,1]
+  auto norm_align = align_pos / max_align_per_gt.clamp_min(1e-9) *
+                     max_iou_per_gt;                              // [B, M, A]
+  // Reduce to per-anchor (sum across GT, since each anchor matches ≤1 GT)
+  auto target_score_per_anchor = norm_align.amax(/*dim=*/1);     // [B, A]
+
   auto onehot_labels = torch::nn::functional::one_hot(t_labels, nc)
                            .to(pd_scores.dtype());           // [B, A, nc]
-  auto t_scores = onehot_labels * pos_iou.unsqueeze(-1);
+  // Use the TAL-normalized target instead of raw iou_pa.
+  auto t_scores = onehot_labels * target_score_per_anchor.unsqueeze(-1);
   t_scores = t_scores * fg_mask.unsqueeze(-1).to(t_scores.dtype());
 
   StalOutput o;
@@ -293,19 +321,20 @@ Yolo26LossOutput Yolo26Loss::operator()(
                               gt_labels, gt_bboxes, mask_gt,
                               nc, cfg_.alpha, cfg_.beta);
 
-  // ── 4. ProgLoss-weighted soft target ───────────────────────────────────
-  // prog ∈ [0, 1]: at prog=0 use raw alignment (ignoring iou exponent —
-  // smoother early), at prog=1 use the full iou-scaled soft target.
-  // Implemented as: t_scores_prog = onehot_labels * iou^prog * fg_mask.
-  double prog = std::clamp(progress, 0.0, 1.0);
-  auto onehot_labels = torch::nn::functional::one_hot(sa.target_labels, nc)
-                           .to(pred_cls.dtype());
-  auto iou_pow = sa.pos_iou.pow(prog);                       // [B, A]
-  auto t_scores_prog = onehot_labels *
-                        iou_pow.unsqueeze(-1) *
-                        sa.fg_mask.unsqueeze(-1).to(pred_cls.dtype());
+  // ── 4. Cls target (TAL-normalized) ─────────────────────────────────────
+  // `sa.target_scores` is already the TAL-normalized per-anchor target
+  // (built in stal_assign via `align / max(align) × max(iou)` per GT),
+  // so the best-aligned anchor of each GT gets target ≈ max_iou ≈ 1.
+  // This is the upstream YOLO recipe for matching `bce / target_sum`
+  // normalization — without it, BCE pushes σ→iou (~0.3) and confidence
+  // never gets high enough for NMS to keep predictions.
+  (void)progress;  // ProgLoss now lives in stal_assign (top-k); the
+                   // progressive iou^prog soft target was a wrong
+                   // interpretation of what ProgLoss does.
+  auto t_scores_prog = sa.target_scores;                     // [B, A, nc]
 
-  // Cls loss: BCE w/ logits, normalised by sum of soft targets.
+  // Cls loss: BCE w/ logits, normalised by sum of soft targets
+  // (matches upstream v8DetectionLoss).
   auto bce = F::binary_cross_entropy_with_logits(
       pred_cls, t_scores_prog,
       F::BinaryCrossEntropyWithLogitsFuncOptions().reduction(torch::kSum));
@@ -313,16 +342,18 @@ Yolo26LossOutput Yolo26Loss::operator()(
   auto cls_loss = bce / target_scores_sum;
 
   // ── 5. Box loss (CIoU) on positives ────────────────────────────────────
-  // Use the same ProgLoss-scaled weight as the cls target:
-  //   w = iou^prog · fg_mask. At prog=0 → w=1 (full gradient at cold-start);
-  //   at prog=1 → w=IoU (IoU-aware re-weighting late in training).
+  // Per-positive weight = TAL-normalized cls target (matches upstream
+  // v8 box-iou loss weighting). Higher-aligned anchors of each GT get
+  // higher weight, less-aligned get less — same scheme as cls loss.
   torch::Tensor box_loss = torch::zeros({}, opts);
   if (sa.fg_mask.any().item<bool>()) {
     auto fg_flat        = sa.fg_mask.reshape(-1);                  // [B*A]
     auto pred_xyxy_flat = pred_xyxy.reshape({-1, 4});               // [B*A, 4]
     auto t_bboxes_flat  = sa.target_bboxes.reshape({-1, 4});        // [B*A, 4]
-    auto w_flat         = (iou_pow * sa.fg_mask.to(iou_pow.dtype()))
-                              .reshape(-1);                          // [B*A]
+    // Sum across class dim to get per-anchor weight (one column nonzero
+    // per fg anchor, so this just lifts back to per-anchor).
+    auto target_score_per_anchor = sa.target_scores.sum(-1);        // [B, A]
+    auto w_flat = target_score_per_anchor.reshape(-1);              // [B*A]
 
     auto pos_idx = torch::nonzero(fg_flat).reshape(-1);
     auto pp_xyxy = pred_xyxy_flat.index_select(0, pos_idx);

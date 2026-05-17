@@ -30,6 +30,78 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.77.0] — 2026-05-17
+
+### Fixed — yolo26: wrong head weights loaded + missing TAL normalization
+
+Two compounding bugs explained the v26 cold-start collapse to mAP=0
+on screen-detection (and any custom-nc fine-tuning):
+
+1. **Wrong head weights loaded.** Per the YOLO26 paper (arXiv
+   2509.25164) and upstream Ultralytics `E2EDetectLoss` source,
+   upstream v26 stores TWO heads in the checkpoint:
+   - `model.23.cv2/cv3.*` — one2many TAL head (`tal_topk=10`)
+   - `model.23.one2one_cv2/cv3.*` — one2one STAL head (`tal_topk=1`)
+
+   Our `Detect26Impl` has just one branch named `cv2/cv3`,
+   functionally the **one2one** head (DFL-free, 4-channel direct
+   regression, trained with the STAL one-to-one assignment). Without
+   remapping, the loader picked up the upstream `cv2/cv3` keys —
+   that's the one2many TAL head's weights — and dropped them into
+   our one2one model. The per-anchor confidence calibration is
+   completely different between TAL (spreads confidence across
+   top-k) and STAL (puts it all on the single best anchor), so the
+   model was initialized into a regime it could never converge from
+   under our short training budgets. Fix: detect when both heads
+   are present in the checkpoint and remap `one2one_cv2/3.*` →
+   `cv2/3.*` (filtered to the head index — backbone blocks also
+   have `.cv2./.cv3.` inside C2f/C3k2 modules and must not be
+   touched).
+
+2. **Missing TAL per-GT target normalization.** Our `stal_assign`
+   built `target_scores = onehot × iou × fg_mask` — raw IoU per
+   anchor. Upstream's v8DetectionLoss (used by E2EDetectLoss for
+   both heads) computes
+   `target = onehot × (align / max_align_per_gt × max_iou_per_gt)`,
+   so the best-aligned anchor of each GT gets target ≈ 1.0 and less-
+   aligned anchors scale down. Without this normalization, BCE
+   pushes σ → iou (~0.3–0.7), the model has no incentive to push
+   confidence above ~0.7, and σ never crosses the NMS conf threshold
+   in short fine-tuning. Fix: added the per-GT normalization to
+   `stal_assign`'s `target_scores` output. Box loss weight now uses
+   the same TAL-normalized target.
+
+3. **Assignment switched from top-1 to top-k=10** (matches
+   E2EDetectLoss's one2many setup). Same as the v7 P6 fix — too few
+   positive supervisions per batch starve the cls head's learning
+   signal at cold start.
+
+### Result
+
+| metric             | before any v26 fixes | after 0.77.0 |
+|--------------------|--------------------:|-------------:|
+| max σ(cls) | 0.001 | **0.024** |
+| median σ(cls) | 0.0001 | **0.007** |
+| mAP@0.5 @ 3 ep | 0.000 | 0.005 |
+| training stable | no (oscillates) | yes |
+
+The cls prediction confidence rose 24× to a regime where the NMS
+conf threshold can actually rank detections, but mAP is still low.
+
+### Known limitation — full dual-head ProgLoss is still TODO
+
+YOLO26's real recipe (per the paper) has both heads physically
+present in the model, with `v8DetectionLoss(tal_topk=10)` on the
+one2many head + `v8DetectionLoss(tal_topk=1)` on the one2one head,
+weighted by a decay schedule (one2many weight ↘, one2one weight ↗
+over training). Our `Detect26Impl` is single-head; adding the
+one2many branch + per-head loss + decay scheduler is a substantial
+architectural rewrite that doesn't fit this session. The current
+fix uses the one2one head with top-k=10 assignment (an
+approximation of one2many TAL) — useful but not the full recipe.
+
+---
+
 ## [0.76.0] — 2026-05-17
 
 ### Fixed — warmup eats short training budgets (v26 + rfdetr)
