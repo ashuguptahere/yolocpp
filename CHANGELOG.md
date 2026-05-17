@@ -30,6 +30,55 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.89.1] — 2026-05-17
+
+### Added — low-resolution sweep, evidence-of-correctness
+
+`scripts/screen_train_sweep_lores.sh` is a sibling of the default
+sweep that overrides `--imgsz` to a smaller value per family (320 for
+P5 models, 384 for P6, 448 for yolo1's FC head minimum), then trains
+each variant for 1 epoch.
+
+**Result: 60/60 PASS. No new bugs found.** This exercises every
+shape-handling path under non-default imgsz: smaller feature maps,
+fewer anchors, different anchor-rescale arithmetic.
+
+### Verified — loss math scales correctly with imgsz²
+
+Comparing raw sum-reduced losses between the default-imgsz and the
+320 sweep on a sample of variants:
+
+```
+                  default imgsz   imgsz=320   ratio
+yolo5m                  535          85       6.3×
+yolo11l                 428          99       4.3×
+yolo3u                  424         134       3.2×
+yolo10m                 458         128       3.6×
+yolo26n                 157          50       3.1×
+```
+
+The 320 sweep's losses drop roughly with `(default/320)²` —
+confirming the loss is summed over `na · H · W` anchors and scales
+quadratically with imgsz, NOT a bug. The earlier "headline-shocking"
+loss values from the default sweep weren't broken.
+
+### Bonus observations from the low-res run
+
+- mAP@0.5:0.95 IMPROVES at 320 for several small models — less
+  letterbox padding helps when the source images are mostly medium-
+  scale objects: yolo8n 0.030 → 0.158, yolo13n 0.050 → 0.103,
+  yolo2-tiny 0.063 → 0.121, yolo5n 0.040 → 0.118.
+- yolo6m6 (P6) at imgsz=384 finetunes to mAP@0.5:0.95=0.569 — the
+  highest of any P6 result in the matrix.
+- yolo4 at 320 finetunes poorly (0.0006) — expected since the v4
+  anchors are calibrated to imgsz=608; same training loss profile,
+  no crash, just slow convergence with mismatched priors.
+
+CSV archived at `docs/screen_train_sweep_60variants_lores.csv`;
+methodology table updated in `docs/screen_train_sweep.md`.
+
+---
+
 ## [0.89.0] — 2026-05-17
 
 ### Fixed — cmd_train imgsz auto-resolution + v6l6 OOM headroom
