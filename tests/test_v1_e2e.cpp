@@ -39,27 +39,35 @@ int main() {
               << out.sizes() << ")\n";
   }
 
-  // 2) Round-trip the .weights binary if available.
+  // 2) Prefer the pre-converted `data/yolo1.pt` (this is the canonical
+  //    runtime form). Only fall back to converting from `.weights` if
+  //    no `.pt` exists — the conversion is a one-shot maintenance step
+  //    (see `tools/convert_weights`) rather than something we want
+  //    every test run to redo.
   std::string home = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
   fs::path cache_w = fs::path(home) / ".cache/yolocpp/weights";
-  std::vector<fs::path> w_candidates = {
-      "data/yolov1.weights", cache_w / "yolov1.weights",
-      "/tmp/yolov1.weights",
-  };
-  fs::path src;
-  for (const auto& c : w_candidates) {
-    if (fs::exists(c)) { src = c; break; }
+  fs::path pt;
+  for (const auto& c : std::vector<fs::path>{
+           "data/yolo1.pt", cache_w / "yolo1.pt"}) {
+    if (fs::exists(c)) { pt = c; break; }
   }
-  if (src.empty()) {
-    std::cout << "[v1-e2e] SKIP weights round-trip (no yolov1.weights)\n";
-    return 0;
+  if (pt.empty()) {
+    fs::path wsrc;
+    for (const auto& c : std::vector<fs::path>{
+             "data/yolov1.weights", cache_w / "yolov1.weights",
+             "/tmp/yolov1.weights"}) {
+      if (fs::exists(c)) { wsrc = c; break; }
+    }
+    if (wsrc.empty()) {
+      std::cout << "[v1-e2e] SKIP predict (no data/yolo1.pt nor yolov1.weights)\n";
+      return 0;
+    }
+    pt = "build/yolo1_e2e.pt";
+    fs::remove(pt);
+    int blocks = serialization::convert_yolov1_weights(
+        wsrc.string(), pt.string(), /*nc=*/20);
+    EXPECT(blocks >= 26, "v1 expected ≥ 26 blocks (24 conv + 2 fc)");
   }
-
-  fs::path pt = "build/yolo1_e2e.pt";
-  fs::remove(pt);
-  int blocks = serialization::convert_yolov1_weights(src.string(), pt.string(),
-                                                      /*nc=*/20);
-  EXPECT(blocks >= 26, "v1 expected ≥ 26 blocks (24 conv + 2 fc)");
 
   // 3) Predict on bus.jpg if it's around.
   fs::path bus = "data/bus.jpg";

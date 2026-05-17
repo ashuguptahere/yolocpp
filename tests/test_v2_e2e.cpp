@@ -59,27 +59,47 @@ int main() {
     std::cout << "[v2-e2e] tiny forward shape OK (out=" << out.sizes() << ")\n";
   }
 
-  // 4) Optional .weights round-trip.
+  // 4) Predict on bus.jpg if a pre-converted `data/yolo2*.pt` is
+  //    available. `tools/convert_weights` produces these from
+  //    pjreddie's `.weights` binaries once; tests then consume the
+  //    `.pt` directly. If neither a `.pt` nor a usable `.weights`
+  //    file is present, skip the predict leg.
   std::string home = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
   fs::path cache_w = fs::path(home) / ".cache/yolocpp/weights";
-  std::vector<fs::path> w_candidates = {
-      "data/yolov2.weights", cache_w / "yolov2.weights",
-      "/tmp/yolov2.weights",
+
+  // Try VOC first (smaller nc → easier to interpret); fall back to COCO.
+  struct PtCandidate { fs::path path; int nc; };
+  std::vector<PtCandidate> pt_candidates = {
+      {"data/yolo2-voc.pt", 20}, {cache_w / "yolo2-voc.pt", 20},
+      {"data/yolo2.pt",     80}, {cache_w / "yolo2.pt",     80},
   };
-  fs::path src;
-  for (const auto& c : w_candidates) {
-    if (fs::exists(c)) { src = c; break; }
+  PtCandidate use{};
+  for (const auto& c : pt_candidates) {
+    if (fs::exists(c.path)) { use = c; break; }
   }
-  if (src.empty()) {
-    std::cout << "[v2-e2e] SKIP weights round-trip (no yolov2.weights)\n";
-    return 0;
+  if (use.path.empty()) {
+    // Fall back to a one-shot conversion if a .weights file is around.
+    fs::path wsrc;
+    int wsrc_nc = 80;
+    for (const auto& [w, nc] : std::vector<std::pair<fs::path, int>>{
+             {"data/yolov2-voc.weights", 20},
+             {cache_w / "yolov2-voc.weights", 20},
+             {"data/yolov2.weights", 80},
+             {cache_w / "yolov2.weights", 80}}) {
+      if (fs::exists(w)) { wsrc = w; wsrc_nc = nc; break; }
+    }
+    if (wsrc.empty()) {
+      std::cout << "[v2-e2e] SKIP predict (no data/yolo2*.pt nor yolov2*.weights)\n";
+      return 0;
+    }
+    fs::path pt = "build/yolo2_e2e.pt";
+    fs::remove(pt);
+    int blocks = serialization::convert_yolov2_weights(
+        wsrc.string(), pt.string(), wsrc_nc,
+        models::Yolo2Scale::Full);
+    EXPECT(blocks >= 23, "v2 expected ≥ 23 conv blocks");
+    use = {pt, wsrc_nc};
   }
-  fs::path pt = "build/yolo2_e2e.pt";
-  fs::remove(pt);
-  int blocks = serialization::convert_yolov2_weights(src.string(), pt.string(),
-                                                      /*nc=*/80,
-                                                      models::Yolo2Scale::Full);
-  EXPECT(blocks >= 23, "v2 expected ≥ 23 conv blocks");
 
   fs::path bus = "data/bus.jpg";
   if (!fs::exists(bus)) {
@@ -87,9 +107,10 @@ int main() {
     return 0;
   }
   auto dets = inference::predict_v2_to_file(
-      pt.string(), bus.string(), "build/v2_e2e_bus.jpg",
-      /*imgsz=*/416, /*device=*/"", /*nc=*/80,
+      use.path.string(), bus.string(), "build/v2_e2e_bus.jpg",
+      /*imgsz=*/416, /*device=*/"", /*nc=*/use.nc,
       models::Yolo2Scale::Full);
-  std::cout << "[v2-e2e] " << dets.size() << " dets on bus.jpg\n";
+  std::cout << "[v2-e2e] " << dets.size() << " dets on bus.jpg (nc="
+            << use.nc << ", weights=" << use.path << ")\n";
   return 0;
 }

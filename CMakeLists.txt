@@ -201,6 +201,11 @@ add_subdirectory(tests)
 # via -DYOLOCPP_BUILD_EXAMPLES=OFF. See examples/README.md.
 add_subdirectory(examples)
 
+# ---- tools ---------------------------------------------------------------
+# One-shot maintenance binaries (e.g. `convert_weights` — pre-converts
+# Darknet `.weights` to `.pt`). Toggleable via -DYOLOCPP_BUILD_TOOLS=OFF.
+add_subdirectory(tools)
+
 # ---- runtime rpath so vendored .so's resolve at exec time -----------------
 # Use DT_RPATH (transitive) instead of DT_RUNPATH so that dlopen() calls made
 # by libnvinfer.so for its sm_* resource libraries also search the rpath.

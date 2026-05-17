@@ -165,15 +165,21 @@ referencing legacy upstream URLs that publish as `yolov<N>...pt` /
 from the canonical form is `src/cli/resolve.cpp::upstream_basename`.
 
 **yolo1 / yolo2** are Darknet-era models (Redmon 2016 / 2017,
-respectively). Their canonical input form is pjreddie's
-`.weights` binary; we parse it ourselves via
-`src/serialization/yolov{1,2}_weights.cpp` (no Darknet runtime
-dependency) and produce a `.pt` state-dict on first use, identical
-to how v3/v4 are handled today. v1 has no BN and uses two FC layers
-on top of a 24-conv backbone (`leaky 0.1` everywhere); v2 uses
-Darknet-19 + BN + a `reorg` passthrough layer + `region` anchor
-head with 5 k-means-clustered anchors. Both ship predict-only at
-the moment — train / ONNX / TRT are tracked under tasks #66..#69.
+respectively). v1 has no BN and uses two FC layers on top of a
+24-conv backbone (`leaky 0.1` everywhere); v2 uses Darknet-19 + BN +
+a `reorg` passthrough layer + `region` anchor head with 5 k-means-
+clustered anchors. Both ship predict-only at the moment — train /
+ONNX / TRT are tracked under tasks #66..#69.
+
+**Canonical input form for v1/v2 is `.pt`**, same as every other
+version. The `src/serialization/yolov{1,2}_weights.cpp` converters
+exist to bootstrap a `.pt` from pjreddie's `.weights` binary when
+needed, but the runtime never touches `.weights` directly. The
+one-shot tool `tools/convert_weights` pre-populates `data/yolo{1,2,4}.pt`
+from any locally-available `.weights` files; after that, the
+codebase consumes `data/*.pt` exclusively (CLI, registry, tests,
+predictors). `.weights` ingestion is a maintenance operation, not a
+runtime one.
 
 ### Per-version capability matrix (current state — see CMakeLists.txt for the version stamp)
 

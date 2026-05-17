@@ -38,11 +38,14 @@ upstream; their task heads are scaffolded in code and queued for
 retraining on COCO under task #60.
 
 The two Darknet-era versions (`yolo1`, `yolo2`) ship **predict-only**
-at the moment, but are usable end-to-end without any Darknet runtime
-— pjreddie's `yolov{1,2}.weights` binaries are parsed by our own
-pure-C++ loader (`src/serialization/yolov{1,2}_weights.cpp`) and
-converted to a `.pt` state-dict on first use. Train / ONNX / TRT for
-v1/v2 are tracked under tasks #66..#69.
+at the moment, but are usable end-to-end without any Darknet runtime.
+The canonical input form is `.pt`, same as every other version —
+`build/tools/convert_weights` does a one-shot `.weights → .pt`
+conversion via our pure-C++ parser
+(`src/serialization/yolov{1,2}_weights.cpp`) and writes the result
+to `data/`. The runtime / CLI / registry / tests then consume
+`data/*.pt` exclusively. Train / ONNX / TRT for v1/v2 are tracked
+under tasks #66..#69.
 
 Reference reading on the current state:
 
@@ -189,6 +192,12 @@ new feature/refactor work captured in TODO.md.
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
+
+# One-shot: pre-convert any locally-available Darknet .weights
+# (yolov4, yolov2*, yolov1*) to data/yolo*.pt. The runtime
+# consumes .pt exclusively after this; .weights ingestion is a
+# maintenance operation, not a runtime one.
+./build/tools/convert_weights
 ```
 
 The test suite covers every layer of the stack:

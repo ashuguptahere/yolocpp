@@ -30,6 +30,85 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.86.0] — 2026-05-17
+
+### Added — `tools/convert_weights` + `.pt`-canonical runtime
+
+`.pt` is now the canonical runtime form for *every* supported version,
+including the Darknet-era v1/v2/v4. The `.weights` parsers
+(`src/serialization/{darknet,yolov1,yolov2}_weights.cpp`) stay in the
+build — they're how the `.pt` files are bootstrapped — but the
+runtime never touches `.weights` directly.
+
+**New tool:** `tools/convert_weights.cpp` (built as
+`build/tools/convert_weights`). Walks search roots (`data/`, cwd,
+`~/.cache/yolocpp/weights/`, `/tmp/`) for each known Darknet binary
+and writes the converted `.pt` to `data/`. Idempotent — skips
+already-converted outputs. Optional argv filter (`build/tools/convert_weights yolo4 yolo2-voc`)
+restricts to specific entries.
+
+Currently recognised:
+
+| entry           | source                       | output (in `data/`) | nc | scale |
+|-----------------|------------------------------|---------------------|---:|-------|
+| yolo1           | yolov1.weights               | yolo1.pt            | 20 | full  |
+| yolo1-tiny      | yolov1-tiny.weights          | yolo1-tiny.pt       | 20 | full  |
+| yolo2           | yolov2.weights               | yolo2.pt            | 80 | full  |
+| yolo2-voc       | yolov2-voc.weights           | yolo2-voc.pt        | 20 | full  |
+| yolo2-tiny      | yolov2-tiny.weights          | yolo2-tiny.pt       | 80 | tiny  |
+| yolo2-tiny-voc  | yolov2-tiny-voc.weights      | yolo2-tiny-voc.pt   | 20 | tiny  |
+| yolo4           | yolov4.weights               | yolo4.pt            | 80 | —     |
+
+### Verified — local pre-conversion
+
+Ran on this machine, pulling `.weights` from
+`~/.cache/yolocpp/weights/` and writing under `data/`:
+
+```
+[done] yolo2:          23 blocks → data/yolo2.pt          (195 MB)
+[done] yolo2-voc:      23 blocks → data/yolo2-voc.pt      (194 MB)
+[done] yolo2-tiny-voc:  9 blocks → data/yolo2-tiny-voc.pt  (61 MB)
+[done] yolo4:         110 blocks → data/yolo4.pt          (246 MB)
+```
+
+Skipped:
+- `yolo1` / `yolo1-tiny` — `https://pjreddie.com/media/files/yolov1{,-tiny}.weights`
+  returns 404 (pjreddie removed the v1 binaries). The converter
+  still works against any locally-supplied file; only auto-download
+  is unavailable.
+- `yolo2-tiny` (COCO) — pjreddie's `yolov2-tiny.weights` (43 MB)
+  uses a slightly different topology than `yolov2-tiny-voc.weights`
+  (the two were shipped at different times with different layer
+  counts). Our `Yolo2Scale::Tiny` matches the VOC layout. The COCO
+  variant is filed for a future session.
+
+### Changed
+
+- `tests/test_v{1,2,4}_e2e.cpp` — prefer `data/yolo{1,2,4}*.pt` over
+  re-converting `.weights` on every run. Conversion fallback kept
+  for machines where only `.weights` are available.
+- `tests/CMakeLists.txt` — `test_v1_e2e` / `test_v2_e2e` now run with
+  `WORKING_DIRECTORY=${CMAKE_SOURCE_DIR}` so relative `data/` /
+  `build/` paths resolve to the project root (matches v4/v6/v7/etc).
+- README + CLAUDE.md document `.pt`-canonical + the
+  `build/tools/convert_weights` step.
+
+### Verified
+
+```
+cmake --build build -j$(nproc)              # clean
+ctest --test-dir build --output-on-failure  # 39/39 PASS
+
+./build/tests/test_v2_e2e
+  [v2-e2e] full forward shape OK (out=[1, 24, 845])
+  [v2-e2e] reorg layout OK
+  [v2-e2e] tiny forward shape OK (out=[1, 24, 845])
+  [v2-pred] loaded 112 tensors from data/yolo2-voc.pt   ← .pt directly, no .weights
+  [v2-e2e] 4 dets on bus.jpg (nc=20, weights="data/yolo2-voc.pt")
+```
+
+---
+
 ## [0.85.0] — 2026-05-17
 
 ### Added — yolo1 + yolo2 (Darknet-era, pure C++, no Darknet runtime)

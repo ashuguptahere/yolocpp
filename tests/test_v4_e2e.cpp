@@ -29,28 +29,34 @@ int main() {
   std::string home = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
   fs::path cache_w = fs::path(home) / ".cache/yolocpp/weights";
 
-  // Find a yolov4.weights to convert.
-  std::vector<fs::path> w_candidates = {
-      "data/yolov4.weights", "data/yolo4.weights",
-      cache_w / "yolov4.weights", cache_w / "yolo4.weights",
-  };
-  fs::path src;
-  for (const auto& c : w_candidates) {
-    if (fs::exists(c)) { src = c; break; }
+  // Prefer the pre-converted `data/yolo4.pt` (produced by
+  // `tools/convert_weights`). Only fall back to a one-shot
+  // `.weights → .pt` conversion if no `.pt` exists locally.
+  fs::path pt;
+  for (const auto& c : std::vector<fs::path>{
+           "data/yolo4.pt", cache_w / "yolo4.pt"}) {
+    if (fs::exists(c)) { pt = c; break; }
   }
-  if (src.empty()) {
-    std::cout << "[v4-e2e] SKIP: no yolov4.weights in data/ or cache\n";
-    return 0;
+  if (pt.empty()) {
+    fs::path src;
+    for (const auto& c : std::vector<fs::path>{
+             "data/yolov4.weights", "data/yolo4.weights",
+             cache_w / "yolov4.weights", cache_w / "yolo4.weights"}) {
+      if (fs::exists(c)) { src = c; break; }
+    }
+    if (src.empty()) {
+      std::cout << "[v4-e2e] SKIP: no data/yolo4.pt nor yolov4.weights\n";
+      return 0;
+    }
+    pt = "build/yolo4_e2e.pt";
+    fs::remove(pt);
+    std::cout << "[v4-e2e] converting " << src << " → " << pt << "\n";
+    int blocks = serialization::convert_yolov4_weights(src.string(), pt.string());
+    std::cout << "[v4-e2e] " << blocks << " conv blocks consumed\n";
+    EXPECT(fs::exists(pt), "yolo4.pt not produced");
+    EXPECT(blocks >= 100 && blocks <= 120,
+           "expected 100..120 conv blocks (got " + std::to_string(blocks) + ")");
   }
-
-  fs::path pt = "build/yolo4_e2e.pt";
-  fs::remove(pt);
-  std::cout << "[v4-e2e] converting " << src << " → " << pt << "\n";
-  int blocks = serialization::convert_yolov4_weights(src.string(), pt.string());
-  std::cout << "[v4-e2e] " << blocks << " conv blocks consumed\n";
-  EXPECT(fs::exists(pt), "yolo4.pt not produced");
-  EXPECT(blocks >= 100 && blocks <= 120,
-         "expected 100..120 conv blocks (got " + std::to_string(blocks) + ")");
 
   // Predict on bus.jpg.
   if (!fs::exists("data/bus.jpg")) {

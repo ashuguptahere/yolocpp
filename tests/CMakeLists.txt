@@ -97,7 +97,8 @@ yolocpp_add_test(test_v6_train      test_v6_train.cpp)
 yolocpp_add_test(test_v4_v7_train   test_v4_v7_train.cpp)
 yolocpp_add_test(test_v10_train     test_v10_train.cpp)
 yolocpp_add_test(test_v10_dual_train test_v10_dual_train.cpp)
-set_tests_properties(test_v4_e2e test_v6_e2e test_v7_e2e test_val_v3_v10
+set_tests_properties(test_v1_e2e test_v2_e2e test_v4_e2e test_v6_e2e
+                     test_v7_e2e test_val_v3_v10
                      test_v9_train test_v3_train test_v6_train test_v4_v7_train
                      test_v10_train test_v10_dual_train PROPERTIES
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
