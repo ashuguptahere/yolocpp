@@ -15,6 +15,8 @@
 
 #include <string>
 
+#include "yolocpp/models/yolo1.hpp"
+#include "yolocpp/models/yolo2.hpp"
 #include "yolocpp/models/yolo10.hpp"
 #include "yolocpp/models/yolo3.hpp"
 #include "yolocpp/models/yolo4.hpp"
@@ -221,5 +223,20 @@ void export_yolo11_obb_onnx(models::Yolo11OBB& model,
 void export_yolo26_obb_onnx(models::Yolo26OBB& model,
                              const std::string& path,
                              const OnnxExportConfig& cfg = {});
+
+// ─── Darknet-era exporters (#68, #69) ────────────────────────────────────
+// Emit the YOLOv1 model — 24-conv backbone (no BN, leaky 0.1) + 2 FC
+// layers + Darknet flat-block detection decoder. Output is the
+// standard `[N, 4 + nc, A]` xyxy + class-score contract (A = S·S·B).
+void export_yolo1_onnx(models::Yolo1&         model,
+                        const std::string&     path,
+                        const OnnxExportConfig& cfg = {});
+
+// Emit the YOLOv2 model — Darknet-19 backbone + reorg passthrough +
+// 5-anchor region head. Output is `[N, 4 + nc, A]` (A = na·H·W).
+// Supports both `Full` and `Tiny` scales.
+void export_yolo2_onnx(models::Yolo2&         model,
+                        const std::string&     path,
+                        const OnnxExportConfig& cfg = {});
 
 }  // namespace yolocpp::serialization

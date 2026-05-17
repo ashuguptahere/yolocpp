@@ -245,14 +245,19 @@ VersionAdapter make_v1() {
     return inference::predict_v1_to_file(weights, src, out, sz, device,
                                           nc, nm);
   };
-  a.export_onnx = [](const std::string&, const std::string&, int,
-                      const std::string&, const std::string&,
-                      const serialization::OnnxExportConfig&) {
-    throw std::runtime_error(
-        "yolo1 export_onnx: not yet wired — see TODO #68 (the FC head "
-        "+ Darknet detection-block reshape need a hand-emitted decoder; "
-        "every other YOLO version exports through onnx_export.cpp's "
-        "block-by-block emitter which assumes a conv-only Detect head)");
+  a.export_onnx = [](const std::string& weights, const std::string&,
+                      int nc, const std::string& task,
+                      const std::string& path,
+                      const serialization::OnnxExportConfig& cfg) {
+    if (task != "detect")
+      throw std::runtime_error("yolo1 export: only 'detect' is supported");
+    models::Yolo1 m(nc);
+    if (!weights.empty()) {
+      auto sd = serialization::load_state_dict(weights);
+      m->load_from_state_dict(sd.entries);
+    }
+    m->eval();
+    serialization::export_yolo1_onnx(m, path, cfg);
   };
   a.run_val = [](const std::string& weights, const std::string&,
                   int nc, datasets::YoloDataset& ds,
@@ -266,16 +271,15 @@ VersionAdapter make_v1() {
     models::Yolo1 m(nc);
     run_train_with(m, init, std::move(ds), cfg);
   };
-  a.benchmark_pt = [](const engine::BenchConfig&, const cv::Mat&,
-                       const std::string&) -> engine::BenchResult {
-    throw std::runtime_error(
-        "yolo1 benchmark: not yet wired — see TODO #66.");
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                       const std::string&) {
+    models::Yolo1 m(cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
   };
-  a.make_frame_predictor = [](const std::string&, const std::string&, int,
-                                int, const std::string&)
-                                -> std::unique_ptr<inference::FramePredictor> {
-    throw std::runtime_error(
-        "yolo1 frame predictor: not yet wired — see TODO #66.");
+  a.make_frame_predictor = [](const std::string& weights, const std::string&,
+                                int nc, int imgsz, const std::string& device) {
+    models::Yolo1 m(nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
   };
   return a;
 }
@@ -307,14 +311,21 @@ VersionAdapter make_v2() {
     return inference::predict_v2_to_file(weights, src, out, sz, device,
                                           nc, s, nm);
   };
-  a.export_onnx = [](const std::string&, const std::string&, int,
-                      const std::string&, const std::string&,
-                      const serialization::OnnxExportConfig&) {
-    throw std::runtime_error(
-        "yolo2 export_onnx: not yet wired — the `reorg` passthrough "
-        "+ region anchor-decode block need their own ONNX emitter slice "
-        "(SpaceToDepth gets us the reorg; the region decode is a Slice/"
-        "Sigmoid/Exp/Mul/Add subgraph). Tracked as TODO #69.");
+  a.export_onnx = [](const std::string& weights, const std::string& scale,
+                      int nc, const std::string& task,
+                      const std::string& path,
+                      const serialization::OnnxExportConfig& cfg) {
+    if (task != "detect")
+      throw std::runtime_error("yolo2 export: only 'detect' is supported");
+    auto s = (scale == "tiny") ? models::Yolo2Scale::Tiny
+                                : models::Yolo2Scale::Full;
+    models::Yolo2 m(s, nc);
+    if (!weights.empty()) {
+      auto sd = serialization::load_state_dict(weights);
+      m->load_from_state_dict(sd.entries);
+    }
+    m->eval();
+    serialization::export_yolo2_onnx(m, path, cfg);
   };
   a.run_val = [](const std::string& weights, const std::string& scale,
                   int nc, datasets::YoloDataset& ds,
@@ -332,14 +343,19 @@ VersionAdapter make_v2() {
     models::Yolo2 m(s, nc);
     run_train_with(m, init, std::move(ds), cfg);
   };
-  a.benchmark_pt = [](const engine::BenchConfig&, const cv::Mat&,
-                       const std::string&) -> engine::BenchResult {
-    throw std::runtime_error("yolo2 benchmark: not yet wired — TODO #67.");
+  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat& img,
+                       const std::string& scale) {
+    auto s = (scale == "tiny") ? models::Yolo2Scale::Tiny
+                                : models::Yolo2Scale::Full;
+    models::Yolo2 m(s, cfg.nc);
+    return run_bench_pt_with(m, cfg, img);
   };
-  a.make_frame_predictor = [](const std::string&, const std::string&, int,
-                                int, const std::string&)
-                                -> std::unique_ptr<inference::FramePredictor> {
-    throw std::runtime_error("yolo2 frame predictor: not yet wired — TODO #67.");
+  a.make_frame_predictor = [](const std::string& weights, const std::string& scale,
+                                int nc, int imgsz, const std::string& device) {
+    auto s = (scale == "tiny") ? models::Yolo2Scale::Tiny
+                                : models::Yolo2Scale::Full;
+    models::Yolo2 m(s, nc);
+    return make_frame_pred_with(m, weights, imgsz, device);
   };
   return a;
 }

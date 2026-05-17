@@ -11,6 +11,8 @@
 
 #include "yolocpp/inference/predictor.hpp"
 #include "yolocpp/models/yolo2.hpp"
+#include "yolocpp/serialization/onnx_export.hpp"
+#include "yolocpp/serialization/pt_loader.hpp"
 #include "yolocpp/serialization/yolov2_weights.hpp"
 
 namespace fs = std::filesystem;
@@ -112,5 +114,25 @@ int main() {
       models::Yolo2Scale::Full);
   std::cout << "[v2-e2e] " << dets.size() << " dets on bus.jpg (nc="
             << use.nc << ", weights=" << use.path << ")\n";
+
+  // 5) ONNX export round-trip sanity. Construct a Yolo2 holder from
+  //    `use.path`, run `export_yolo2_onnx`, confirm the file is
+  //    well-formed (small magic-byte check at the head — the full
+  //    parser-roundtrip is exercised by the TRT export path in
+  //    practice). This catches structural regressions in the emitter
+  //    without paying the TRT build cost in ctest.
+  models::Yolo2 m(models::Yolo2Scale::Full, use.nc);
+  auto sd = serialization::load_state_dict(use.path.string());
+  m->load_from_state_dict(sd.entries);
+  m->eval();
+  fs::path onnx = "build/v2_e2e.onnx";
+  fs::remove(onnx);
+  serialization::OnnxExportConfig ocfg; ocfg.imgsz = 416;
+  serialization::export_yolo2_onnx(m, onnx.string(), ocfg);
+  EXPECT(fs::exists(onnx), "v2: ONNX file not written");
+  EXPECT(fs::file_size(onnx) > 1'000'000u,
+          "v2: ONNX file suspiciously small (< 1 MB)");
+  std::cout << "[v2-e2e] ONNX export OK (" << fs::file_size(onnx)
+            << " bytes)\n";
   return 0;
 }

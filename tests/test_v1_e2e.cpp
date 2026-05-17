@@ -11,6 +11,8 @@
 
 #include "yolocpp/inference/predictor.hpp"
 #include "yolocpp/models/yolo1.hpp"
+#include "yolocpp/serialization/onnx_export.hpp"
+#include "yolocpp/serialization/pt_loader.hpp"
 #include "yolocpp/serialization/yolov1_weights.hpp"
 
 namespace fs = std::filesystem;
@@ -79,5 +81,23 @@ int main() {
       pt.string(), bus.string(), "build/v1_e2e_bus.jpg",
       /*imgsz=*/448, /*device=*/"", /*nc=*/20);
   std::cout << "[v1-e2e] " << dets.size() << " dets on bus.jpg\n";
+
+  // 4) ONNX export structural sanity — predict-only models still want a
+  //    graph-correct ONNX. The FC head + Darknet flat-block decoder is
+  //    where the bugs would hide, so even a "file exists, > 1 MB" check
+  //    catches gross emitter regressions cheaply.
+  models::Yolo1 m1(/*nc=*/20);
+  auto sd = serialization::load_state_dict(pt.string());
+  m1->load_from_state_dict(sd.entries);
+  m1->eval();
+  fs::path onnx = "build/v1_e2e.onnx";
+  fs::remove(onnx);
+  serialization::OnnxExportConfig ocfg; ocfg.imgsz = 448;
+  serialization::export_yolo1_onnx(m1, onnx.string(), ocfg);
+  EXPECT(fs::exists(onnx), "v1: ONNX file not written");
+  EXPECT(fs::file_size(onnx) > 10'000'000u,
+          "v1: ONNX file suspiciously small (< 10 MB; FC1 alone is ~800 MB)");
+  std::cout << "[v1-e2e] ONNX export OK (" << fs::file_size(onnx)
+            << " bytes)\n";
   return 0;
 }

@@ -587,6 +587,17 @@ int cmd_export(const std::string& weights, const std::string& format,
   std::string version = version_hint.empty()
                             ? yolocpp::cli::version_from_filename(weights)
                             : version_hint;
+  // If the resolver let a bare version spec through (e.g. `-m yolo1`
+  // when no .pt exists), fall through with empty weights so the
+  // adapter constructs a fresh random-init model. The exported ONNX
+  // is then graph-correct but its weights are uninitialised.
+  std::string weights_eff = weights;
+  if (!weights_eff.empty() && !std::filesystem::exists(weights_eff)) {
+    std::cerr << "[cmd_export] '" << weights_eff
+              << "' is not a file on disk — exporting from random init "
+              << "(version=" << version << ")\n";
+    weights_eff.clear();
+  }
   // Resolve scale: explicit CLI flag wins; otherwise infer from filename.
   // Without this, `yolo10s.pt` exports as scale=N (the default of
   // yolo10_scale_from_letter("")) and silently load_state_dict's the
@@ -631,7 +642,7 @@ int cmd_export(const std::string& weights, const std::string& format,
       throw std::runtime_error(
           "export: version '" + version + "' has no ONNX exporter wired");
     }
-    adapter->export_onnx(weights, scale_s, nc, task, onnx_path, ocfg);
+    adapter->export_onnx(weights_eff, scale_s, nc, task, onnx_path, ocfg);
   };
 
   auto base_name = [&]() -> std::string {

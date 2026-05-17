@@ -6071,4 +6071,501 @@ void export_yolo7_onnx(models::Yolo7& model,
   f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
 }
 
+// ─── YOLO1 + YOLO2 (Darknet-era) ─────────────────────────────────────────
+// Both models share two helpers:
+//
+//   `emit_conv_leaky_no_bn`  — bare Conv2d + LeakyRelu(0.1).
+//                              v1's blocks (no BN — pre-BN era).
+//   (`emit_convleaky` already covers BN+Conv+leaky — reused for v2.)
+//
+// The decoders are the v-specific bits:
+//   v1: split the FC2 output `[N, S·S·(B·5+nc)]` into the three Darknet
+//       flat blocks (cls, conf, coords), reshape, decode boxes (cell-
+//       offset + (sqrt encoding squared) for w/h), broadcast cls per
+//       box, multiply conf · cls → `[N, 4+nc, A]`.
+//   v2: reshape raw `[N, na·(5+nc), H, W]` to `[N, na, H, W, 5+nc]`,
+//       sigmoid xy/obj, exp(wh) × anchor (in pixels), softmax cls,
+//       grid offsets, → `[N, 4+nc, A]`.
+
+// Build the LeakyRelu attr the same way the rest of the file builds
+// float attrs (raw protobuf bytes, since `attr_float` doesn't exist
+// as a public helper).
+static std::string leaky_relu(GraphBuilder& g, const std::string& in,
+                               const std::string& out, float alpha = 0.1f) {
+  // ONNX AttributeProto: name="alpha" (string), type=FLOAT, f=alpha.
+  Pb a;
+  a.write_string_field(1, "alpha");
+  a.write_int32_field(20, 1);            // type = FLOAT
+  // field 2 = float "f"
+  uint32_t u; std::memcpy(&u, &alpha, sizeof(u));
+  a.write_tag(2, 5);                      // wire type FIXED32
+  a.write_raw(std::string(reinterpret_cast<char*>(&u), 4));
+  return g.node("LeakyRelu", {in}, {a.bytes()}, out);
+}
+
+// MaxPool 2×2 stride 2.
+static std::string emit_mp2(GraphBuilder& g, const std::string& in,
+                             const std::string& name) {
+  return g.node("MaxPool", {in},
+                {attr_ints("kernel_shape", {2, 2}),
+                 attr_ints("strides",      {2, 2}),
+                 attr_ints("pads",         {0, 0, 0, 0})}, name);
+}
+
+// Bare Conv2d + LeakyReLU(0.1) — v1's pre-BN block.
+static std::string emit_conv_leaky_v1(
+    GraphBuilder& g, const std::string& in, const std::string& prefix,
+    yolocpp::models::ConvLeakyNoBNImpl* m) {
+  auto* c = m->conv.get();
+  auto wname = g.add_init(prefix + ".conv.weight", c->weight);
+  auto bname = g.add_init(prefix + ".conv.bias",   c->bias);
+  int k  = (int)c->options.kernel_size()->at(0);
+  int s  = (int)c->options.stride()->at(0);
+  int p  = std::get<torch::ExpandingArray<2>>(c->options.padding())->at(0);
+  auto conv = g.node("Conv", {in, wname, bname},
+                      {attr_ints("dilations", {1, 1}),
+                       attr_int("group", 1),
+                       attr_ints("kernel_shape", {k, k}),
+                       attr_ints("pads", {p, p, p, p}),
+                       attr_ints("strides", {s, s})}, prefix + ".out");
+  return leaky_relu(g, conv, prefix + ".leaky");
+}
+
+void export_yolo1_onnx(yolocpp::models::Yolo1& model,
+                        const std::string& path,
+                        const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  const int imgsz = (cfg.imgsz > 0) ? cfg.imgsz : 448;
+  g.set_input(cfg.input_name, /*FLOAT=*/1, {-1, 3, imgsz, imgsz});
+
+  // Walk the backbone Sequential — each child is either a
+  // ConvLeakyNoBN or a MaxPool2d. We iterate so the prefix is "0",
+  // "1", … matching `named_children()` order (the .weights file
+  // uses the same DFS).
+  auto y = cfg.input_name;
+  int idx = 0;
+  for (auto& child : model->backbone->children()) {
+    auto name = std::to_string(idx++);
+    auto pfx  = "backbone." + name;
+    if (auto cl = std::dynamic_pointer_cast<
+            yolocpp::models::ConvLeakyNoBNImpl>(child)) {
+      y = emit_conv_leaky_v1(g, y, pfx, cl.get());
+    } else if (auto mp = std::dynamic_pointer_cast<
+                   torch::nn::MaxPool2dImpl>(child)) {
+      y = emit_mp2(g, y, pfx);
+    } else {
+      throw std::runtime_error("export_yolo1_onnx: unexpected backbone child");
+    }
+  }
+
+  // Flatten + Gemm + LeakyRelu + Gemm. Bias is part of the Gemm op.
+  auto flat = g.node("Flatten", {y}, {attr_int("axis", 1)}, "flat");
+  auto fc1_w = g.add_init("fc1.weight", model->fc1->weight);
+  auto fc1_b = g.add_init("fc1.bias",   model->fc1->bias);
+  // Gemm Y = alpha*A*B^T + beta*C ; here A=flat, B=fc1_w (shape [4096,
+  // 50176]), C=fc1_b. transB=1 because PyTorch Linear weight is
+  // (out, in).
+  auto fc1 = g.node(
+      "Gemm", {flat, fc1_w, fc1_b},
+      {attr_int("transB", 1)},
+      "fc1.out");
+  auto fc1_act = leaky_relu(g, fc1, "fc1.leaky");
+  auto fc2_w = g.add_init("fc2.weight", model->fc2->weight);
+  auto fc2_b = g.add_init("fc2.bias",   model->fc2->bias);
+  auto fc2 = g.node(
+      "Gemm", {fc1_act, fc2_w, fc2_b},
+      {attr_int("transB", 1)},
+      "fc2.out");                                              // [N, S·S·(B·5+nc)]
+
+  // Decode the Darknet flat output into [N, 4+nc, A].
+  const int S  = model->S;
+  const int B  = model->B;
+  const int nc = model->nc;
+  const int SS = S * S;
+  const int A  = SS * B;
+  const int64_t cls_sz   = (int64_t)SS * nc;
+  const int64_t conf_sz  = (int64_t)SS * B;
+  const int64_t coord_sz = (int64_t)SS * B * 4;
+
+  auto ax1   = g.add_init_int64("dec.ax1", {1});
+  auto step1 = g.add_init_int64("dec.step1", {1});
+  auto cls_s0 = g.add_init_int64("dec.cls_s0", {0});
+  auto cls_s1 = g.add_init_int64("dec.cls_s1", {cls_sz});
+  auto cnf_s0 = g.add_init_int64("dec.cnf_s0", {cls_sz});
+  auto cnf_s1 = g.add_init_int64("dec.cnf_s1", {cls_sz + conf_sz});
+  auto crd_s0 = g.add_init_int64("dec.crd_s0", {cls_sz + conf_sz});
+  auto crd_s1 = g.add_init_int64("dec.crd_s1", {cls_sz + conf_sz + coord_sz});
+
+  auto cls_flat   = g.node("Slice", {fc2, cls_s0, cls_s1, ax1, step1}, {},
+                            "dec.cls_flat");
+  auto conf_flat  = g.node("Slice", {fc2, cnf_s0, cnf_s1, ax1, step1}, {},
+                            "dec.conf_flat");
+  auto coord_flat = g.node("Slice", {fc2, crd_s0, crd_s1, ax1, step1}, {},
+                            "dec.coord_flat");
+
+  // Reshape into per-cell tensors.
+  auto cls_shape = g.add_init_int64("dec.cls_shape", {0, (int64_t)SS, (int64_t)nc});
+  auto cls_3d    = g.node("Reshape", {cls_flat, cls_shape}, {}, "dec.cls_3d");
+  auto conf_shape = g.add_init_int64("dec.conf_shape", {0, (int64_t)SS, (int64_t)B});
+  auto conf_3d    = g.node("Reshape", {conf_flat, conf_shape}, {}, "dec.conf_3d");
+  auto coord_shape = g.add_init_int64("dec.coord_shape", {0, (int64_t)SS, (int64_t)B, 4});
+  auto coord_4d    = g.node("Reshape", {coord_flat, coord_shape}, {}, "dec.coord_4d");
+
+  // Slice (tx, ty, tw, th) from coord_4d's last dim.
+  auto ax_last  = g.add_init_int64("dec.ax_last", {3});
+  auto tx_s0 = g.add_init_int64("dec.tx_s0", {0});
+  auto tx_s1 = g.add_init_int64("dec.tx_s1", {1});
+  auto ty_s0 = g.add_init_int64("dec.ty_s0", {1});
+  auto ty_s1 = g.add_init_int64("dec.ty_s1", {2});
+  auto tw_s0 = g.add_init_int64("dec.tw_s0", {2});
+  auto tw_s1 = g.add_init_int64("dec.tw_s1", {3});
+  auto th_s0 = g.add_init_int64("dec.th_s0", {3});
+  auto th_s1 = g.add_init_int64("dec.th_s1", {4});
+  auto tx = g.node("Slice", {coord_4d, tx_s0, tx_s1, ax_last, step1}, {}, "dec.tx");
+  auto ty = g.node("Slice", {coord_4d, ty_s0, ty_s1, ax_last, step1}, {}, "dec.ty");
+  auto tw = g.node("Slice", {coord_4d, tw_s0, tw_s1, ax_last, step1}, {}, "dec.tw");
+  auto th = g.node("Slice", {coord_4d, th_s0, th_s1, ax_last, step1}, {}, "dec.th");
+
+  // Grid offsets shape [1, SS, 1, 1]: cx_grid[j*S+i] = i, cy_grid[j*S+i] = j.
+  std::vector<float> cx_grid_v(SS), cy_grid_v(SS);
+  for (int j = 0; j < S; ++j) for (int i = 0; i < S; ++i) {
+    cx_grid_v[j * S + i] = (float)i;
+    cy_grid_v[j * S + i] = (float)j;
+  }
+  auto cx_grid = g.add_init_float("dec.cx_grid", cx_grid_v,
+                                    {1, (int64_t)SS, 1, 1});
+  auto cy_grid = g.add_init_float("dec.cy_grid", cy_grid_v,
+                                    {1, (int64_t)SS, 1, 1});
+
+  // Pixel-coord decode in image space.
+  std::vector<float> sx_v = {(float)imgsz / (float)S};   // pixels per cell
+  std::vector<float> half_v = {0.5f};
+  auto sx     = g.add_init_float("dec.sx",   sx_v,   {1});
+  auto half   = g.add_init_float("dec.half", half_v, {1});
+
+  auto tx_plus = g.node("Add", {tx, cx_grid}, {}, "dec.tx_plus");
+  auto ty_plus = g.node("Add", {ty, cy_grid}, {}, "dec.ty_plus");
+  auto bx_pix  = g.node("Mul", {tx_plus, sx}, {}, "dec.bx_pix");
+  auto by_pix  = g.node("Mul", {ty_plus, sx}, {}, "dec.by_pix");
+
+  // bw_pix = (tw clamped ≥ 0)² * imgsz; same for bh.
+  std::vector<float> zero_v = {0.0f};
+  auto zero  = g.add_init_float("dec.zero", zero_v, {1});
+  auto tw_cl = g.node("Max", {tw, zero}, {}, "dec.tw_cl");
+  auto th_cl = g.node("Max", {th, zero}, {}, "dec.th_cl");
+  auto tw_sq = g.node("Mul", {tw_cl, tw_cl}, {}, "dec.tw_sq");
+  auto th_sq = g.node("Mul", {th_cl, th_cl}, {}, "dec.th_sq");
+  std::vector<float> imgsz_v = {(float)imgsz};
+  auto imgsz_init = g.add_init_float("dec.imgsz", imgsz_v, {1});
+  auto bw_pix = g.node("Mul", {tw_sq, imgsz_init}, {}, "dec.bw_pix");
+  auto bh_pix = g.node("Mul", {th_sq, imgsz_init}, {}, "dec.bh_pix");
+
+  // xyxy with clamp to image bounds.
+  auto w_half = g.node("Mul", {bw_pix, half}, {}, "dec.w_half");
+  auto h_half = g.node("Mul", {bh_pix, half}, {}, "dec.h_half");
+  auto x1 = g.node("Sub", {bx_pix, w_half}, {}, "dec.x1");
+  auto y1 = g.node("Sub", {by_pix, h_half}, {}, "dec.y1");
+  auto x2 = g.node("Add", {bx_pix, w_half}, {}, "dec.x2");
+  auto y2 = g.node("Add", {by_pix, h_half}, {}, "dec.y2");
+  std::vector<float> max_v = {(float)imgsz};
+  auto max_pix = g.add_init_float("dec.max", max_v, {1});
+  auto x1c = g.node("Clip", {x1, zero, max_pix}, {}, "dec.x1c");
+  auto y1c = g.node("Clip", {y1, zero, max_pix}, {}, "dec.y1c");
+  auto x2c = g.node("Clip", {x2, zero, max_pix}, {}, "dec.x2c");
+  auto y2c = g.node("Clip", {y2, zero, max_pix}, {}, "dec.y2c");
+
+  // Stack coords on last dim → [N, SS, B, 4].
+  auto box = g.node("Concat", {x1c, y1c, x2c, y2c},
+                     {attr_int("axis", 3)}, "dec.box");
+
+  // Class scores: cls is per-cell; replicate across boxes via Unsqueeze.
+  // cls_3d [N, SS, nc] → [N, SS, 1, nc]; conf [N, SS, B] → [N, SS, B, 1].
+  auto cls_4d_shape = g.add_init_int64("dec.cls_4d_shape", {0, (int64_t)SS, 1, (int64_t)nc});
+  auto cls_4d = g.node("Reshape", {cls_3d, cls_4d_shape}, {}, "dec.cls_4d");
+  auto conf_4d_shape = g.add_init_int64("dec.conf_4d_shape", {0, (int64_t)SS, (int64_t)B, 1});
+  auto conf_4d = g.node("Reshape", {conf_3d, conf_4d_shape}, {}, "dec.conf_4d");
+  auto scores = g.node("Mul", {conf_4d, cls_4d}, {}, "dec.scores");  // [N, SS, B, nc]
+  auto one_v = std::vector<float>{1.0f};
+  auto one_init = g.add_init_float("dec.one", one_v, {1});
+  auto scores_c = g.node("Clip", {scores, zero, one_init}, {}, "dec.scores_c");
+
+  // Concat box (4) + scores (nc) along last dim → [N, SS, B, 4+nc].
+  auto packed = g.node("Concat", {box, scores_c},
+                        {attr_int("axis", 3)}, "dec.packed");
+
+  // Reshape to [N, A, 4+nc] then transpose to [N, 4+nc, A].
+  auto pack_shape = g.add_init_int64("dec.pack_shape", {0, (int64_t)A, (int64_t)(4 + nc)});
+  auto packed_2d = g.node("Reshape", {packed, pack_shape}, {}, "dec.packed_2d");
+  auto out = g.node("Transpose", {packed_2d},
+                     {attr_ints("perm", {0, 2, 1})}, cfg.output_name);
+
+  g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, (int64_t)A});
+
+  Pb model_pb;
+  model_pb.write_int64_field(1, 8);
+  model_pb.write_string_field(2, cfg.producer_name);
+  model_pb.write_string_field(3, cfg.producer_version);
+  model_pb.write_string_field(4, "");
+  model_pb.write_int64_field(5, 1);
+  model_pb.write_string_field(6, "");
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo1"));
+  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+  std::ofstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot write " + path);
+  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+}
+
+// ─── YOLO2 ────────────────────────────────────────────────────────────────
+// Darknet's [reorg] (stride=2) emitted as Reshape + Transpose + Reshape.
+// Input  (B, C, H, W) where C = out_c · s², s = 2.
+// Output (B, C·s², H/s, W/s) with the exact flat-memory layout Darknet
+// produces (input channel `offset*out_c + c2` writes into intermediate
+// (out_c, H·s, W·s) buffer at (c2, h*s+offset/s, w*s+offset%s), then
+// view as (C·s², H/s, W/s)).
+//
+// Equivalent reshape+transpose chain:
+//   (B, C, H, W)                                    — input
+//   Reshape → (B, s², out_c, H, W)                  — channels split into offset · c2
+//   Reshape → (B, s, s, out_c, H, W)                — split s² into (dy, dx)
+//   Transpose perm=(0,3,4,1,5,2) → (B, out_c, H, s, W, s)
+//   Reshape → (B, C·s², H/s, W/s)                   — final view (numel preserved)
+static std::string emit_yolov2_reorg(GraphBuilder& g, const std::string& in,
+                                       const std::string& prefix,
+                                       int C, int H, int W, int stride) {
+  const int s     = stride;
+  const int out_c = C / (s * s);
+  auto sh1 = g.add_init_int64(prefix + ".sh1",
+      {0, (int64_t)(s * s), (int64_t)out_c, (int64_t)H, (int64_t)W});
+  auto y1  = g.node("Reshape", {in, sh1}, {}, prefix + ".r1");
+  auto sh2 = g.add_init_int64(prefix + ".sh2",
+      {0, (int64_t)s, (int64_t)s, (int64_t)out_c, (int64_t)H, (int64_t)W});
+  auto y2  = g.node("Reshape", {y1, sh2}, {}, prefix + ".r2");
+  auto y3  = g.node("Transpose", {y2},
+                     {attr_ints("perm", {0, 3, 4, 1, 5, 2})},
+                     prefix + ".perm");
+  auto sh3 = g.add_init_int64(prefix + ".sh3",
+      {0, (int64_t)(C * s * s), (int64_t)(H / s), (int64_t)(W / s)});
+  return g.node("Reshape", {y3, sh3}, {}, prefix + ".out");
+}
+
+// v2 region decode: raw [B, na*(5+nc), H, W] → [B, 4+nc, A=na·H·W],
+// xyxy + sigmoid(obj)·softmax(cls).
+static std::string emit_yolov2_decode(GraphBuilder& g, const std::string& raw,
+                                       int imgsz, int nc, int na, int H, int W,
+                                       const std::vector<float>& anchors_cells,
+                                       float stride,
+                                       const std::string& prefix,
+                                       const std::string& output_name) {
+  const int no = 5 + nc;
+  auto rsh0 = g.add_init_int64(prefix + ".rsh0",
+      {0, (int64_t)na, (int64_t)no, (int64_t)H, (int64_t)W});
+  auto t5 = g.node("Reshape", {raw, rsh0}, {}, prefix + ".5d");
+
+  // Slice channels on dim 2 (the 5+nc dim).
+  auto ax2   = g.add_init_int64(prefix + ".ax2", {2});
+  auto step1 = g.add_init_int64(prefix + ".step1", {1});
+  auto sxy0  = g.add_init_int64(prefix + ".sxy0", {0});
+  auto sxy1  = g.add_init_int64(prefix + ".sxy1", {2});
+  auto swh0  = g.add_init_int64(prefix + ".swh0", {2});
+  auto swh1  = g.add_init_int64(prefix + ".swh1", {4});
+  auto sob0  = g.add_init_int64(prefix + ".sob0", {4});
+  auto sob1  = g.add_init_int64(prefix + ".sob1", {5});
+  auto scl0  = g.add_init_int64(prefix + ".scl0", {5});
+  auto scl1  = g.add_init_int64(prefix + ".scl1", {(int64_t)no});
+  auto txy  = g.node("Slice", {t5, sxy0, sxy1, ax2, step1}, {}, prefix + ".txy");
+  auto twh  = g.node("Slice", {t5, swh0, swh1, ax2, step1}, {}, prefix + ".twh");
+  auto tobj = g.node("Slice", {t5, sob0, sob1, ax2, step1}, {}, prefix + ".tobj");
+  auto tc   = g.node("Slice", {t5, scl0, scl1, ax2, step1}, {}, prefix + ".tc");
+
+  auto xy_sig  = g.node("Sigmoid", {txy},  {}, prefix + ".xy_sig");
+  auto obj_sig = g.node("Sigmoid", {tobj}, {}, prefix + ".obj_sig");
+  // softmax over the cls channel (dim 2). ONNX Softmax(axis=2) collapses
+  // every dim from `axis` onward into a single row by default in opset<13,
+  // so we use axis=2 explicitly which works as expected in opset 13+.
+  auto cls_sm = g.node("Softmax", {tc},
+                        {attr_int("axis", 2)}, prefix + ".cls_sm");
+
+  // Grid offsets: cx_grid[j*W+i] = i, cy_grid[j*W+i] = j. Shape
+  // [1, 1, 2, H, W] so it broadcasts across (na, B).
+  std::vector<float> grid_v(2 * H * W);
+  for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+    grid_v[0 * H * W + y * W + x] = (float)x;
+    grid_v[1 * H * W + y * W + x] = (float)y;
+  }
+  auto grid_init = g.add_init_float(prefix + ".grid", grid_v,
+                                      {1, 1, 2, (int64_t)H, (int64_t)W});
+  auto xy_cell = g.node("Add", {xy_sig, grid_init}, {}, prefix + ".xy_cell");
+  std::vector<float> stride_v = {stride};
+  auto stride_init = g.add_init_float(prefix + ".stride", stride_v, {1});
+  auto xy_pix = g.node("Mul", {xy_cell, stride_init}, {}, prefix + ".xy_pix");
+
+  // wh: anchor (in cell units → pixels via stride) × exp(twh).
+  // anchor buffer shape [1, na, 2, 1, 1] in pixel units.
+  std::vector<float> anc_v(na * 2);
+  for (int a = 0; a < na; ++a) {
+    anc_v[a * 2 + 0] = anchors_cells[a * 2 + 0] * stride;
+    anc_v[a * 2 + 1] = anchors_cells[a * 2 + 1] * stride;
+  }
+  auto anc_init = g.add_init_float(prefix + ".anc", anc_v,
+                                     {1, (int64_t)na, 2, 1, 1});
+  auto wh_exp = g.node("Exp", {twh}, {}, prefix + ".wh_exp");
+  auto wh_pix = g.node("Mul", {wh_exp, anc_init}, {}, prefix + ".wh_pix");
+
+  // xyxy with clamp.
+  std::vector<float> half_v = {0.5f};
+  std::vector<float> zero_v = {0.0f};
+  std::vector<float> max_v  = {(float)imgsz};
+  auto half_i = g.add_init_float(prefix + ".half", half_v, {1});
+  auto zero_i = g.add_init_float(prefix + ".zero", zero_v, {1});
+  auto max_i  = g.add_init_float(prefix + ".max",  max_v,  {1});
+  auto wh_half = g.node("Mul", {wh_pix, half_i}, {}, prefix + ".wh_half");
+  auto x1y1 = g.node("Sub", {xy_pix, wh_half}, {}, prefix + ".x1y1");
+  auto x2y2 = g.node("Add", {xy_pix, wh_half}, {}, prefix + ".x2y2");
+  auto x1y1c = g.node("Clip", {x1y1, zero_i, max_i}, {}, prefix + ".x1y1c");
+  auto x2y2c = g.node("Clip", {x2y2, zero_i, max_i}, {}, prefix + ".x2y2c");
+  auto box   = g.node("Concat", {x1y1c, x2y2c},
+                        {attr_int("axis", 2)}, prefix + ".box");
+
+  // Score = obj * softmax(cls). obj is [B, na, 1, H, W], cls is
+  // [B, na, nc, H, W] — broadcast works elementwise.
+  auto score = g.node("Mul", {obj_sig, cls_sm}, {}, prefix + ".score");
+  auto packed = g.node("Concat", {box, score},
+                        {attr_int("axis", 2)}, prefix + ".packed");
+  // [B, na, 4+nc, H, W] → [B, 4+nc, na·H·W]
+  auto perm = g.node("Transpose", {packed},
+                      {attr_ints("perm", {0, 2, 1, 3, 4})}, prefix + ".perm");
+  auto rsh1 = g.add_init_int64(prefix + ".rsh1",
+      {0, (int64_t)(4 + nc), (int64_t)(na * H * W)});
+  return g.node("Reshape", {perm, rsh1}, {}, output_name);
+}
+
+void export_yolo2_onnx(yolocpp::models::Yolo2& model,
+                        const std::string& path,
+                        const OnnxExportConfig& cfg) {
+  using yolocpp::models::Yolo2Scale;
+  model->eval();
+  GraphBuilder g;
+  const int imgsz = (cfg.imgsz > 0) ? cfg.imgsz : 416;
+  g.set_input(cfg.input_name, /*FLOAT=*/1, {-1, 3, imgsz, imgsz});
+
+  const int nc = model->nc;
+  const int na = model->num_anchors();
+  const int H  = imgsz / 32;     // both Full + Tiny output at stride-32 grid
+  const int W  = imgsz / 32;
+  const float stride = (float)imgsz / (float)H;
+
+  auto walk_seq = [&](torch::nn::Sequential seq, const std::string& tag,
+                       const std::string& in) {
+    auto y = in;
+    int i = 0;
+    for (auto& child : seq->children()) {
+      auto pfx = tag + "." + std::to_string(i++);
+      if (auto cl = std::dynamic_pointer_cast<
+              yolocpp::models::ConvLeakyImpl>(child)) {
+        y = emit_convleaky(g, y, pfx, cl.get());
+      } else if (auto mp = std::dynamic_pointer_cast<
+                     torch::nn::MaxPool2dImpl>(child)) {
+        y = emit_mp2(g, y, pfx);
+      } else if (auto cv = std::dynamic_pointer_cast<
+                     torch::nn::Conv2dImpl>(child)) {
+        // Bare Conv2d — only the final 1×1 detection head. Emit
+        // Conv + bias, no activation.
+        auto wname = g.add_init(pfx + ".weight", cv->weight);
+        auto bname = g.add_init(pfx + ".bias",   cv->bias);
+        int k = (int)cv->options.kernel_size()->at(0);
+        int s = (int)cv->options.stride()->at(0);
+        int p = std::get<torch::ExpandingArray<2>>(cv->options.padding())->at(0);
+        y = g.node("Conv", {y, wname, bname},
+                    {attr_ints("dilations", {1, 1}),
+                     attr_int("group", 1),
+                     attr_ints("kernel_shape", {k, k}),
+                     attr_ints("pads", {p, p, p, p}),
+                     attr_ints("strides", {s, s})}, pfx + ".out");
+      } else {
+        throw std::runtime_error("export_yolo2_onnx: unexpected child in " +
+                                  tag);
+      }
+    }
+    return y;
+  };
+
+  std::string raw;
+  if (model->scale == Yolo2Scale::Tiny) {
+    // Walk `tiny` manually so we can inject the stride-1 fake pool
+    // (kernel=2, stride=1, pads=0,1,0,1) before the 12th child
+    // (the second 1024-channel ConvLeaky). This matches the
+    // forward_raw path in models/yolo2.cpp.
+    auto y = cfg.input_name;
+    int i = 0;
+    for (auto& child : model->tiny->children()) {
+      auto pfx = "tiny." + std::to_string(i);
+      if (i == 11) {
+        // ONNX MaxPool with asymmetric trailing pad: kernel=2, stride=1,
+        // pads=[top, left, bottom, right] = [0, 0, 1, 1].
+        y = g.node("MaxPool", {y},
+                    {attr_ints("kernel_shape", {2, 2}),
+                     attr_ints("strides",      {1, 1}),
+                     attr_ints("pads",         {0, 0, 1, 1})},
+                    pfx + ".fakepool");
+      }
+      if (auto cl = std::dynamic_pointer_cast<
+              yolocpp::models::ConvLeakyImpl>(child)) {
+        y = emit_convleaky(g, y, pfx, cl.get());
+      } else if (auto mp = std::dynamic_pointer_cast<
+                     torch::nn::MaxPool2dImpl>(child)) {
+        y = emit_mp2(g, y, pfx);
+      } else if (auto cv = std::dynamic_pointer_cast<
+                     torch::nn::Conv2dImpl>(child)) {
+        auto wname = g.add_init(pfx + ".weight", cv->weight);
+        auto bname = g.add_init(pfx + ".bias",   cv->bias);
+        int k = (int)cv->options.kernel_size()->at(0);
+        int s = (int)cv->options.stride()->at(0);
+        int p = std::get<torch::ExpandingArray<2>>(cv->options.padding())->at(0);
+        y = g.node("Conv", {y, wname, bname},
+                    {attr_ints("dilations", {1, 1}),
+                     attr_int("group", 1),
+                     attr_ints("kernel_shape", {k, k}),
+                     attr_ints("pads", {p, p, p, p}),
+                     attr_ints("strides", {s, s})}, pfx + ".out");
+      } else {
+        throw std::runtime_error("export_yolo2_onnx tiny: unexpected child");
+      }
+      ++i;
+    }
+    raw = y;
+  } else {
+    // Full Darknet-19 + reorg passthrough.
+    auto e26 = walk_seq(model->early, "early", cfg.input_name);  // [B, 512, 26, 26]
+    auto p13 = walk_seq(model->late,  "late",  e26);             // [B, 1024, 13, 13]
+    auto pre = walk_seq(model->head_pre, "head_pre", p13);
+    auto pt  = walk_seq(model->head_pt,  "head_pt",  e26);       // [B, 64, 26, 26]
+    auto pt13 = emit_yolov2_reorg(g, pt, "reorg",
+                                    /*C=*/64, /*H=*/2 * H, /*W=*/2 * W,
+                                    /*stride=*/2);                // [B, 256, 13, 13]
+    auto cat  = g.node("Concat", {pt13, pre}, {attr_int("axis", 1)}, "head.cat");
+    raw = walk_seq(model->head_post, "head_post", cat);
+  }
+
+  auto out = emit_yolov2_decode(g, raw, imgsz, nc, na, H, W,
+                                  model->anchors, stride,
+                                  "decode", cfg.output_name);
+  (void)out;
+  g.set_output(cfg.output_name, /*FLOAT=*/1,
+                {-1, 4 + nc, (int64_t)(na * H * W)});
+
+  Pb model_pb;
+  model_pb.write_int64_field(1, 8);
+  model_pb.write_string_field(2, cfg.producer_name);
+  model_pb.write_string_field(3, cfg.producer_version);
+  model_pb.write_string_field(4, "");
+  model_pb.write_int64_field(5, 1);
+  model_pb.write_string_field(6, "");
+  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo2"));
+  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
+  std::ofstream f(path, std::ios::binary);
+  if (!f) throw std::runtime_error("cannot write " + path);
+  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+}
+
 }  // namespace yolocpp::serialization

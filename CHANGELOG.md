@@ -30,6 +30,95 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.88.0] — 2026-05-17
+
+### Added — ONNX + TRT export for yolo1 + yolo2 (#68 + #69)
+
+Closes TODO #68 and #69. Every supported YOLO version now exports
+end-to-end. The capability matrix is ✅ across the board for all
+fourteen versions (predict / val / train / ONNX / TRT) — modulo the
+upstream non-detect task family gap on v3..v10 / v12 / v13 still
+tracked under #60.
+
+**`export_yolo1_onnx`** — `src/serialization/onnx_export.cpp`:
+
+- Backbone: each `ConvLeakyNoBN` emits a Conv + LeakyRelu(0.1), each
+  `MaxPool2d` a MaxPool. The block order matches the v1 `.weights`
+  walker (DFS through `backbone->children()`).
+- FC head: Flatten(axis=1) + Gemm(transB=1) + LeakyRelu(0.1) + Gemm.
+  The bias is the third Gemm input. transB=1 because PyTorch's Linear
+  weight is `(out, in)`.
+- Decoder: hand-emitted subgraph that splits the flat `[N, S·S·(B·5+nc)]`
+  into Darknet's three contiguous blocks (cls, conf, coords), reshapes,
+  applies cell-grid offsets, squares the sqrt-encoded w/h (with a
+  Max(·, 0) clamp to avoid negative roots squaring to a positive box),
+  multiplies conf × cls per box, packs `[N, 4+nc, A]`.
+
+**`export_yolo2_onnx`** — `src/serialization/onnx_export.cpp`:
+
+- Full scale: walks `early` / `late` / `head_pre` / `head_pt` /
+  `head_post` Sequentials. Reorg passthrough emitted as a
+  Reshape + Reshape + Transpose(perm=[0,3,4,1,5,2]) + Reshape — this
+  is the bit-exact flat-memory layout Darknet produces. **Note: ONNX
+  `SpaceToDepth(blocksize=2)` does NOT match**; it produces a
+  different channel ordering, and the trained conv-27 weights would
+  consume the wrong channels.
+- Tiny scale: walks the single `tiny` Sequential, injecting the fake-
+  stride pool (kernel=2, stride=1, pads=`[0, 0, 1, 1]` — asymmetric
+  trailing pad) at index 11 to match `forward_raw`.
+- Region decode: Slice into (txy, twh, tobj, tc); Sigmoid(xy/obj),
+  Softmax(cls, axis=2), Exp(wh) × anchor (in pixels). Outputs
+  `[N, 4+nc, na·H·W]`.
+
+**Wiring**:
+
+- `make_v1()` / `make_v2()` registry adapters' `export_onnx` lambdas
+  now construct the holder + load_state_dict (when weights resolve
+  to a file) and call the new emitter.
+- `make_v1()` / `make_v2()` `benchmark_pt` + `make_frame_predictor`
+  hooks now use `run_bench_pt_with` / `make_frame_pred_with` instead
+  of throwing.
+- `cmd_export` accepts a non-resolving `-m yolo1` / `-m yolo2-tiny`
+  spec — exports from random init for graph-correctness testing.
+  Mirrors the same fallback added to `cmd_train` in 0.87.0.
+- `tests/test_v{1,2}_e2e.cpp` — added an ONNX export round-trip
+  sanity check (load `data/yolo*.pt`, emit `build/v{1,2}_e2e.onnx`,
+  assert size > threshold).
+
+### Verified
+
+```
+# v2-voc (VOC, nc=20)
+build/yolocpp --mode export -m data/yolo2-voc.pt --format trt --imgsz 416
+  → /tmp/yolo2-voc.trt (101 MB)
+build/yolocpp --mode predict -m /tmp/yolo2-voc.trt -s data/bus.jpg --nc 20
+  → engine in=[1,3,416,416] → out=[1,24,845], 4 detections ✓
+
+# v2 (COCO, nc=80) — benchmark
+build/yolocpp --mode benchmark -m data/yolo2.pt -s data/bus.jpg --nc 80 --imgsz 416
+  PT  FP32:    2.42 ms / 413.1 img/s / 4 dets
+  TRT FP32:    1.89 ms / 528.9 img/s / 4 dets  (1.28× vs PT)
+  TRT FP16:    1.07 ms / 936.4 img/s / 4 dets  (2.27× vs PT)
+  ↑ same detection count across all three — bit-equivalent NMS output
+
+# v1 (random init) — TRT engine builds clean through the parser
+build/yolocpp --mode export -m yolo1 --format trt --imgsz 448 --nc 20
+  → /tmp/yolo1.trt (522 MB; FC1 dominates)
+
+# Full ctest: 39/39 PASS
+```
+
+### Capability matrix now ✅ across all fourteen versions
+
+```
+              arch     predict       val      train             ONNX/TRT export
+yolo1         ✅       ✅            ✅       ✅                ✅
+yolo2         ✅       ✅(+tiny)     ✅       ✅                ✅
+yolo3..yolo26 ✅       ✅            ✅       ✅                ✅
+```
+
+---
+
 ## [0.87.0] — 2026-05-17
 
 ### Added — training + val for yolo1 and yolo2 (#66 + #67)

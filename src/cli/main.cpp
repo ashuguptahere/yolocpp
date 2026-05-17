@@ -113,9 +113,10 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
       // can extract its hint, but the trainer will see no init file
       // and start from random weights.
       auto vh = yolocpp::cli::version_from_filename(weights);
-      if (mode == "train" && !vh.empty()) {
+      if ((mode == "train" || mode == "export") && !vh.empty()) {
         std::cerr << "[info] no weights file found for '" << weights
-                  << "' — training from scratch (version=" << vh << ")\n";
+                  << "' — proceeding with random-init for mode=" << mode
+                  << " (version=" << vh << ")\n";
       } else {
         std::cerr << "[error] resolve weights: " << e.what() << "\n";
         return 2;
