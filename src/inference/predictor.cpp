@@ -148,6 +148,86 @@ std::vector<Detection> Predictor::predict_to_file(
   return dets;
 }
 
+std::vector<Detection> predict_v1_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz, const std::string& device,
+    int nc, NMSConfig nmscfg) {
+  auto dev = resolve_device(device);
+  models::Yolo1 model(nc);
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model->load_from_state_dict(sd.entries);
+  std::cout << "[v1-pred] loaded " << copied << " tensors from "
+            << weights << "\n";
+  model->to(dev); model->eval();
+
+  cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (src.empty()) throw std::runtime_error("could not read " + in_path);
+  auto lb = letterbox(src, imgsz);
+  auto x  = image_to_tensor(lb.img).unsqueeze(0).to(dev);
+
+  torch::Tensor pred;
+  { torch::NoGradGuard ng; pred = model->forward_eval(x); }
+  auto outs = nms(pred, nmscfg);
+  if (outs[0].size(0) == 0) { cv::imwrite(out_path, src); return {}; }
+  auto det   = outs[0].to(torch::kCPU);
+  auto boxes = det.slice(1, 0, 4).contiguous();
+  scale_boxes(boxes, lb);
+  det.slice(1, 0, 4) = boxes;
+
+  std::vector<Detection> result;
+  result.reserve(det.size(0));
+  auto a = det.accessor<float, 2>();
+  for (int i = 0; i < det.size(0); ++i) {
+    Detection d;
+    d.x1 = a[i][0]; d.y1 = a[i][1]; d.x2 = a[i][2]; d.y2 = a[i][3];
+    d.conf = a[i][4]; d.cls = (int)a[i][5];
+    result.push_back(d);
+  }
+  draw_detections(src, result);
+  cv::imwrite(out_path, src);
+  return result;
+}
+
+std::vector<Detection> predict_v2_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz, const std::string& device,
+    int nc, models::Yolo2Scale scale, NMSConfig nmscfg) {
+  auto dev = resolve_device(device);
+  models::Yolo2 model(scale, nc);
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model->load_from_state_dict(sd.entries);
+  std::cout << "[v2-pred] loaded " << copied << " tensors from "
+            << weights << "\n";
+  model->to(dev); model->eval();
+
+  cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (src.empty()) throw std::runtime_error("could not read " + in_path);
+  auto lb = letterbox(src, imgsz);
+  auto x  = image_to_tensor(lb.img).unsqueeze(0).to(dev);
+
+  torch::Tensor pred;
+  { torch::NoGradGuard ng; pred = model->forward_eval(x); }
+  auto outs = nms(pred, nmscfg);
+  if (outs[0].size(0) == 0) { cv::imwrite(out_path, src); return {}; }
+  auto det   = outs[0].to(torch::kCPU);
+  auto boxes = det.slice(1, 0, 4).contiguous();
+  scale_boxes(boxes, lb);
+  det.slice(1, 0, 4) = boxes;
+
+  std::vector<Detection> result;
+  result.reserve(det.size(0));
+  auto a = det.accessor<float, 2>();
+  for (int i = 0; i < det.size(0); ++i) {
+    Detection d;
+    d.x1 = a[i][0]; d.y1 = a[i][1]; d.x2 = a[i][2]; d.y2 = a[i][3];
+    d.conf = a[i][4]; d.cls = (int)a[i][5];
+    result.push_back(d);
+  }
+  draw_detections(src, result);
+  cv::imwrite(out_path, src);
+  return result;
+}
+
 std::vector<Detection> predict_v3_to_file(
     const std::string& weights, const std::string& in_path,
     const std::string& out_path, int imgsz, const std::string& device,

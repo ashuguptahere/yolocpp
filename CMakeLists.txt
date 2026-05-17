@@ -112,6 +112,8 @@ add_library(yolocpp_core
   src/models/yolo6.cpp
   src/models/yolo7.cpp
   src/models/yolo8.cpp
+  src/models/yolo1.cpp
+  src/models/yolo2.cpp
   src/models/yolo8_classify.cpp
   src/models/yolo8_tasks.cpp
   src/models/yolo9.cpp
@@ -130,6 +132,8 @@ add_library(yolocpp_core
   src/serialization/pt_loader.cpp
   src/serialization/pt_save.cpp
   src/serialization/darknet_weights.cpp
+  src/serialization/yolov1_weights.cpp
+  src/serialization/yolov2_weights.cpp
   src/serialization/yolov6_weights.cpp
   src/serialization/yolov7_weights.cpp
   src/serialization/yolov9_weights.cpp

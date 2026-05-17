@@ -325,6 +325,20 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #61B | Auto-generated SVG graphs in `docs/` | — | within #61 | — |
 | #61C | Decision-tree style picker ("pick a model for my use case") | — | within #61 | — |
 
+### Group VI.5 — Darknet-era YOLO (#66..#69, predict landed 0.85.0)
+
+`yolo1` and `yolo2` now exist in the codebase, **predict-only**.
+Pure-C++ `.weights` loaders (no Darknet runtime) + forward + decode
++ registry hookup + SKIP-gated e2e tests landed in 0.85.0. The four
+follow-up tasks below close the gap to v3+ parity (val/train/export).
+
+| # | scope | priority | session-cost estimate | blockers |
+|---|-------|----------|------------------------|----------|
+| #66 | yolo1 train + val. Implement `LossTraits<Yolo1>` with the original SSE loss (λ_coord=5, λ_noobj=0.5, sqrt(w)/sqrt(h) on box dims, responsible-box IoU assignment per cell), instantiate `TrainerT<Yolo1>`, register `validate<Yolo1>`. v1 is FC-headed and unique in the codebase — most existing training infra assumes a conv-only head. Unblocks v1 `--mode train` / `--mode val`. | medium | 1 session | none |
+| #67 | yolo2 train + val. Implement `LossTraits<Yolo2>` with the region loss (anchor-IoU matching, sigmoid(tx,ty) + exp(tw,th) decode, softmax class CE with `rescore=1` so confidence targets the predicted-vs-GT IoU). Instantiate `TrainerT<Yolo2>`, register `validate<Yolo2>`. Multi-scale training (random imgsz ∈ {320..608} every 10 batches) is in scope per upstream cfg. | medium | 1 session | none |
+| #68 | yolo1 ONNX + TRT export. The 24-conv backbone is straightforward through the existing emitter, but the two FC layers + Darknet-flat-block decoder (three contiguous slices: cls, conf, coords) need a hand-emitted decoder subgraph (Reshape + Slice + Mul + Concat). TRT pipeline plugs in via the shared `build_trt_engine` once ONNX lands. | medium | 1 session | #66 (val for parity check) |
+| #69 | yolo2 ONNX + TRT export. `reorg` maps to ONNX `SpaceToDepth(blocksize=2)` modulo a channel permutation (Darknet's flat-memory order differs from SpaceToDepth's per-pixel grouping — see the comment in `models/yolo2.cpp::reorg`); region decode = Slice + Sigmoid + Exp + Mul + Add. | medium | 1 session | #67 |
+
 ### Group VII — optional / nice-to-have (do not block anything)
 
 | # | scope | priority | session-cost estimate | blockers |

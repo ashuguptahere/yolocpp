@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "yolocpp/inference/nms.hpp"
+#include "yolocpp/models/yolo1.hpp"
+#include "yolocpp/models/yolo2.hpp"
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo12.hpp"
 #include "yolocpp/models/yolo13.hpp"
@@ -77,6 +79,30 @@ const std::vector<std::string>& coco_names();
 void draw_detections(cv::Mat& img,
                      const std::vector<Detection>& dets,
                      const std::vector<std::string>& names = {});
+
+// Predict with a YOLO1 (Redmon 2016, 24-conv + 2-FC, no BN). Weights
+// must be in our `.pt` form — produced by
+// `serialization::convert_yolov1_weights(yolov1.weights, yolo1.pt)`
+// from pjreddie's Darknet release. Default imgsz=448 matches the
+// upstream training config.
+std::vector<Detection> predict_v1_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 448,
+    const std::string& device = "", int nc = 20,
+    NMSConfig conf = {});
+
+// Predict with a YOLO2 (Darknet-19 + reorg + region) model. Weights
+// must be in our `.pt` form — produced by
+// `serialization::convert_yolov2_weights(yolov2.weights, yolo2.pt)`.
+// Default imgsz=416 matches the upstream cfg; the model is fully-
+// convolutional so any multiple of 32 works. `scale=Tiny` selects
+// the 9-conv compact variant.
+std::vector<Detection> predict_v2_to_file(
+    const std::string& weights, const std::string& in_path,
+    const std::string& out_path, int imgsz = 416,
+    const std::string& device = "", int nc = 20,
+    models::Yolo2Scale scale = models::Yolo2Scale::Full,
+    NMSConfig conf = {});
 
 // Predict with a YOLO3 (the anchor-free yolov3u variant — Darknet-53
 // backbone + v8-style DFL Detect head). Weights are converted from

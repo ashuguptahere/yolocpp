@@ -2,6 +2,8 @@
 
 #include "yolocpp/cli/data_yaml.hpp"
 #include "yolocpp/serialization/darknet_weights.hpp"
+#include "yolocpp/serialization/yolov1_weights.hpp"
+#include "yolocpp/serialization/yolov2_weights.hpp"
 #include "yolocpp/serialization/yolov6_weights.hpp"
 #include "yolocpp/serialization/yolov7_weights.hpp"
 #include "yolocpp/serialization/yolov9_weights.hpp"
@@ -362,6 +364,99 @@ std::string resolve_weights(const std::string& spec) {
       return target.string();
     }
   }
+
+  // 2g) yolo1.pt — convert from pjreddie's yolov1.weights / yolov1-tiny.weights.
+  //     v1 ships with nc=20 (VOC); we default to that. Pure-C++ converter,
+  //     no Darknet runtime needed.
+  if (base == "yolo1.pt" || base == "yolov1.pt" ||
+      base == "yolo1-tiny.pt" || base == "yolov1-tiny.pt") {
+    const bool tiny = (base.find("tiny") != std::string::npos);
+    fs::path target = home_cache() / "weights" /
+                       (tiny ? "yolo1-tiny.pt" : "yolo1.pt");
+    if (fs::exists(target)) return target.string();
+    const std::string wname = tiny ? "yolov1-tiny.weights" : "yolov1.weights";
+    auto try_v1_convert = [&](const fs::path& pt_target) -> bool {
+      std::vector<fs::path> roots = {
+          fs::current_path() / "data" / wname,
+          fs::current_path() / wname,
+          home_cache() / "weights" / wname,
+      };
+      for (const auto& w : roots) {
+        if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
+        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        fs::create_directories(pt_target.parent_path());
+        try {
+          serialization::convert_yolov1_weights(w.string(), pt_target.string(),
+                                                 /*nc=*/20);
+          return true;
+        } catch (const std::exception& e) {
+          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          return false;
+        }
+      }
+      return false;
+    };
+    if (try_v1_convert(target)) return target.string();
+    fs::path wsrc = home_cache() / "weights" / wname;
+    const std::string url = "https://pjreddie.com/media/files/" + wname;
+    if (run_curl(url, wsrc) && try_v1_convert(target)) {
+      return target.string();
+    }
+  }
+
+  // 2h) yolo2.pt — convert from pjreddie's yolov2.weights / yolov2-tiny.weights
+  //     (COCO, nc=80) or yolov2-voc.weights / yolov2-tiny-voc.weights (VOC,
+  //     nc=20). Canonical short form: yolo2{,-tiny}{,-voc}.pt.
+  {
+    static const std::vector<std::tuple<std::string, std::string,
+                                        models::Yolo2Scale, int>> kV2 = {
+        // canonical-our,           upstream .weights,            scale,                       nc
+        {"yolo2.pt",                "yolov2.weights",             models::Yolo2Scale::Full, 80},
+        {"yolov2.pt",               "yolov2.weights",             models::Yolo2Scale::Full, 80},
+        {"yolo2-tiny.pt",           "yolov2-tiny.weights",        models::Yolo2Scale::Tiny, 80},
+        {"yolov2-tiny.pt",          "yolov2-tiny.weights",        models::Yolo2Scale::Tiny, 80},
+        {"yolo2-voc.pt",            "yolov2-voc.weights",         models::Yolo2Scale::Full, 20},
+        {"yolov2-voc.pt",           "yolov2-voc.weights",         models::Yolo2Scale::Full, 20},
+        {"yolo2-tiny-voc.pt",       "yolov2-tiny-voc.weights",    models::Yolo2Scale::Tiny, 20},
+        {"yolov2-tiny-voc.pt",      "yolov2-tiny-voc.weights",    models::Yolo2Scale::Tiny, 20},
+    };
+    for (const auto& [ours, wname, scale, nc] : kV2) {
+      if (base != ours) continue;
+      // Canonical cache name strips the optional "v" prefix.
+      std::string our_canonical = (ours.rfind("yolov", 0) == 0)
+                                       ? ("yolo" + ours.substr(5))
+                                       : ours;
+      fs::path target = home_cache() / "weights" / our_canonical;
+      if (fs::exists(target)) return target.string();
+      auto try_v2_convert = [&](const fs::path& pt_target) -> bool {
+        std::vector<fs::path> roots = {
+            fs::current_path() / "data" / wname,
+            fs::current_path() / wname,
+            home_cache() / "weights" / wname,
+        };
+        for (const auto& w : roots) {
+          if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
+          std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+          fs::create_directories(pt_target.parent_path());
+          try {
+            serialization::convert_yolov2_weights(w.string(), pt_target.string(),
+                                                   nc, scale);
+            return true;
+          } catch (const std::exception& e) {
+            std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+            return false;
+          }
+        }
+        return false;
+      };
+      if (try_v2_convert(target)) return target.string();
+      fs::path wsrc = home_cache() / "weights" / wname;
+      const std::string url = "https://pjreddie.com/media/files/" + wname;
+      if (run_curl(url, wsrc) && try_v2_convert(target)) {
+        return target.string();
+      }
+    }
+  }
   if (base != spec) {
     // user gave a relative or absolute path; honour it (already missed step 1)
   }
@@ -625,6 +720,8 @@ std::string version_from_filename(const std::string& path) {
   if (base.rfind("yolo5",  0) == 0) return "v5";
   if (base.rfind("yolo4",  0) == 0) return "v4";
   if (base.rfind("yolo3",  0) == 0) return "v3";
+  if (base.rfind("yolo2",  0) == 0) return "v2";   // Darknet-era (#67)
+  if (base.rfind("yolo1",  0) == 0) return "v1";   // Darknet-era (#66)
 
   // Trained checkpoints (e.g. "best.pt") don't carry the version in their
   // filename. Try the sibling args.yaml: it has a `model: yolo5n.pt` line

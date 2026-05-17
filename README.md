@@ -28,13 +28,21 @@ gated on the maintainer's call — not a feature checklist.
 
 ## Status
 
-All twelve supported YOLO versions (`yolo3 yolo4 yolo5 yolo6 yolo7
-yolo8 yolo9 yolo10 yolo11 yolo12 yolo13 yolo26`) currently ship the
-detect pipeline end-to-end — **predict, val, train, ONNX export, TRT
-export** — across every published scale. v8 / v11 / v26 additionally
-ship the full five-task family (detect / classify / segment / pose /
-obb). v12 / v13 ship detect-only upstream; their task heads are
-scaffolded in code and queued for retraining on COCO under task #60.
+Fourteen YOLO versions are supported. Twelve modern ones (`yolo3
+yolo4 yolo5 yolo6 yolo7 yolo8 yolo9 yolo10 yolo11 yolo12 yolo13
+yolo26`) ship the detect pipeline end-to-end — **predict, val,
+train, ONNX export, TRT export** — across every published scale.
+v8 / v11 / v26 additionally ship the full five-task family (detect /
+classify / segment / pose / obb). v12 / v13 ship detect-only
+upstream; their task heads are scaffolded in code and queued for
+retraining on COCO under task #60.
+
+The two Darknet-era versions (`yolo1`, `yolo2`) ship **predict-only**
+at the moment, but are usable end-to-end without any Darknet runtime
+— pjreddie's `yolov{1,2}.weights` binaries are parsed by our own
+pure-C++ loader (`src/serialization/yolov{1,2}_weights.cpp`) and
+converted to a `.pt` state-dict on first use. Train / ONNX / TRT for
+v1/v2 are tracked under tasks #66..#69.
 
 Reference reading on the current state:
 
@@ -105,16 +113,20 @@ upstream variants not yet mirrored — see CLAUDE.md "Periodic gap-audit
 
 ## YOLO version roadmap
 
-The codebase covers **only** these twelve YOLO versions and uses the
-single canonical filename / identifier convention `yolo<N>` everywhere
-(`yolo3`, `yolo4`, `yolo5`, `yolo6`, `yolo7`, `yolo8`, `yolo9`, `yolo10`,
-`yolo11`, `yolo12`, `yolo13`, `yolo26` — **no `v`**). When fetching legacy
-upstream weights for v3..v10, the resolver transparently maps
-the canonical name back to the `yolov<N>...pt` URL. Versions outside this
-set (v1, v2, anything between v13 and v26) are intentionally not supported.
+The codebase covers **only** these fourteen YOLO versions and uses
+the single canonical filename / identifier convention `yolo<N>`
+everywhere (`yolo1`, `yolo2`, `yolo3`, `yolo4`, `yolo5`, `yolo6`,
+`yolo7`, `yolo8`, `yolo9`, `yolo10`, `yolo11`, `yolo12`, `yolo13`,
+`yolo26` — **no `v`**). When fetching legacy upstream weights, the
+resolver transparently maps the canonical name back to pjreddie's
+`yolov<N>.weights` (v1, v2), AlexeyAB's `yolov4.weights`, or
+Ultralytics' `yolov<N>...pt`. Versions outside this set (v14..v25,
+v27+) are intentionally not supported.
 
 | version | year | provenance | family / changes | status |
 |---------|------|------------|------------------|--------|
+| **yolo1**  | 2016 | Redmon et al. (official Darknet)           | 24 conv (no BN, leaky 0.1) + 2 FC (4096 → 7·7·30); SSE loss with λ_coord=5 / λ_noobj=0.5; trained on PASCAL VOC at 448×448 | 🟡 **predict** — pjreddie's `yolov1.weights` parsed by our own loader (`yolov1_weights.cpp`, pure C++, no Darknet); forward → Darknet-flat decode → NMS; default imgsz=448. Train / ONNX / TRT staged as #66 / #68. |
+| **yolo2**  | 2017 | Redmon & Farhadi (official Darknet)        | Darknet-19 + BN + leaky 0.1 + `reorg` passthrough + 5-anchor `region` head; output (5·(5+nc))×13×13 at imgsz=416. Full + tiny variants | 🟡 **predict (+tiny)** — pjreddie's `yolov2.weights` / `-tiny` parsed by our own loader (`yolov2_weights.cpp`, pure C++); reorg replicates Darknet's exact flat-memory layout so trained conv weights consume the right channels. Default imgsz=416. Train / ONNX / TRT staged as #67 / #69. |
 | **yolo3**  | 2018 | Redmon & Farhadi (official Darknet)        | Darknet-53 backbone; ships in two head forms — original anchor-based (deferred) and the upstream anchor-free `yolov3u` (v8-style DFL head, used here) | ✅ **predict / val / train / ONNX+TRT export (yolov3u)** — converted on first use (fp16 → fp32). 103M params; 7 dets on `bus.jpg`, top 0.94. v3 train via `TrainerT<Yolo3>` reuses `V8DetectionLoss`. v3 ONNX (415 MB) + TRT FP32 (483 MB) match C++ predict's 7-dets baseline exactly. |
 | **yolo4**  | 2020 | Bochkovskiy et al. (official Darknet)      | CSPDarknet-53 + SPP + PANet; Mish activations; v3-style anchor head | ✅ **predict / val / train / ONNX+TRT export** — Darknet `yolov4.weights` converted to our `yolo4.pt` on first use; default `imgsz=608` (anchor calibration). 6 dets on `bus.jpg`. v4 train via `V7DetectionLoss` (anchor-based with v4 scale_xy bias-fix + `exp()` wh decode). v4 ONNX (257 MB) + TRT FP32 (259 MB) match C++ baseline. |
 | **yolo5**  | 2020 | upstream (official)                        | CSPNet + C3 blocks, originally anchor-based; the modern `*u.pt` files use the v8 anchor-free Detect head | ✅ end-to-end (predict / train / val / ONNX + TRT export) for all 5 scales via `yolo5*u.pt` |
@@ -141,6 +153,8 @@ COCO in a future session.
 
 ```
               arch     predict       val      train             ONNX/TRT export
+yolo1         ✅       ✅            🟡       🟡(#66)           🟡(#68)
+yolo2         ✅       ✅(+tiny)     🟡       🟡(#67)           🟡(#69)
 yolo3         ✅       ✅(u form)    ✅       ✅(u form)        ✅
 yolo4         ✅       ✅            ✅       ✅                ✅
 yolo5         ✅       ✅            ✅       ✅                ✅

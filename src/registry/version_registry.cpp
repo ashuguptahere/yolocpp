@@ -34,6 +34,8 @@
 #include "yolocpp/models/yolo12.hpp"
 #include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
+#include "yolocpp/models/yolo1.hpp"
+#include "yolocpp/models/yolo2.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
 
 #include <filesystem>
@@ -217,6 +219,127 @@ int detect_imgsz_default(const std::string& /*scale*/,
                          const std::string& task) {
   if (task == "classify") return 224;
   return 0;  // 0 ⇒ caller default (640)
+}
+
+// ---- v1 ------------------------------------------------------------------
+// Redmon 2016, the original YOLO. 24-conv backbone (no BN, leaky 0.1)
+// + 2 FC layers, output `[B, 7·7·30]` on PASCAL VOC. Predict-only at
+// the moment — train (SSE loss with λ_coord/λ_noobj weighting),
+// ONNX, TRT, benchmark all throw with a "see #66..#69" message.
+VersionAdapter make_v1() {
+  VersionAdapter a;
+  a.version_id = "v1";
+  a.display_name = "yolo1";
+  a.upstream_year = "2016";
+  a.default_export_basename = "yolo1";
+  a.supported_tasks = {"detect"};
+  a.default_imgsz = [](const std::string&, const std::string& task) {
+    if (task == "classify") return 224;
+    return 448;  // v1's training cfg
+  };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                          const std::string& out, int imgsz,
+                          const std::string& device, const std::string&,
+                          int nc, const inference::NMSConfig& nm) {
+    int sz = (imgsz > 0) ? imgsz : 448;
+    return inference::predict_v1_to_file(weights, src, out, sz, device,
+                                          nc, nm);
+  };
+  a.export_onnx = [](const std::string&, const std::string&, int,
+                      const std::string&, const std::string&,
+                      const serialization::OnnxExportConfig&) {
+    throw std::runtime_error(
+        "yolo1 export_onnx: not yet wired — see TODO #68 (the FC head "
+        "+ Darknet detection-block reshape need a hand-emitted decoder; "
+        "every other YOLO version exports through onnx_export.cpp's "
+        "block-by-block emitter which assumes a conv-only Detect head)");
+  };
+  a.run_val = [](const std::string&, const std::string&, int,
+                  datasets::YoloDataset&, const torch::Device&)
+                  -> VersionAdapter::ValResult {
+    throw std::runtime_error(
+        "yolo1 val: not yet wired — needs `validate<Yolo1>` template "
+        "instantiation. Tracked as TODO #66.");
+  };
+  a.run_train_detect = [](const std::string&, const std::string&, int,
+                           datasets::YoloDataset, const engine::TrainConfig&) {
+    throw std::runtime_error(
+        "yolo1 train: not yet wired — needs `LossTraits<Yolo1>` "
+        "with SSE loss (λ_coord=5, λ_noobj=0.5, sqrt(w)/sqrt(h), "
+        "responsible-box IoU assignment). Tracked as TODO #66.");
+  };
+  a.benchmark_pt = [](const engine::BenchConfig&, const cv::Mat&,
+                       const std::string&) -> engine::BenchResult {
+    throw std::runtime_error(
+        "yolo1 benchmark: not yet wired — see TODO #66.");
+  };
+  a.make_frame_predictor = [](const std::string&, const std::string&, int,
+                                int, const std::string&)
+                                -> std::unique_ptr<inference::FramePredictor> {
+    throw std::runtime_error(
+        "yolo1 frame predictor: not yet wired — see TODO #66.");
+  };
+  return a;
+}
+
+// ---- v2 ------------------------------------------------------------------
+// Redmon & Farhadi 2017 — Darknet-19 backbone + reorg passthrough +
+// region head with 5 anchors per cell. Two scale variants: `full`
+// (default) and `tiny`. nc defaults to 20 (VOC); pass `--nc 80` and
+// `--weights yolov2.weights` for the COCO variant. Predict-only;
+// train / ONNX / TRT staged under #67 / #69.
+VersionAdapter make_v2() {
+  VersionAdapter a;
+  a.version_id = "v2";
+  a.display_name = "yolo2";
+  a.upstream_year = "2017";
+  a.default_export_basename = "yolo2";
+  a.supported_tasks = {"detect"};
+  a.default_imgsz = [](const std::string&, const std::string& task) {
+    if (task == "classify") return 224;
+    return 416;
+  };
+  a.predict_to_file = [](const std::string& weights, const std::string& src,
+                          const std::string& out, int imgsz,
+                          const std::string& device, const std::string& scale,
+                          int nc, const inference::NMSConfig& nm) {
+    int sz = (imgsz > 0) ? imgsz : 416;
+    auto s = (scale == "tiny") ? models::Yolo2Scale::Tiny
+                                : models::Yolo2Scale::Full;
+    return inference::predict_v2_to_file(weights, src, out, sz, device,
+                                          nc, s, nm);
+  };
+  a.export_onnx = [](const std::string&, const std::string&, int,
+                      const std::string&, const std::string&,
+                      const serialization::OnnxExportConfig&) {
+    throw std::runtime_error(
+        "yolo2 export_onnx: not yet wired — the `reorg` passthrough "
+        "+ region anchor-decode block need their own ONNX emitter slice "
+        "(SpaceToDepth gets us the reorg; the region decode is a Slice/"
+        "Sigmoid/Exp/Mul/Add subgraph). Tracked as TODO #69.");
+  };
+  a.run_val = [](const std::string&, const std::string&, int,
+                  datasets::YoloDataset&, const torch::Device&)
+                  -> VersionAdapter::ValResult {
+    throw std::runtime_error("yolo2 val: not yet wired — TODO #67.");
+  };
+  a.run_train_detect = [](const std::string&, const std::string&, int,
+                           datasets::YoloDataset, const engine::TrainConfig&) {
+    throw std::runtime_error(
+        "yolo2 train: not yet wired — needs `LossTraits<Yolo2>` "
+        "(anchor-IoU assignment, sigmoid(tx,ty) + exp(tw,th) decode, "
+        "softmax class CE, rescore=1). Tracked as TODO #67.");
+  };
+  a.benchmark_pt = [](const engine::BenchConfig&, const cv::Mat&,
+                       const std::string&) -> engine::BenchResult {
+    throw std::runtime_error("yolo2 benchmark: not yet wired — TODO #67.");
+  };
+  a.make_frame_predictor = [](const std::string&, const std::string&, int,
+                                int, const std::string&)
+                                -> std::unique_ptr<inference::FramePredictor> {
+    throw std::runtime_error("yolo2 frame predictor: not yet wired — TODO #67.");
+  };
+  return a;
 }
 
 // ---- v3 ------------------------------------------------------------------
@@ -960,6 +1083,8 @@ void register_all_versions() {
   static std::once_flag once;
   std::call_once(once, []() {
     auto& r = Registry::instance();
+    r.register_version(make_v1());
+    r.register_version(make_v2());
     r.register_version(make_v3());
     r.register_version(make_v4());
     r.register_version(make_v5());

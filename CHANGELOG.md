@@ -30,6 +30,111 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.85.0] — 2026-05-17
+
+### Added — yolo1 + yolo2 (Darknet-era, pure C++, no Darknet runtime)
+
+Closed-set rule expanded 12 → 14: `yolo1` (Redmon 2016) and `yolo2`
+(Redmon & Farhadi 2017) are now first-class members of the codebase
+alongside yolo3..yolo13 / yolo26. Both ship **predict end-to-end**
+without any Darknet runtime dependency — pjreddie's `yolov{1,2}.weights`
+binaries are parsed by our own loaders.
+
+**yolo1** — `src/models/yolo1.{cpp,hpp}`:
+
+- 24-conv backbone (no BN, leaky 0.1) + 2 fully-connected layers
+  (4096 → S·S·(B·5+nc)), matching the published cfg exactly.
+- New `ConvLeakyNoBN` module so the backbone can sit in a flat
+  `Sequential` (`Sequential` can't hold templated forward modules).
+- `forward_eval` decodes Darknet's flat detection output — three
+  contiguous blocks: `[S·S·nc cls, S·S·B obj, S·S·B·4 coords]` — into
+  `[B, 4+nc, A]` xyxy + clamped scores ready for `inference::nms`.
+- `load_from_state_dict` mirrors v3/v4's match-by-name path.
+
+**yolo2** — `src/models/yolo2.{cpp,hpp}`:
+
+- Darknet-19 backbone (19 conv + 5 maxpool, ConvLeaky = Conv+BN+leaky
+  0.1) + `reorg` passthrough + region head (5 k-means anchors per
+  cell). Reused `ConvLeaky` from yolo4.
+- New `reorg(x, stride)` replicates Darknet's exact flat-memory
+  element ordering: for each `offset ∈ [0, s²)`, input channel slice
+  `[offset*out_c : (offset+1)*out_c]` writes into the intermediate
+  buffer's strided positions `(dy=offset/s, dx=offset%s)`; a
+  zero-copy `view` then reshapes to `(C·s², H/s, W/s)`. This is what
+  the trained conv-27 weights expect — a naive pixel_unshuffle
+  produces a different channel ordering and would silently corrupt
+  outputs.
+- `Tiny` variant: 9-conv compact arch with the stride-1 fake-pool
+  trick (k=2, s=1, right/bottom pad) — `forward_raw` walks the
+  Sequential manually so the pool can be injected between groups.
+- `forward_eval` runs the full region decode (sigmoid(tx,ty) +
+  exp(tw,th) + sigmoid(to) + softmax(cls)) and returns
+  `[B, 4+nc, na·H·W]`.
+
+**Weight loaders** — `src/serialization/yolov{1,2}_weights.{cpp,hpp}`:
+
+- v1 header: 4× int32 (major, minor, revision, seen).
+- v2 header: 3× int32 + int64 seen (per Darknet's "NEW" format).
+- v1 body: per-conv `[bias, weight]`; per-FC `[bias, weight]` with
+  weight stored as (out_features, in_features) row-major — matches
+  PyTorch `nn::Linear` weight layout exactly, no transpose needed.
+- v2 body: per-Conv+BN `[bn_bias, bn_weight, bn_mean, bn_var,
+  conv_weight]`; final 1×1 head is a bare Conv2d (`batch_normalize=0`)
+  with `[bias, weight]`.
+- DFS over `named_children()` in registration order — same pattern
+  as `darknet_weights.cpp` for v4.
+
+**Predict** — `src/inference/predictor.{cpp,hpp}`:
+
+- `predict_v1_to_file` (default imgsz=448, nc=20).
+- `predict_v2_to_file` (default imgsz=416, scale=Full or Tiny).
+- Both letterbox → forward_eval → NMS → unscale → draw + write.
+
+**Registry** — `src/registry/version_registry.cpp`:
+
+- `make_v1()` and `make_v2()` registered with `predict_to_file` +
+  `default_imgsz`. Other hooks (`run_val`, `run_train_detect`,
+  `export_onnx`, `benchmark_pt`, `make_frame_predictor`) throw with
+  specific "see TODO #66..#69" messages — surfaced cleanly to the
+  caller rather than silently producing wrong output.
+
+**CLI auto-resolve** — `src/cli/resolve.cpp`:
+
+- `version_from_filename` recognises `yolo1*` → `"v1"`, `yolo2*` → `"v2"`.
+- 2g) special-case: `yolo1.pt` / `yolo1-tiny.pt` triggers a
+  `convert_yolov1_weights` from a local `yolov1.weights` (or downloads
+  from `pjreddie.com/media/files/yolov1.weights`).
+- 2h) special-case: `yolo2.pt` / `yolo2-tiny.pt` /
+  `yolo2-voc.pt` / `yolo2-tiny-voc.pt` triggers `convert_yolov2_weights`
+  with the appropriate (scale, nc) tuple — Full/Tiny × COCO(80)/VOC(20).
+
+**Tests** — `tests/test_v{1,2}_e2e.cpp`:
+
+- Forward-shape sanity (always runs, no weights needed): v1 returns
+  `[1, 24, 98]`; v2 full returns `[1, 24, 845]`; v2-tiny returns
+  `[1, 24, 845]`; `reorg(1×64×26×26) == (1, 256, 13, 13)` with
+  numel preserved.
+- `.weights` round-trip + bus.jpg predict: SKIP-gated on local
+  availability of `yolov{1,2}.weights`.
+
+**Verified**
+
+```
+cmake --build build -j$(nproc)              # clean
+ctest --test-dir build --output-on-failure  # 39/39 PASS, 0 fail
+                                            # (was 37/37 in 0.84.0; new
+                                            #  test_v1_e2e + test_v2_e2e
+                                            #  both green)
+```
+
+### Deferred — train / val / export for v1 + v2
+
+Tracked as #66 (v1 train+val), #67 (v2 train+val), #68 (v1 ONNX+TRT),
+#69 (v2 ONNX+TRT) in `TODO.md`. Each is a self-contained 1-session
+patch; predict-only is the honest current state.
+
+---
+
 ## [0.84.0] — 2026-05-17
 
 ### Removed — entire rfdetr / rtdetr / DETR-family scaffold

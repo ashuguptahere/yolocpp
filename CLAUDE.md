@@ -150,24 +150,37 @@ LibTorch for training/eval, TensorRT for deployment, OpenCV for I/O.
 
 ### Supported YOLO versions (closed set)
 
-Exactly twelve, with **no `v`** in any filename, identifier, namespace,
-class name, comment, or doc string:
+Exactly fourteen, with **no `v`** in any filename, identifier,
+namespace, class name, comment, or doc string:
 
 ```
-yolo3   yolo4   yolo5   yolo6   yolo7   yolo8
-yolo9   yolo10  yolo11  yolo12  yolo13  yolo26
+yolo1   yolo2   yolo3   yolo4   yolo5   yolo6   yolo7
+yolo8   yolo9   yolo10  yolo11  yolo12  yolo13  yolo26
 ```
 
-Anything outside this set (v1, v2, v14..v25, v27+) is **not supported
-and not planned**. Follow the convention everywhere — even when
-referencing legacy upstream URLs that publish as `yolov<N>...pt`. The
-single legitimate place where strings differ from the canonical form
-is `src/cli/resolve.cpp::upstream_basename`.
+Anything outside this set (v14..v25, v27+) is **not supported and
+not planned**. Follow the convention everywhere — even when
+referencing legacy upstream URLs that publish as `yolov<N>...pt` /
+`yolov<N>.weights`. The single legitimate place where strings differ
+from the canonical form is `src/cli/resolve.cpp::upstream_basename`.
+
+**yolo1 / yolo2** are Darknet-era models (Redmon 2016 / 2017,
+respectively). Their canonical input form is pjreddie's
+`.weights` binary; we parse it ourselves via
+`src/serialization/yolov{1,2}_weights.cpp` (no Darknet runtime
+dependency) and produce a `.pt` state-dict on first use, identical
+to how v3/v4 are handled today. v1 has no BN and uses two FC layers
+on top of a 24-conv backbone (`leaky 0.1` everywhere); v2 uses
+Darknet-19 + BN + a `reorg` passthrough layer + `region` anchor
+head with 5 k-means-clustered anchors. Both ship predict-only at
+the moment — train / ONNX / TRT are tracked under tasks #66..#69.
 
 ### Per-version capability matrix (current state — see CMakeLists.txt for the version stamp)
 
 ```
               arch     predict       val      train             ONNX/TRT export
+yolo1         ✅       ✅            🟡       🟡(#66)           🟡(#68)
+yolo2         ✅       ✅(+tiny)     🟡       🟡(#67)           🟡(#69)
 yolo3         ✅       ✅(u form)    ✅       ✅(u form)        ✅
 yolo4         ✅       ✅            ✅       ✅                ✅
 yolo5         ✅       ✅            ✅       ✅                ✅
