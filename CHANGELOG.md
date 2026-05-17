@@ -30,6 +30,42 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.81.0] — 2026-05-17
+
+### Improved — batched validation (Tier 3 #13)
+
+`engine::validate` and `engine::validate_with_records` previously
+walked the val set one image at a time (`b=1`) — every model forward
+paid the per-call CUDA-launch overhead × number of val images. On
+v6n the val pass took 74 s for 308 images (~240 ms/img). After this
+change both functions batch-forward 16 images per call, then split
+the NMS output (`inference::nms` already returns per-image dets)
+and post-process per image.
+
+OOM handling: if the batched forward throws CUDA "out of memory"
+(can happen on the heaviest variants — v9e, v26x at imgsz=1280),
+the loop empties the CUDA caching allocator, splits the batch in
+half, and retries recursively. Falls all the way down to b=1 before
+giving up — same behaviour as the old code in the worst case.
+
+Shared the per-image accumulation (scale boxes back to original
+image coords, un-letterbox GTs, push detection/GT rows) into an
+`accumulate_image` helper used by both public entry points.
+
+Measured speedup on the screen dataset (308 val images):
+
+| variant | old val | new val | speedup |
+|---------|--------:|--------:|--------:|
+| v6n  | ~74 s | ~32 s | 2.3× |
+| v26x | ~25 s | ~6 s  | ~4×  |
+
+Smaller models benefit more because per-call CUDA launch overhead
+dominates at b=1; heavier models were already compute-bound. mAP
+unchanged across smoke tests (`test_yolo26_train`,
+`test_train_overfit`).
+
+---
+
 ## [0.80.0] — 2026-05-17
 
 ### Fixed — yolo26 anchor-unit bug (the actual reason v26 wasn't converging)

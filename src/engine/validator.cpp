@@ -1,5 +1,6 @@
 #include "yolocpp/engine/validator.hpp"
 
+#include <c10/cuda/CUDACachingAllocator.h>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -7,10 +8,95 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 
 #include "yolocpp/inference/letterbox.hpp"
 
 namespace yolocpp::engine {
+
+namespace {
+
+// Default batch size for inference. v8/v11/v26-n at imgsz=640 use
+// ~0.5 GB at b=16 on a 32 GB GPU, so this is comfortable headroom
+// across the family. If a forward OOMs (e.g. v9e / v26x at b=16), we
+// catch the CUDA error, halve the batch, and retry; the catch loop
+// caps at b=1 before propagating the error.
+constexpr int kDefaultValBatch = 16;
+
+// Per-image post-processing: scales boxes back to original-image
+// coords and emits DetectionRow + GroundTruthRow entries. Shared
+// between `validate` and `validate_with_records`.
+void accumulate_image(
+    int img_idx, const datasets::YoloExample& ex, torch::Tensor det,
+    std::vector<metrics::DetectionRow>& out_dets,
+    std::vector<metrics::GroundTruthRow>& out_gts) {
+  inference::LetterboxResult lb;
+  lb.gain = ex.gain; lb.pad_x = ex.pad_x; lb.pad_y = ex.pad_y;
+  lb.orig_w = ex.orig_w; lb.orig_h = ex.orig_h;
+
+  if (det.defined() && det.size(0) > 0) {
+    auto boxes = det.slice(1, 0, 4).contiguous();
+    inference::scale_boxes(boxes, lb);
+    det.slice(1, 0, 4) = boxes;
+    auto a = det.accessor<float, 2>();
+    for (int k = 0; k < det.size(0); ++k) {
+      out_dets.push_back({a[k][0], a[k][1], a[k][2], a[k][3],
+                          a[k][4], (int)a[k][5], img_idx});
+    }
+  }
+  if (ex.targets.size(0) > 0) {
+    auto t = ex.targets.clone();
+    auto a = t.accessor<float, 2>();
+    for (int k = 0; k < t.size(0); ++k) {
+      float cx = a[k][1], cy = a[k][2], w = a[k][3], h = a[k][4];
+      float x1 = (cx - w / 2 - lb.pad_x) / lb.gain;
+      float x2 = (cx + w / 2 - lb.pad_x) / lb.gain;
+      float y1 = (cy - h / 2 - lb.pad_y) / lb.gain;
+      float y2 = (cy + h / 2 - lb.pad_y) / lb.gain;
+      out_gts.push_back({x1, y1, x2, y2, (int)a[k][0], img_idx});
+    }
+  }
+}
+
+// Run one batched forward + NMS. Returns the per-image detection
+// tensors (vector of length B). On CUDA OOM, halves the batch and
+// retries by splitting in half — repeats until the split succeeds
+// or batch_size drops to 0 (in which case the error propagates).
+template <typename M>
+std::vector<torch::Tensor> batched_forward_nms(
+    M& model, const std::vector<torch::Tensor>& imgs,
+    torch::Device device, const inference::NMSConfig& nms_cfg) {
+  if (imgs.empty()) return {};
+  auto stack_and_run = [&](const std::vector<torch::Tensor>& chunk) {
+    auto x = torch::stack(chunk).to(device);
+    torch::Tensor pred;
+    {
+      torch::NoGradGuard ng;
+      pred = model->forward_eval(x);
+    }
+    return inference::nms(pred, nms_cfg);
+  };
+  try {
+    return stack_and_run(imgs);
+  } catch (const c10::Error& e) {
+    std::string msg = e.what();
+    bool is_oom = msg.find("out of memory") != std::string::npos;
+    if (!is_oom || imgs.size() <= 1) throw;
+    // Split and retry recursively.
+    c10::cuda::CUDACachingAllocator::emptyCache();
+    int half = (int)imgs.size() / 2;
+    std::vector<torch::Tensor> a(imgs.begin(), imgs.begin() + half);
+    std::vector<torch::Tensor> b(imgs.begin() + half, imgs.end());
+    auto ra = batched_forward_nms(model, a, device, nms_cfg);
+    auto rb = batched_forward_nms(model, b, device, nms_cfg);
+    ra.insert(ra.end(),
+              std::make_move_iterator(rb.begin()),
+              std::make_move_iterator(rb.end()));
+    return ra;
+  }
+}
+
+}  // anonymous namespace
 
 template <typename M>
 metrics::mAPResult validate(M& model, const datasets::YoloDataset& dataset,
@@ -21,56 +107,21 @@ metrics::mAPResult validate(M& model, const datasets::YoloDataset& dataset,
   std::vector<metrics::DetectionRow>   all_dets;
   std::vector<metrics::GroundTruthRow> all_gts;
 
-  size_t n = dataset.size();
-  for (size_t i = 0; i < n; ++i) {
-    // We need the original image size + letterbox info to map detections
-    // back. Re-create with augment=false → deterministic letterbox.
-    auto ex = dataset.get(i);
-    inference::LetterboxResult lb;
-    lb.gain   = ex.gain;
-    lb.pad_x  = ex.pad_x;
-    lb.pad_y  = ex.pad_y;
-    lb.orig_w = ex.orig_w;
-    lb.orig_h = ex.orig_h;
-
-    // Forward.
-    auto x = ex.img.unsqueeze(0).to(device);
-    torch::Tensor pred;
-    {
-      torch::NoGradGuard ng;
-      pred = model->forward_eval(x);
+  const size_t n = dataset.size();
+  for (size_t b0 = 0; b0 < n; b0 += kDefaultValBatch) {
+    size_t b1 = std::min(b0 + kDefaultValBatch, n);
+    int B = (int)(b1 - b0);
+    std::vector<datasets::YoloExample> exs(B);
+    std::vector<torch::Tensor>         imgs;
+    imgs.reserve(B);
+    for (int j = 0; j < B; ++j) {
+      exs[j] = dataset.get(b0 + j);
+      imgs.push_back(exs[j].img);
     }
-    auto outs = inference::nms(pred, nms_cfg);
-    auto& det = outs[0];           // [k, 6]: xyxy + conf + cls (lb coords)
-
-    if (det.size(0) > 0) {
-      auto boxes = det.slice(1, 0, 4).contiguous();
-      inference::scale_boxes(boxes, lb);
-      det.slice(1, 0, 4) = boxes;
-      auto a = det.accessor<float, 2>();
-      for (int j = 0; j < det.size(0); ++j) {
-        metrics::DetectionRow d{a[j][0], a[j][1], a[j][2], a[j][3],
-                                a[j][4], (int)a[j][5], (int)i};
-        all_dets.push_back(d);
-      }
-    }
-
-    // GTs in original image coords (un-letterbox the targets).
-    if (ex.targets.size(0) > 0) {
-      auto t = ex.targets.clone();
-      auto a = t.accessor<float, 2>();
-      for (int j = 0; j < t.size(0); ++j) {
-        float cx = a[j][1], cy = a[j][2], w = a[j][3], h = a[j][4];
-        float x1 = cx - w / 2, y1 = cy - h / 2;
-        float x2 = cx + w / 2, y2 = cy + h / 2;
-        // Inverse of the dataset's letterboxing.
-        x1 = (float)((x1 - lb.pad_x) / lb.gain);
-        x2 = (float)((x2 - lb.pad_x) / lb.gain);
-        y1 = (float)((y1 - lb.pad_y) / lb.gain);
-        y2 = (float)((y2 - lb.pad_y) / lb.gain);
-        metrics::GroundTruthRow g{x1, y1, x2, y2, (int)a[j][0], (int)i};
-        all_gts.push_back(g);
-      }
+    auto outs = batched_forward_nms(model, imgs, device, nms_cfg);
+    for (int j = 0; j < B; ++j) {
+      accumulate_image((int)(b0 + j), exs[j], outs[j],
+                       all_dets, all_gts);
     }
   }
 
@@ -82,46 +133,25 @@ ValidationOutput validate_with_records(M& model,
                                        const datasets::YoloDataset& dataset,
                                        torch::Device device,
                                        inference::NMSConfig nms_cfg) {
-  // Mirror of validate() but returns the rows alongside the mAP.
+  // Same loop as `validate` but also retains the dets/gts.
   model->to(device);
   model->eval();
   ValidationOutput out;
-  size_t n = dataset.size();
-  for (size_t i = 0; i < n; ++i) {
-    auto ex = dataset.get(i);
-    inference::LetterboxResult lb;
-    lb.gain = ex.gain; lb.pad_x = ex.pad_x; lb.pad_y = ex.pad_y;
-    lb.orig_w = ex.orig_w; lb.orig_h = ex.orig_h;
-
-    auto x = ex.img.unsqueeze(0).to(device);
-    torch::Tensor pred;
-    {
-      torch::NoGradGuard ng;
-      pred = model->forward_eval(x);
+  const size_t n = dataset.size();
+  for (size_t b0 = 0; b0 < n; b0 += kDefaultValBatch) {
+    size_t b1 = std::min(b0 + kDefaultValBatch, n);
+    int B = (int)(b1 - b0);
+    std::vector<datasets::YoloExample> exs(B);
+    std::vector<torch::Tensor>         imgs;
+    imgs.reserve(B);
+    for (int j = 0; j < B; ++j) {
+      exs[j] = dataset.get(b0 + j);
+      imgs.push_back(exs[j].img);
     }
-    auto outs = inference::nms(pred, nms_cfg);
-    auto& det = outs[0];
-    if (det.size(0) > 0) {
-      auto boxes = det.slice(1, 0, 4).contiguous();
-      inference::scale_boxes(boxes, lb);
-      det.slice(1, 0, 4) = boxes;
-      auto a = det.accessor<float, 2>();
-      for (int j = 0; j < det.size(0); ++j) {
-        out.dets.push_back({a[j][0], a[j][1], a[j][2], a[j][3],
-                            a[j][4], (int)a[j][5], (int)i});
-      }
-    }
-    if (ex.targets.size(0) > 0) {
-      auto t = ex.targets.clone();
-      auto a = t.accessor<float, 2>();
-      for (int j = 0; j < t.size(0); ++j) {
-        float cx = a[j][1], cy = a[j][2], w = a[j][3], h = a[j][4];
-        float x1 = (cx - w / 2 - lb.pad_x) / lb.gain;
-        float x2 = (cx + w / 2 - lb.pad_x) / lb.gain;
-        float y1 = (cy - h / 2 - lb.pad_y) / lb.gain;
-        float y2 = (cy + h / 2 - lb.pad_y) / lb.gain;
-        out.gts.push_back({x1, y1, x2, y2, (int)a[j][0], (int)i});
-      }
+    auto outs = batched_forward_nms(model, imgs, device, nms_cfg);
+    for (int j = 0; j < B; ++j) {
+      accumulate_image((int)(b0 + j), exs[j], outs[j],
+                       out.dets, out.gts);
     }
   }
   out.map = metrics::compute_map(out.dets, out.gts, dataset.num_classes());
