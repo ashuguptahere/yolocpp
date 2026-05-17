@@ -107,8 +107,19 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
     try {
       weights = resolve_weights(weights);
     } catch (const std::exception& e) {
-      std::cerr << "[error] resolve weights: " << e.what() << "\n";
-      return 2;
+      // For mode=train, allow a bare version+scale spec (e.g.
+      // `-m yolo1`, `-m yolo2-tiny`) to fall through to "train from
+      // scratch": pass `weights` along so the version/scale resolver
+      // can extract its hint, but the trainer will see no init file
+      // and start from random weights.
+      auto vh = yolocpp::cli::version_from_filename(weights);
+      if (mode == "train" && !vh.empty()) {
+        std::cerr << "[info] no weights file found for '" << weights
+                  << "' — training from scratch (version=" << vh << ")\n";
+      } else {
+        std::cerr << "[error] resolve weights: " << e.what() << "\n";
+        return 2;
+      }
     }
   }
 

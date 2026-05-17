@@ -156,8 +156,8 @@ COCO in a future session.
 
 ```
               arch     predict       val      train             ONNX/TRT export
-yolo1         ✅       ✅            🟡       🟡(#66)           🟡(#68)
-yolo2         ✅       ✅(+tiny)     🟡       🟡(#67)           🟡(#69)
+yolo1         ✅       ✅            ✅       ✅                🟡(#68)
+yolo2         ✅       ✅(+tiny)     ✅       ✅                🟡(#69)
 yolo3         ✅       ✅(u form)    ✅       ✅(u form)        ✅
 yolo4         ✅       ✅            ✅       ✅                ✅
 yolo5         ✅       ✅            ✅       ✅                ✅

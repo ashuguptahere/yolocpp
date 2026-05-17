@@ -149,6 +149,8 @@ add_library(yolocpp_core
   src/datasets/flat_dataset.cpp
   src/datasets/voc_dataset.cpp
   src/datasets/yolo_dataset.cpp
+  src/losses/yolo1_loss.cpp
+  src/losses/yolo2_loss.cpp
   src/losses/yolo8_loss.cpp
   src/losses/yolo26_loss.cpp
   src/losses/yolo6_loss.cpp

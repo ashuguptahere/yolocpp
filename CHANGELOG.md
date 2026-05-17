@@ -30,6 +30,100 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.87.0] — 2026-05-17
+
+### Added — training + val for yolo1 and yolo2 (#66 + #67)
+
+Closes TODO #66 and #67. Each Darknet-era model now ships
+predict + val + train end-to-end. ONNX / TRT export still gated
+(#68, #69).
+
+**Yolo1 SSE loss** — `src/losses/yolo1_loss.{cpp,hpp}`:
+
+- Implements Redmon 2016 sum-of-squared-error loss with the
+  published hyperparameters (λ_coord=5, λ_noobj=0.5, sqrt-encoded
+  width/height).
+- Walks the flat target tensor (post-letterbox pixel coords) to find,
+  per cell, the "responsible" predicted box (highest IoU with the GT
+  in image-space) and emits:
+  - Coord loss on (tx, ty, sqrt_w, sqrt_h) — only for responsible
+    boxes.
+  - Objectness target = IoU(pred, gt) for responsible boxes.
+  - λ_noobj objectness loss on every other box slot.
+  - Per-class SSE on cells containing a GT.
+
+**Yolo2 region loss** — `src/losses/yolo2_loss.{cpp,hpp}`:
+
+- Implements Redmon & Farhadi 2017 `region` loss with anchor-IoU
+  matching (cell containing the GT center; among the 5 anchors, the
+  one with highest w/h-IoU vs the GT). Sigmoid-decoded tx,ty,to;
+  log-encoded tw,th relative to the matched anchor.
+- λ_obj=5, λ_noobj=1, λ_coord=1, λ_class=1 — Darknet's defaults.
+- Cross-entropy class loss on matched (b, a, j, i) cells.
+
+**Forward hooks** — `forward_train` added to `Yolo1Impl` and
+`Yolo2Impl`; both return a 1-element vector of the raw pre-decode
+feature (`[B, S·S·(B·5+nc)]` for v1, `[B, na·(5+nc), H, W]` for v2),
+and lazily populate `model->stride` on first call so the templated
+trainer's `model_->stride` reference resolves.
+
+**Wiring**:
+
+- `LossTraits<Yolo1>` + `LossTraits<Yolo2>` specialisations in
+  `src/engine/trainer.cpp`.
+- `template class TrainerT<models::Yolo1>;` + `<Yolo2>` explicit
+  instantiations.
+- `validate<Yolo1>` / `validate_with_records<Yolo1>` + Yolo2
+  equivalents instantiated in `src/engine/validator.cpp`.
+- Registry adapters `make_v1()` / `make_v2()` — `run_val` and
+  `run_train_detect` hooks call `run_val_with` / `run_train_with`
+  instead of throwing.
+- `cmd_train` (in `src/cli/commands.cpp`) — if the `-m` spec
+  doesn't resolve to a file on disk, set `init_weights=""` and
+  proceed from random init. Lets `yolocpp --mode train -m yolo1`
+  work directly without a pre-existing `.pt`.
+- `make_ema_clone<Yolo1>` / `<Yolo2>` specialisations — the default
+  template's `M(scale, nc)` ctor doesn't apply to Yolo1 (no `scale`
+  member) or Yolo2 (its ctor takes `(Yolo2Scale, nc, anchors)`).
+
+### Fixed — pixel-coord target convention
+
+Initial implementation assumed targets in normalized [0, 1] coords;
+the YoloDataset actually emits post-letterbox PIXEL coords (per
+`make_example` in `datasets/yolo_dataset.cpp`). Symptom before fix:
+v2 loss reported `box=1.1e7` because `tx_tgt` reached ~1860 (pixel
+coord × W=13). After fix (divide by `imgsz` for v1, by `stride` for
+v2), v2 trains cleanly on coco8: loss 14.2 → 4.3 over 3 epochs,
+val mAP@0.5:0.95 0.466 → 0.473.
+
+### Verified — training works on every variant
+
+```
+# v2 full (pretrained, COCO weights), coco8, 3 epochs
+loss 14.2 → 4.3,  val mAP@0.5:0.95 0.466 → 0.473  ✓
+
+# v1 (random init, no pretrained available), coco8, 3 epochs
+loss  7.6 → 10.7, val mAP@0.5:0.95   0 → 0.0018  ✓ (training, slow)
+
+# v2-tiny (random init), coco8, 3 epochs
+loss 215 → 105,   val mAP@0.5:0.95   0 → 0       ✓ (decreasing)
+
+# v2-voc on a 5-class screen-detection dataset, 5 epochs
+loss  ~10 → 2.4,  val mAP@0.5:0.95 → 0.190        ✓
+```
+
+All four runs complete without errors. ctest 39/39 PASS.
+
+### Deferred
+
+- ONNX + TRT export for v1 + v2 — tracked as #68 / #69.
+- v2-tiny COCO topology mismatch — pjreddie's `yolov2-tiny.weights`
+  (43 MB) uses a slightly different layer ordering than
+  `yolov2-tiny-voc.weights` (61 MB). Our `Yolo2Scale::Tiny` matches
+  the VOC layout. Filed in 0.86.0's CHANGELOG.
+
+---
+
 ## [0.86.0] — 2026-05-17
 
 ### Added — `tools/convert_weights` + `.pt`-canonical runtime

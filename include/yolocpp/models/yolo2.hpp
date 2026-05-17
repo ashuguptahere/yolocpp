@@ -48,6 +48,10 @@ struct Yolo2Impl : torch::nn::Module {
   // Tiny variant uses a single straight-through Sequential.
   torch::nn::Sequential tiny{nullptr};
 
+  // Effective stride (input_size / 13). Single-level — populated
+  // lazily on the first `forward_train` call.
+  std::vector<double> stride;
+
   explicit Yolo2Impl(Yolo2Scale scale = Yolo2Scale::Full, int nc = 20,
                      std::vector<float> anchors = {});
 
@@ -58,6 +62,11 @@ struct Yolo2Impl : torch::nn::Module {
 
   // Returns `[B, 4+nc, A]` ready for `inference::nms`.
   torch::Tensor forward_eval(torch::Tensor x);
+
+  // Returns `{raw}` (1-element) where raw is the pre-decode
+  // `[B, na·(5+nc), H, W]` from the final 1×1 conv. The trainer
+  // iterates over this single "pyramid level" generically.
+  std::vector<torch::Tensor> forward_train(torch::Tensor x);
 
   int num_anchors() const { return (int)anchors.size() / 2; }
 

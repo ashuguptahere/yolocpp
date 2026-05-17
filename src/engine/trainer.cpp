@@ -13,7 +13,11 @@
 
 #include "yolocpp/engine/ddp.hpp"
 #include "yolocpp/engine/validator.hpp"
+#include "yolocpp/losses/yolo1_loss.hpp"
 #include "yolocpp/losses/yolo26_loss.hpp"
+#include "yolocpp/losses/yolo2_loss.hpp"
+#include "yolocpp/models/yolo1.hpp"
+#include "yolocpp/models/yolo2.hpp"
 #include "yolocpp/serialization/pt_save.hpp"
 
 namespace yolocpp::engine {
@@ -308,6 +312,45 @@ struct LossTraits<models::Yolo6> {
   }
 };
 
+// Specialised for Yolo1 → SSE loss (Redmon 2016, λ_coord=5, λ_noobj=0.5).
+template <>
+struct LossTraits<models::Yolo1> {
+  using LossT   = losses::Yolo1Loss;
+  using OutputT = losses::LossOutput;
+  static LossT make(const models::Yolo1& model) {
+    losses::Yolo1LossConfig c;
+    c.S = model->S; c.B = model->B; c.nc = model->nc;
+    return LossT(c);
+  }
+  static OutputT compute(const LossT& l,
+                          const std::vector<torch::Tensor>& feats,
+                          const torch::Tensor& tgt,
+                          const std::vector<double>& strides,
+                          int imgsz, double /*progress*/) {
+    return l(feats, tgt, strides, imgsz);
+  }
+};
+
+// Specialised for Yolo2 → region loss with k-means anchors.
+template <>
+struct LossTraits<models::Yolo2> {
+  using LossT   = losses::Yolo2Loss;
+  using OutputT = losses::LossOutput;
+  static LossT make(const models::Yolo2& model) {
+    losses::Yolo2LossConfig c;
+    c.nc      = model->nc;
+    c.anchors = model->anchors;
+    return LossT(c);
+  }
+  static OutputT compute(const LossT& l,
+                          const std::vector<torch::Tensor>& feats,
+                          const torch::Tensor& tgt,
+                          const std::vector<double>& strides,
+                          int imgsz, double /*progress*/) {
+    return l(feats, tgt, strides, imgsz);
+  }
+};
+
 // Cosine-with-linear-warmup LR schedule. Returns lr scale ∈ [0, 1].
 double lr_scale(int epoch_step, int warmup_steps, int total_steps,
                 double lrf) {
@@ -337,6 +380,19 @@ M make_ema_clone(const M& src) { return M(src->scale, src->nc); }
 template <>
 models::Yolo6 make_ema_clone<models::Yolo6>(const models::Yolo6& src) {
   return models::Yolo6(src->nc, src->scale, src->reg_max, src->is_p6);
+}
+
+// Yolo1 has no `scale` member (single-variant model).
+template <>
+models::Yolo1 make_ema_clone<models::Yolo1>(const models::Yolo1& src) {
+  return models::Yolo1(src->nc, src->S, src->B);
+}
+
+// Yolo2's `scale` is of type Yolo2Scale, not a string letter — the
+// holder ctor takes (scale, nc, anchors).
+template <>
+models::Yolo2 make_ema_clone<models::Yolo2>(const models::Yolo2& src) {
+  return models::Yolo2(src->scale, src->nc, src->anchors);
 }
 
 template <typename M>
@@ -885,5 +941,7 @@ template class TrainerT<models::Yolo11Detect>;
 template class TrainerT<models::Yolo12Detect>;
 template class TrainerT<models::Yolo13Detect>;
 template class TrainerT<models::Yolo26Detect>;
+template class TrainerT<models::Yolo1>;
+template class TrainerT<models::Yolo2>;
 
 }  // namespace yolocpp::engine

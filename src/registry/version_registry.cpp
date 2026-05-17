@@ -254,19 +254,17 @@ VersionAdapter make_v1() {
         "every other YOLO version exports through onnx_export.cpp's "
         "block-by-block emitter which assumes a conv-only Detect head)");
   };
-  a.run_val = [](const std::string&, const std::string&, int,
-                  datasets::YoloDataset&, const torch::Device&)
-                  -> VersionAdapter::ValResult {
-    throw std::runtime_error(
-        "yolo1 val: not yet wired — needs `validate<Yolo1>` template "
-        "instantiation. Tracked as TODO #66.");
+  a.run_val = [](const std::string& weights, const std::string&,
+                  int nc, datasets::YoloDataset& ds,
+                  const torch::Device& device) {
+    models::Yolo1 m(nc);
+    return run_val_with(m, weights, ds, device);
   };
-  a.run_train_detect = [](const std::string&, const std::string&, int,
-                           datasets::YoloDataset, const engine::TrainConfig&) {
-    throw std::runtime_error(
-        "yolo1 train: not yet wired — needs `LossTraits<Yolo1>` "
-        "with SSE loss (λ_coord=5, λ_noobj=0.5, sqrt(w)/sqrt(h), "
-        "responsible-box IoU assignment). Tracked as TODO #66.");
+  a.run_train_detect = [](const std::string& init, const std::string&,
+                           int nc, datasets::YoloDataset ds,
+                           const engine::TrainConfig& cfg) {
+    models::Yolo1 m(nc);
+    run_train_with(m, init, std::move(ds), cfg);
   };
   a.benchmark_pt = [](const engine::BenchConfig&, const cv::Mat&,
                        const std::string&) -> engine::BenchResult {
@@ -318,17 +316,21 @@ VersionAdapter make_v2() {
         "(SpaceToDepth gets us the reorg; the region decode is a Slice/"
         "Sigmoid/Exp/Mul/Add subgraph). Tracked as TODO #69.");
   };
-  a.run_val = [](const std::string&, const std::string&, int,
-                  datasets::YoloDataset&, const torch::Device&)
-                  -> VersionAdapter::ValResult {
-    throw std::runtime_error("yolo2 val: not yet wired — TODO #67.");
+  a.run_val = [](const std::string& weights, const std::string& scale,
+                  int nc, datasets::YoloDataset& ds,
+                  const torch::Device& device) {
+    auto s = (scale == "tiny") ? models::Yolo2Scale::Tiny
+                                : models::Yolo2Scale::Full;
+    models::Yolo2 m(s, nc);
+    return run_val_with(m, weights, ds, device);
   };
-  a.run_train_detect = [](const std::string&, const std::string&, int,
-                           datasets::YoloDataset, const engine::TrainConfig&) {
-    throw std::runtime_error(
-        "yolo2 train: not yet wired — needs `LossTraits<Yolo2>` "
-        "(anchor-IoU assignment, sigmoid(tx,ty) + exp(tw,th) decode, "
-        "softmax class CE, rescore=1). Tracked as TODO #67.");
+  a.run_train_detect = [](const std::string& init, const std::string& scale,
+                           int nc, datasets::YoloDataset ds,
+                           const engine::TrainConfig& cfg) {
+    auto s = (scale == "tiny") ? models::Yolo2Scale::Tiny
+                                : models::Yolo2Scale::Full;
+    models::Yolo2 m(s, nc);
+    run_train_with(m, init, std::move(ds), cfg);
   };
   a.benchmark_pt = [](const engine::BenchConfig&, const cv::Mat&,
                        const std::string&) -> engine::BenchResult {

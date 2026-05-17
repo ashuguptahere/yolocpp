@@ -172,6 +172,14 @@ torch::Tensor Yolo2Impl::forward_raw(torch::Tensor x) {
   return head_post->forward(cat);                // [B, na*(5+nc), 13, 13]
 }
 
+std::vector<torch::Tensor> Yolo2Impl::forward_train(torch::Tensor x) {
+  auto raw = forward_raw(x);
+  if (stride.empty()) {
+    stride = {(double)x.size(2) / (double)raw.size(2)};
+  }
+  return {raw};
+}
+
 torch::Tensor Yolo2Impl::forward_eval(torch::Tensor x) {
   const int imgH = (int)x.size(2);
   const int imgW = (int)x.size(3);

@@ -381,6 +381,19 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   std::string v_hint =
       init_weights.empty() ? "" : yolocpp::cli::version_from_filename(init_weights);
 
+  // If the caller passed a bare version spec (e.g. `-m yolo1`,
+  // `-m yolo2-tiny`) that the resolver couldn't map to a real file,
+  // treat training as "from scratch": pass an empty string to the
+  // adapter so it doesn't try to load_state_dict from a non-existent
+  // path. The version + scale hints we've already extracted remain.
+  std::string init_eff = init_weights;
+  if (!init_eff.empty() && !std::filesystem::exists(init_eff)) {
+    std::cerr << "[cmd_train] '" << init_eff
+              << "' is not a file on disk — training from scratch "
+              << "(version=" << v_hint << ", scale=" << scale_s << ")\n";
+    init_eff.clear();
+  }
+
   // Registry-driven dispatch: each non-v8 adapter wires
   // `run_train_detect` with its concrete holder type + matching
   // TrainerT<Holder>. v8 falls through to the explicit
@@ -389,7 +402,7 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   if (const auto* adapter =
           yolocpp::registry::Registry::instance().find(v_hint);
       adapter && adapter->run_train_detect) {
-    adapter->run_train_detect(init_weights, scale_s, nc,
+    adapter->run_train_detect(init_eff, scale_s, nc,
                                std::move(train_ds), cfg);
     return 0;
   }

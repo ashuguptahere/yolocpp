@@ -48,6 +48,11 @@ struct Yolo1Impl : torch::nn::Module {
   int B  = 2;   // boxes per cell
   int nc = 20;  // class count (VOC by default)
   int imgsz_default = 448;
+  // Effective stride (input_size / grid_side). Populated lazily on
+  // the first `forward_train` call. Mirrors the convention every
+  // other model uses so the trainer's templated body can read it
+  // without a holder-specific branch.
+  std::vector<double> stride;
 
   explicit Yolo1Impl(int nc = 20, int S = 7, int B = 2);
 
@@ -59,6 +64,11 @@ struct Yolo1Impl : torch::nn::Module {
   // Returns `[B, 4+nc, A]` in xyxy + sigmoid-class form, A = S·S·B.
   // Drop-in for `inference::nms`.
   torch::Tensor forward_eval(torch::Tensor x);
+
+  // Returns `{flat}` where flat is `[B, S·S·(B·5+nc)]` — the raw
+  // post-FC output. Single-element vector so the templated trainer
+  // can iterate over "pyramid levels" generically.
+  std::vector<torch::Tensor> forward_train(torch::Tensor x);
 
   // Match-by-name copy from a flat state_dict (the converted .pt
   // emitted by `convert_yolov1_weights`). Returns the number of

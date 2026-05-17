@@ -80,6 +80,13 @@ Yolo1Impl::Yolo1Impl(int nc_, int S_, int B_) : S(S_), B(B_), nc(nc_) {
   fc2  = register_module("fc2",  torch::nn::Linear(hidden, outputs));
 }
 
+std::vector<torch::Tensor> Yolo1Impl::forward_train(torch::Tensor x) {
+  if (stride.empty()) {
+    stride = {(double)x.size(2) / (double)S};
+  }
+  return {forward_flat(x)};
+}
+
 torch::Tensor Yolo1Impl::forward_flat(torch::Tensor x) {
   auto f = backbone->forward(x);
   f = f.flatten(/*start_dim=*/1);
