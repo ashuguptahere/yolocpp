@@ -8,7 +8,6 @@
 #include "yolocpp/datasets/yolo_dataset.hpp"
 #include "yolocpp/inference/nms.hpp"
 #include "yolocpp/metrics/map.hpp"
-#include "yolocpp/models/rfdetr.hpp"
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo12.hpp"
 #include "yolocpp/models/yolo13.hpp"

@@ -72,7 +72,7 @@ const std::string kAssetBase = "https://github.com/ultralytics/assets/releases/d
 // upstream URL via `upstream_basename()` below.
 bool looks_like_upstream_weight(const std::string& base) {
   static const std::regex re(
-      R"(^(yolo[0-9]+[nsmlxce]?u?(-cls|-seg|-pose|-obb)?|yolo3(-tiny|-spp)?u?|rtdetr-[lx]|rfdetr-(n|s|b|m|l|nano|small|base|medium|large)(-seg)?|rf-detr-(nano|small|medium|base|large|seg-(nano|small|medium|large|xlarge|xxlarge|preview)))\.(pt|pth)$)");
+      R"(^(yolo[0-9]+[nsmlxce]?u?(-cls|-seg|-pose|-obb)?|yolo3(-tiny|-spp)?u?)\.(pt|pth)$)");
   return std::regex_match(base, re);
 }
 
@@ -567,27 +567,6 @@ std::string scale_from_filename(const std::string& path) {
     std::string upstream = "yolov6" + letter + "6.pt";
     if (base == ours || base == upstream) return letter + "6";
   }
-  // RF-DETR scale extraction. Two filename forms:
-  //   `rf-detr-<scale>.pth`             (upstream-canonical detect)
-  //   `rf-detr-seg-<scale>.pt`          (upstream-canonical segment)
-  //   `rfdetr-<scale>[-seg]?.pt`        (our short form)
-  // Scale values: detect = {nano,small,medium,base,large,n,s,m,b,l};
-  //               segment = `seg-<n|s|m|l|xlarge|xxlarge|preview>`.
-  {
-    std::smatch ms;
-    static const std::regex rseg(
-        R"(rf-?detr-(seg-(?:nano|small|medium|large|xlarge|xxlarge|preview))\.(?:pt|pth)$)");
-    if (std::regex_search(base, ms, rseg)) return ms[1].str();
-    static const std::regex rdet(
-        R"(rf-?detr-(nano|small|medium|base|large|n|s|m|b|l)(?:-2026)?(?:-seg)?\.(?:pt|pth)$)");
-    if (std::regex_search(base, ms, rdet)) return ms[1].str();
-    // Same regex with optional .pt/.pth so users can pass a bare model
-    // identifier like `rfdetr-large` without dragging the extension.
-    static const std::regex rdet_noext(
-        R"(rf-?detr-(nano|small|medium|base|large|n|s|m|b|l)(?:-2026)?(?:-seg)?$)");
-    if (std::regex_search(base, ms, rdet_noext)) return ms[1].str();
-  }
-
   // Match canonical "yolo<digits><scale>[u]?(-task)?.pt" — and also accept the
   // legacy upstream "yolov<digits>..." spelling for v3..v10 weights. Scales:
   //   v5/v8/v11/v12/v13/v26: {n, s, m, l, x}
@@ -646,11 +625,6 @@ std::string version_from_filename(const std::string& path) {
   if (base.rfind("yolo5",  0) == 0) return "v5";
   if (base.rfind("yolo4",  0) == 0) return "v4";
   if (base.rfind("yolo3",  0) == 0) return "v3";
-  if (base.rfind("rtdetr", 0) == 0) return "rtdetr";
-  // RF-DETR (Roboflow): rfdetr-<n|s|b|m|l>.pt or rfdetr-seg-*.pt.
-  // (#65) Currently scaffolded — predict throws until #65A..C land.
-  if (base.rfind("rfdetr",  0) == 0) return "rfdetr";
-  if (base.rfind("rf-detr", 0) == 0) return "rfdetr";
 
   // Trained checkpoints (e.g. "best.pt") don't carry the version in their
   // filename. Try the sibling args.yaml: it has a `model: yolo5n.pt` line

@@ -30,6 +30,79 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.84.0] — 2026-05-17
+
+### Removed — entire rfdetr / rtdetr / DETR-family scaffold
+
+Maintainer is moving DETR-family work to a separate repository so
+yolocpp can stay focused on the closed set of twelve YOLO versions
+(`yolo3 yolo4 yolo5 yolo6 yolo7 yolo8 yolo9 yolo10 yolo11 yolo12
+yolo13 yolo26`). This is a public-surface change (MINOR bump):
+`yolocpp --weights rfdetr-*.pt` no longer dispatches, the
+`version_from_filename` resolver no longer recognises `rfdetr` /
+`rtdetr` prefixes, and the `version_id="rfdetr"` registry slot is
+gone.
+
+Deleted (6 model sources + 6 headers, 7 tests, 2 loss files, 1
+predictor, 1 weights converter, 1 sweep script, 1 doc):
+
+- `src/models/rfdetr.cpp`, `rfdetr_backbone.cpp`, `rfdetr_projector.cpp`,
+  `rfdetr_transformer.cpp`, `rfdetr_encoder.cpp`, `rfdetr_decoder.cpp`
+  and matching `include/yolocpp/models/*.hpp`.
+- `src/losses/rfdetr_loss.cpp`, `src/losses/hungarian.cpp` and headers.
+- `src/inference/rfdetr_predictor.cpp` and header.
+- `src/serialization/rfdetr_weights.cpp` and header.
+- `tests/test_rfdetr_{backbone,forward,loss,decode,pt_load,parity_dump,topk_probe}.cpp`.
+- `scripts/screen_rfdetr_sweep.sh`.
+- `docs/rfdetr_arch.md`.
+
+Edited:
+
+- `CMakeLists.txt` — pulled all rfdetr / hungarian / rfdetr_weights /
+  rfdetr_predictor sources out of `yolocpp_core`.
+- `tests/CMakeLists.txt` — pulled all 7 `test_rfdetr_*` targets.
+- `src/registry/version_registry.cpp` — deleted `make_rfdetr()` and
+  its `register_version` call.
+- `src/engine/trainer.cpp` — deleted `LossTraits<models::RFDetr>`
+  specialisation and the `TrainerT<models::RFDetr>` explicit
+  instantiation; dropped `rfdetr_loss.hpp` / `rfdetr.hpp` includes.
+- `include/yolocpp/engine/trainer.hpp` — dropped includes + the
+  `TrainerRFDetr` alias.
+- `src/engine/validator.cpp` — dropped `validate<models::RFDetr>` /
+  `validate_with_records<models::RFDetr>` template instantiations.
+- `include/yolocpp/engine/validator.hpp` — dropped `rfdetr.hpp`
+  include.
+- `src/cli/resolve.cpp` — dropped rfdetr / rtdetr / rf-detr from
+  the upstream-weight regex, the RF-DETR scale-extraction block,
+  and the rtdetr / rfdetr / rf-detr branches in
+  `version_from_filename`.
+- `include/yolocpp/cli/resolve.hpp` — removed `"rtdetr"` from the
+  documented return set; added the missing `"v4"`.
+- `src/cli/commands.cpp` — dropped `rfdetr*.hpp` includes, the
+  rfdetr-specific imgsz-alignment block in `cmd_train`, and
+  rfdetr / rtdetr from the version whitelist in `cmd_predict_task`.
+- `src/cli/main.cpp` — simplified the `--imgsz` help string (the
+  rfdetr-specific fallback note is no longer relevant).
+- `src/serialization/pt_loader.{hpp,cpp}` — kept the generic
+  `load_flat_state_dict` helper but generalised the comment (no
+  longer "Used by RF-DETR / DETR family").
+- `README.md`, `CLAUDE.md`, `TODO.md`, `docs/screen_sweep.md` —
+  removed rfdetr rows / sections; left a one-paragraph "moved to a
+  separate repo" note for future readers.
+
+### Verified
+
+```
+cmake --build build -j$(nproc)             # clean
+ctest --test-dir build --output-on-failure # 37/37 PASS, 0 fail
+```
+
+CHANGELOG entries before this point that reference rfdetr (0.31.0
+through 0.83.0) are immutable history per the versioning policy
+and remain as-is.
+
+---
+
 ## [0.83.0] — 2026-05-17
 
 ### Added — rfdetr auxiliary supervision (Tier 1 #2 — partial)

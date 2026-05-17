@@ -20,13 +20,11 @@
 #include <vector>
 
 #include "yolocpp/datasets/yolo_dataset.hpp"
-#include "yolocpp/losses/rfdetr_loss.hpp"
 #include "yolocpp/losses/yolo10_loss.hpp"
 #include "yolocpp/losses/yolo26_loss.hpp"
 #include "yolocpp/losses/yolo6_loss.hpp"
 #include "yolocpp/losses/yolo7_loss.hpp"
 #include "yolocpp/losses/yolo8_loss.hpp"
-#include "yolocpp/models/rfdetr.hpp"
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo12.hpp"
 #include "yolocpp/models/yolo13.hpp"
@@ -122,6 +120,5 @@ using TrainerV11 = TrainerT<models::Yolo11Detect>;
 using TrainerV12 = TrainerT<models::Yolo12Detect>;
 using TrainerV13 = TrainerT<models::Yolo13Detect>;
 using TrainerV26 = TrainerT<models::Yolo26Detect>;
-using TrainerRFDetr = TrainerT<models::RFDetr>;
 
 }  // namespace yolocpp::engine

@@ -13,9 +13,7 @@
 
 #include "yolocpp/engine/ddp.hpp"
 #include "yolocpp/engine/validator.hpp"
-#include "yolocpp/losses/rfdetr_loss.hpp"
 #include "yolocpp/losses/yolo26_loss.hpp"
-#include "yolocpp/models/rfdetr.hpp"
 #include "yolocpp/serialization/pt_save.hpp"
 
 namespace yolocpp::engine {
@@ -307,57 +305,6 @@ struct LossTraits<models::Yolo6> {
                          const std::vector<double>& strides,
                          int imgsz, double /*progress*/) {
     return l(feats, tgt, strides, imgsz);
-  }
-};
-
-// Specialised for RFDetr → set-prediction loss (#65G). Adapts the
-// trainer's flat YOLO target tensor `[N, 6]` (`batch_idx, class,
-// cx, cy, w, h`) into per-image `RFDetrTarget` lists, then calls
-// `rfdetr_set_loss`. `forward_train` returns a flat
-// `[cls0, bbox0, cls1, bbox1, …]` vector; we de-interleave it
-// before the loss call. The returned `LossOutput` packs (l1, cls,
-// giou) into the trainer's (box, cls, dfl) slots — the labels are
-// for logging only, the gradient flow is identical.
-template <>
-struct LossTraits<models::RFDetr> {
-  using LossT   = int;            // unused — closure captures cfg
-  using OutputT = losses::LossOutput;
-  static LossT make(const models::RFDetr& /*model*/) { return 0; }
-  static OutputT compute(const LossT& /*l*/,
-                          const std::vector<torch::Tensor>& feats,
-                          const torch::Tensor& tgt,
-                          const std::vector<double>& /*strides*/,
-                          int imgsz, double /*progress*/) {
-    TORCH_CHECK(feats.size() % 2 == 0,
-                "rfdetr forward_train must return [cls, bbox, cls, bbox, …]");
-    std::vector<torch::Tensor> cls_per_layer, bbox_per_layer;
-    for (size_t i = 0; i < feats.size(); i += 2) {
-      cls_per_layer.push_back(feats[i]);
-      bbox_per_layer.push_back(feats[i + 1]);
-    }
-    int64_t B = cls_per_layer[0].size(0);
-    std::vector<std::vector<losses::RFDetrTarget>> targets(B);
-    // Dataset emits targets in pixel coords [0, imgsz] (post-letterbox).
-    // RFDetr Hungarian loss expects normalized cxcywh in [0, 1].
-    const float inv = (imgsz > 0) ? (1.0f / static_cast<float>(imgsz)) : 1.0f;
-    if (tgt.numel() > 0) {
-      auto cpu = tgt.detach().to(torch::kCPU).contiguous();
-      auto a   = cpu.accessor<float, 2>();
-      for (int64_t r = 0; r < cpu.size(0); ++r) {
-        int64_t bi = static_cast<int64_t>(a[r][0]);
-        if (bi < 0 || bi >= B) continue;
-        targets[bi].push_back({static_cast<int64_t>(a[r][1]),
-                                a[r][2] * inv, a[r][3] * inv,
-                                a[r][4] * inv, a[r][5] * inv});
-      }
-    }
-    auto out = losses::rfdetr_set_loss(cls_per_layer, bbox_per_layer, targets);
-    losses::LossOutput o;
-    o.total = out.total;
-    o.box   = out.l1;
-    o.cls   = out.cls;
-    o.dfl   = out.giou;
-    return o;
   }
 };
 
@@ -702,7 +649,7 @@ void TrainerT<M>::run() {
   // warmup_epochs=3 default assumes 100+ epochs of training; for the
   // short 2–10 epoch budgets common in fine-tuning, 50% of training
   // spent in warmup leaves the effective LR <10% of `lr0` for the
-  // entire run, which is what caused DETR/v26 fine-tuning to look
+  // entire run, which is what caused v26 fine-tuning to look
   // "stuck" — convergence was fine but LR was wasted.
   int          warmup_target = std::max(100, steps * cfg_.warmup_epochs);
   int          warmup_cap    = std::max(100, total_steps / 10);
@@ -938,6 +885,5 @@ template class TrainerT<models::Yolo11Detect>;
 template class TrainerT<models::Yolo12Detect>;
 template class TrainerT<models::Yolo13Detect>;
 template class TrainerT<models::Yolo26Detect>;
-template class TrainerT<models::RFDetr>;
 
 }  // namespace yolocpp::engine

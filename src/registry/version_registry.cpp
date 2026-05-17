@@ -35,8 +35,6 @@
 #include "yolocpp/models/yolo13.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
-#include "yolocpp/models/rfdetr.hpp"
-#include "yolocpp/inference/rfdetr_predictor.hpp"
 
 #include <filesystem>
 #include <opencv2/imgcodecs.hpp>
@@ -914,7 +912,7 @@ VersionAdapter make_v26() {
     //      gradient and overshoots to deeply negative within 30 steps.
     //   2. `warmup_bias_lr=0.1` — boosts biases 10× during warmup,
     //      compounding the overshoot.
-    // Override both to DETR/STAL-appropriate values. Caller can still
+    // Override both to STAL-appropriate values. Caller can still
     // pass `--lr0 <value>` to opt back into a higher rate.
     engine::TrainConfig tc = cfg;
     if (std::abs(tc.lr0 - 0.01) < 1e-9) {
@@ -954,178 +952,7 @@ VersionAdapter make_v26() {
   return a;
 }
 
-// ─── RF-DETR (#65) ───────────────────────────────────────────────────────
-// Scaffold-only adapter. Every hook routes to the throw-stubs in
-// `models::RFDetr` which surface "not yet implemented — see #65X"
-// rather than silently producing wrong output. Once #65A..#65L
-// land slice by slice, each hook gets a real implementation; the
-// registry surface itself doesn't need to change.
-VersionAdapter make_rfdetr() {
-  VersionAdapter a;
-  a.version_id              = "rfdetr";
-  a.display_name            = "rfdetr";
-  a.upstream_year           = "2025";
-  a.default_export_basename = "rfdetr";
-  a.supported_tasks         = {"detect", "segment"};
-  a.default_imgsz = [](const std::string& scale, const std::string& task) {
-    if (task == "classify") return 224;  // not supported, but keep symmetry
-    auto s = models::rfdetr_scale_from_letter(scale);
-    return models::rfdetr_default_imgsz(s);
-  };
-  // Every hook below constructs an RFDetr / RFDetrSegment holder and
-  // calls into a method that throws. Caller gets a clear error
-  // pointing at the slice that owns the missing piece. This is the
-  // honest version of "scaffolded" — the dispatch surface compiles
-  // and links, but no path silently mis-loads weights or returns
-  // garbage detections.
-  a.export_onnx = [](const std::string& weights, const std::string& scale,
-                      int nc, const std::string& task,
-                      const std::string& path,
-                      const serialization::OnnxExportConfig& cfg) {
-    (void)weights; (void)nc; (void)path; (void)cfg;
-    if (task == "segment") {
-      models::RFDetrSegment m(models::rfdetr_scale_from_letter(scale), nc);
-      m->load_from_state_dict({});  // throws
-    } else {
-      models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
-      m->load_from_state_dict({});  // throws
-    }
-    throw std::runtime_error("rfdetr export_onnx: scaffolded only — see #65I");
-  };
-  a.predict_to_file = [](const std::string& weights, const std::string& src,
-                          const std::string& out_path, int imgsz,
-                          const std::string& device,
-                          const std::string& scale, int nc,
-                          const inference::NMSConfig& nm) {
-    auto rfscale = models::rfdetr_scale_from_letter(scale);
-    models::RFDetr m(rfscale, nc);
-    if (!weights.empty()) {
-      m->load_from_upstream_pt(weights, /*strict=*/false);
-    }
-    auto dev = torch::Device(torch::kCPU);
-    if (device == "cuda" && torch::cuda::is_available())
-        dev = torch::Device(torch::kCUDA);
-    m->to(dev);
-    m->eval();
-
-    auto bgr = cv::imread(src);
-    if (bgr.empty())
-        throw std::runtime_error("predict_to_file: cannot read source: " + src);
-    // RF-DETR per-variant resolution. Each of the 12 variants has
-    // its own pretrained input size baked into `RFDetrScale.resolution`
-    // (n=384, s=512, m=576, b=560, l=704, seg-n=368, seg-s=512,
-    // seg-m=576, seg-l=672, seg-xl=624, seg-xxl=768, seg-prv=432).
-    // The windowed-attention embeddings layer requires the input
-    // dims to be divisible by `patch_size × num_windows`. If the
-    // caller supplies `--imgsz N`, honour it iff it satisfies that
-    // constraint; otherwise fall back to the variant default.
-    int default_side = models::rfdetr_default_imgsz(rfscale);
-    int side = default_side;
-    if (imgsz > 0 && imgsz != default_side) {
-      auto& bcfg = yolocpp::models::rfdetr::dinov2_cfg_for(
-          rfscale.upstream_id, rfscale.patch_size, rfscale.pretrain_grid,
-          rfscale.backbone_embed);
-      int stride = bcfg.patch_size * std::max(1, bcfg.num_windows);
-      if (imgsz % stride == 0) {
-        side = imgsz;
-      } else {
-        std::cerr << "[warn] rfdetr-" << rfscale.upstream_id
-                  << ": --imgsz=" << imgsz
-                  << " not divisible by patch×num_windows=" << stride
-                  << "; falling back to variant default "
-                  << default_side << "\n";
-      }
-    }
-    auto dets = inference::rfdetr_predict_image(
-        m, bgr, side, dev, nm.conf_thresh, /*max_det=*/300);
-
-    // Render annotated boxes onto the source image.
-    if (!out_path.empty()) {
-      auto img = bgr.clone();
-      for (const auto& d : dets) {
-        cv::rectangle(img,
-                       cv::Point(static_cast<int>(d.x1), static_cast<int>(d.y1)),
-                       cv::Point(static_cast<int>(d.x2), static_cast<int>(d.y2)),
-                       cv::Scalar(0, 255, 0), 2);
-        std::ostringstream lab;
-        lab.precision(2); lab << std::fixed << "cls=" << d.cls
-            << " " << d.conf;
-        cv::putText(img, lab.str(),
-                     cv::Point(static_cast<int>(d.x1),
-                                std::max(0, static_cast<int>(d.y1) - 4)),
-                     cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                     cv::Scalar(0, 255, 0), 1);
-      }
-      std::filesystem::create_directories(
-          std::filesystem::path(out_path).parent_path());
-      cv::imwrite(out_path, img);
-    }
-    return dets;
-  };
-  a.run_val = [](const std::string&, const std::string& scale, int nc,
-                  datasets::YoloDataset&, const torch::Device&) {
-    models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
-    m->load_from_state_dict({});  // throws via #65D
-    return VersionAdapter::ValResult{};
-  };
-  a.run_train_detect = [](const std::string& weights, const std::string& scale,
-                           int nc, datasets::YoloDataset ds,
-                           const engine::TrainConfig& tc) {
-    auto rfscale = models::rfdetr_scale_from_letter(scale);
-    models::RFDetr m(rfscale, nc);
-    if (!weights.empty()) {
-      m->load_from_upstream_pt(weights, /*strict=*/false);
-    }
-    // Same imgsz validation as the predict path: the windowed-
-    // attention embedding requires the input dim to be a multiple of
-    // patch_size × num_windows. If the caller's --imgsz doesn't meet
-    // that constraint, fall back to the variant default rather than
-    // letting the first forward crash with `shape '[B,4,11,4,11,384]'
-    // invalid for input of size N`.
-    engine::TrainConfig tc_eff = tc;
-    int default_side = models::rfdetr_default_imgsz(rfscale);
-    if (tc_eff.imgsz > 0 && tc_eff.imgsz != default_side) {
-      auto& bcfg = yolocpp::models::rfdetr::dinov2_cfg_for(
-          rfscale.upstream_id, rfscale.patch_size, rfscale.pretrain_grid,
-          rfscale.backbone_embed);
-      int stride = bcfg.patch_size * std::max(1, bcfg.num_windows);
-      if (tc_eff.imgsz % stride == 0) {
-        // user-supplied imgsz is valid for this variant → keep it
-      } else {
-        std::cerr << "[warn] rfdetr-" << rfscale.upstream_id
-                  << " train: --imgsz=" << tc_eff.imgsz
-                  << " not divisible by patch×num_windows=" << stride
-                  << "; falling back to variant default "
-                  << default_side << "\n";
-        tc_eff.imgsz = default_side;
-      }
-    }
-    // DETR-style models diverge fast at the YOLO-default lr0=0.01.
-    // If the user didn't override (cfg comes in with the default
-    // 0.01), drop to 1e-4 which matches upstream rf-detr training.
-    if (std::abs(tc_eff.lr0 - 0.01) < 1e-9) {
-      std::cerr << "[info] rfdetr-" << rfscale.upstream_id
-                << " train: lr0=0.01 (YOLO default) → 1e-4 "
-                   "(DETR-appropriate). Pass --lr0 to override.\n";
-      tc_eff.lr0 = 1e-4;
-    }
-    engine::TrainerRFDetr t(m, std::move(ds), tc_eff);
-    t.run();
-  };
-  a.benchmark_pt = [](const engine::BenchConfig& cfg, const cv::Mat&,
-                      const std::string& scale) {
-    models::RFDetr m(models::rfdetr_scale_from_letter(scale), cfg.nc);
-    m->forward_eval(torch::zeros({1, 3, cfg.imgsz, cfg.imgsz}));  // throws
-    return engine::BenchResult{};
-  };
-  a.make_frame_predictor = [](const std::string&, const std::string& scale,
-                               int nc, int, const std::string&) {
-    models::RFDetr m(models::rfdetr_scale_from_letter(scale), nc);
-    m->forward_eval(torch::zeros({1, 3, 32, 32}));  // throws via #65C
-    return std::unique_ptr<inference::FramePredictor>{};
-  };
-  return a;
-}
+// (RF-DETR adapter removed; DETR-family models moved to a separate repo.)
 
 }  // namespace
 
@@ -1145,7 +972,6 @@ void register_all_versions() {
     r.register_version(make_v12());
     r.register_version(make_v13());
     r.register_version(make_v26());
-    r.register_version(make_rfdetr());
   });
 }
 

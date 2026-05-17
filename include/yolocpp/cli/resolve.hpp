@@ -39,12 +39,11 @@ std::vector<std::string> known_dataset_names();
 std::string scale_from_filename(const std::string& path);
 
 // Infer YOLO version family from a weights filename. Recognised values:
-//   "v3", "v5", "v6", "v7", "v8", "v9", "v10",
+//   "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
 //   "v11" (upstream official, ships as `yolo11*.pt` — no 'v'),
 //   "v12" (Tian et al., unofficial — `yolo12*.pt`),
 //   "v13" (Lei et al., unofficial — `yolo13*.pt`),
-//   "v26" (upstream official, ships as `yolo26*.pt` — no 'v'),
-//   "rtdetr".
+//   "v26" (upstream official, ships as `yolo26*.pt` — no 'v').
 // Returns "v8" as a permissive default — most anchor-free weights in
 // the wild load through the v8 path since their Detect head shares the
 // same DFL layout.

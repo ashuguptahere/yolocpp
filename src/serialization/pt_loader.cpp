@@ -790,7 +790,7 @@ StateDict load_flat_state_dict(const std::string& pt_path,
 
   auto state = unwrap(*sub);
   StateDict out;
-  // Try flat-dict first (RF-DETR / DETR family).
+  // Try flat-dict first (checkpoint saved as a flat state_dict).
   if (flatten_flat_dict(state, out)) return out;
   // Fall through to module-shaped layout.
   flatten_module(state, /*prefix=*/"", out);

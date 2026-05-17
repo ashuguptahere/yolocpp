@@ -127,12 +127,10 @@ set (v1, v2, anything between v13 and v26) are intentionally not supported.
 | **yolo12** | 2025 | Tian et al., upstream-hosted               | Attention-centric: A2C2f (Area-Attention C2f) with windowed global attention, gamma-gated outer residual at l/x | ✅ **detect end-to-end** — train / val / predict / ONNX + TRT export across all 5 scales (n/s/m/l/x). Forward parity-clean (5/5/5/6/5 detections matching Python on bus.jpg). ONNX max\|Δ\| ≤ 1.8e-7 vs Python through onnxruntime. Task heads (segment / pose / obb / classify) ⏳ **planned future session** — upstream ships only detect weights for v12, so we'll train our own task heads on COCO. |
 | **yolo13** | 2025 | Lei et al. (iMoonLab fork)                 | HyperACE (hypergraph adaptive correlation enhancement) + FullPAD distribution + DSConv depthwise-separable variants + V13AAttn (separate qk/v convs, k=5 pe) | ✅ **detect end-to-end** — train / val / predict / ONNX + TRT export across n/s/l/x (iMoonLab does not ship `m`). Forward cls-channel max\|Δ\| ≤ 7.6e-10 vs iMoonLab Python on all 4 scales. ONNX max\|Δ\| ≤ 1.8e-7. Task heads ⏳ **planned future session** — iMoonLab ships only detect weights, so we'll train our own task heads on COCO. |
 | **yolo26** | 2025 | **upstream (official, preview)**           | DFL-free Detect head, end-to-end NMS-free inference, ProgLoss + STAL assigner — edge/mobile-first | ✅ **full** — train / val / predict / ONNX + TRT export across 5 scales × 5 tasks |
-| RT-DETR    | 2023 | Baidu (official)                           | HGNetv2 + AIFI + deformable-attention decoder; transformer-based, NMS-free | 🟡 architecture probed (Phase 4 — transformers) |
 
-Stub status (🟡) means the header / source files exist with the right
-class name and namespace, the build links cleanly, and `mode=predict`
-will produce a clear `not implemented yet` runtime error pointing at the
-header that explains the design plan.
+DETR-family models (RT-DETR, RF-DETR) used to live here in a scaffold
+state; they have been moved to a separate repository so this repo can
+stay focused on the closed set of twelve YOLO versions above.
 
 Pending status (⏳) means the architecture is end-to-end for detect, but
 task variants (segment/pose/obb/classify) are not yet trained because

@@ -103,13 +103,6 @@ set_tests_properties(test_v4_e2e test_v6_e2e test_v7_e2e test_val_v3_v10
 yolocpp_add_test(test_yolo11        test_yolo11.cpp)
 yolocpp_add_test(test_yolo26_train  test_yolo26_train.cpp)
 yolocpp_add_test(test_v13_ada       test_v13_ada.cpp)
-yolocpp_add_test(test_rfdetr_backbone test_rfdetr_backbone.cpp)
-yolocpp_add_test(test_rfdetr_forward  test_rfdetr_forward.cpp)
-yolocpp_add_test(test_rfdetr_loss     test_rfdetr_loss.cpp)
-yolocpp_add_test(test_rfdetr_decode   test_rfdetr_decode.cpp)
-yolocpp_add_test(test_rfdetr_pt_load  test_rfdetr_pt_load.cpp)
-yolocpp_add_test(test_rfdetr_parity_dump test_rfdetr_parity_dump.cpp)
-yolocpp_add_test(test_rfdetr_topk_probe  test_rfdetr_topk_probe.cpp)
 yolocpp_add_test(test_v13_full      test_v13_full.cpp)
 set_tests_properties(test_v13_full PROPERTIES
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"

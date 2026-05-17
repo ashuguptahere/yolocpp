@@ -541,12 +541,6 @@ template metrics::mAPResult validate<models::Yolo13Detect>(
 template ValidationOutput validate_with_records<models::Yolo13Detect>(
     models::Yolo13Detect&, const datasets::YoloDataset&, torch::Device,
     inference::NMSConfig);
-template metrics::mAPResult validate<models::RFDetr>(
-    models::RFDetr&, const datasets::YoloDataset&, torch::Device,
-    inference::NMSConfig);
-template ValidationOutput validate_with_records<models::RFDetr>(
-    models::RFDetr&, const datasets::YoloDataset&, torch::Device,
-    inference::NMSConfig);
 
 // v3/v4/v6/v7/v9/v10 — predict was wired earlier; val plugs in to the same
 // templated runner since each holder exposes `forward_eval(x) → [B,4+nc,A]`

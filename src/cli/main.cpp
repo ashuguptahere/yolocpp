@@ -57,9 +57,8 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
                   "dataset root or data.yaml path");
   app.add_option("--out,-o",     out,         "output path / directory");
   app.add_option("--imgsz,-i",   imgsz,
-                  "input image size (default 640; for rfdetr, falls back to "
-                  "the variant's pretrained resolution if not divisible by "
-                  "patch×num_windows). Use space-separated form: --imgsz 640");
+                  "input image size (default 640). Use space-separated form: "
+                  "--imgsz 640");
   app.add_option("--epochs,-e",  epochs,      "epochs (train)");
   app.add_option("--batch,-b",   batch_size,  "batch size (train)");
   app.add_option("--lr0",        lr0,         "initial LR (train)");

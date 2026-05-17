@@ -3,7 +3,7 @@
 Full **(version × variant)** sweep on a 5-class screen-detection dataset
 (`phone, laptop, tablet, tv, computer`; 2465 train / 308 val / 309 test
 images). Run via `scripts/screen_variant_sweep.sh`. 3 epochs per
-variant (rfdetr: 2 epochs), `--seed 42`, val mAP picks the best epoch.
+variant, `--seed 42`, val mAP picks the best epoch.
 
 ## Setup fixes that landed this session
 
@@ -97,11 +97,6 @@ across families at a single capacity point.
 | v13l     | 0.17 | 0.08 | 64 | OOM @ b=16 → retried b=8 |
 | v13x     | 0.32 | 0.20 | 89 | OOM @ b=16 → retried b=8 |
 | **v26{n,s,m,l,x}** | **0.00** | **0.00** | — | STAL+ProgLoss cold-start collapse — see Known issues |
-| **rfdetr_n** | 0.03 | 0.006 | 55 | 2 epochs; needs 50+ for usable mAP |
-| rfdetr_s | 0.001 | 0.0002 | 56 | unstable at this epoch budget |
-| rfdetr_m | 0.04 | 0.009 | 57 | |
-| rfdetr_b | FAIL | — | — | Windowed-attention shape mismatch — variant needs its native imgsz |
-| rfdetr_l | 0.003 | 0.0005 | — | retried with `--lr0 0.0001` after default `lr0=0.01` exploded box loss to 1e13 |
 
 ## Known issues — not regressions, pre-existing in upstream codebase
 
@@ -134,22 +129,10 @@ sessions:
    `box_gain`. Possible fix: clamp `progress` to keep `iou^prog`
    above some floor during the first epoch, or hard-assign top-k
    positives per GT until alignment is non-trivial.
-4. **`rfdetr-base` (and `-medium` at `--imgsz 640`)** fail the
-   windowed-attention divisibility check. Symptom:
-   `shape '[2, 4, 11, 4, 11, 384]' is invalid for input of size 1555200`.
-   The base variant is calibrated to a non-640 native resolution;
-   without `--imgsz`, the registry adapter is supposed to fall back
-   to the variant's pretrained size (per CHANGELOG 0.61.0), but the
-   fallback isn't engaged on the train path for the base scale.
-5. **`rfdetr-large` defaults** to `lr0=0.01` (the YOLO default) which
-   makes box loss explode to ~1e13 within a few hundred steps. DETR-
-   style models need `lr0` ~ 1e-4; the registry should override the
-   YOLO default for rfdetr.
 
 ## How to reproduce
 
 ```bash
 bash scripts/screen_variant_sweep.sh    # ~2.5h on a single 32 GB H100/L40
-bash scripts/screen_rfdetr_sweep.sh     # rfdetr; queued behind the YOLO sweep
 column -ts, /tmp/screen_sweep/RESULTS.csv
 ```

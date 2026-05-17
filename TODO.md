@@ -336,38 +336,33 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 
 ---
 
-## 2B. RF-DETR family (#65 — landed scaffold 2026-05-02 in 0.31.0)
+## 2B. RF-DETR / RT-DETR family — REMOVED 2026-05-17
 
-First non-YOLO architecture. Transformer-based DETR-family detector
-(encoder/decoder + object queries + Hungarian-matching set loss +
-DINOv2 / LW-DETR backbone). Scaffold is registered in the registry
-under `version_id="rfdetr"`; every CLI / API path dispatches to a
-slice-tagged throw until the corresponding sub-task lands. Variants:
-`rfdetr-{n,s,b,m,l}.pt` for detect, `rfdetr-{n,s,b,m,l}-seg.pt` for
-segment.
+The entire `rfdetr` / `rtdetr` / DETR-family scaffold (#65 and its
+sub-tasks #65A..#65L) was removed from this repo in 0.84.0. The
+maintainer is moving DETR-family work to a separate repository so
+yolocpp stays focused on the closed set of twelve YOLO versions.
 
-| # | scope | priority | session-cost estimate | blockers |
-|---|-------|----------|------------------------|----------|
-| #65   | Top-level RF-DETR family (umbrella for #65A..#65L). Scaffold landed 0.31.0; all entry points throw with slice tags. | high | many sessions | — |
-| ~~#65A~~  | ~~Backbones: DINOv2 (ViT-L) + LW-DETR-{tiny,small,base,medium}.~~ Landed 0.32.0 — `models/rfdetr_backbone.{hpp,cpp}` shared `PatchEmbed`/`Attention`/`ViTBlock`/`ViTBackbone`; submodule names match upstream so the #65D converter is a prefix rename. `tests/test_rfdetr_backbone.cpp` pins the n/s/b/m forward shapes (DINOv2-large skipped on memory). | done | — | — |
-| ~~#65B~~  | ~~Transformer encoder (multi-scale deformable attention, sine pos-emb).~~ Landed 0.33.0 — `rfdetr_encoder.{hpp,cpp}` MSDeformAttn as a portable grid_sample composition + per-level 1×1 input proj + 2D sine pos-embed. `tests/test_rfdetr_encoder.cpp` pins n/s output shapes (b/m/l skipped on memory). | done | — | — |
-| ~~#65C~~  | ~~Decoder + object-query head.~~ Landed 0.34.0 — `rfdetr_decoder.{hpp,cpp}` MLP/DecoderLayer/DetrHead; vanilla self-attn + MSDeformAttn cross-attn + iterative bbox refinement; `[B, 4+nc, Q]` YOLO contract. `forward_eval` end-to-end; `forward_train` returns per-layer cls+bbox for #65F. Tests: `test_rfdetr_forward.cpp`. | done | — | — |
-| ~~#65D~~  | ~~`.pt` converter — investigation phase.~~ Landed 0.38.0 — downloaded all 12 official 1.6.5 weights, dumped per-key shape inventories, wrote `docs/rfdetr_arch.md` ground-truth spec, registered all 12 variants in `RFDetrScale` with real hyperparameters, taught the CLI resolver to recognise `rf-detr-*.pth` / `rf-detr-seg-*.pt`. **The actual converter is blocked on the architecture rewrite** since the scaffold's module layout doesn't match upstream key names. Tracked as #65A2..F2 below. | done (investigation) | — | — |
-| ~~#65A2~~ | ~~Replace `rfdetr_backbone.{hpp,cpp}` with HF-DINOv2 windowed-attn.~~ Landed 0.40.0 — full Dinov2{PatchEmbeddings,Embeddings,SelfAttention,SelfOutput,Attention,LayerScale,MLP,Layer,Encoder,Model,Wrapper,WrapperOuter} with separate Q/K/V, layer_scale1/2, 2D-interpolated pos embed. RFDetrImpl registers as `backbone.0.encoder.encoder.*` matching upstream key names exactly. **Loader binds 223/487 keys** from `rf-detr-base.pth` (full backbone). | done | — | — |
-| ~~#65B2~~ | ~~Add `rfdetr_projector.{hpp,cpp}` (CSP-style).~~ Landed 0.41.0 — `ConvBN/ProjBottleneck/ProjStage0/Projector/BackboneSlot`; `n_proj_stages=2` for large; per-variant `pretrain_grid`+`backbone_embed`. **Loader binds 248-273 / 487-600 keys across all 12 variants**, full backbone+projector. CLI scale resolver now extracts `rf-detr-large` etc. correctly. | done | — | — |
-| ~~#65C2~~ | ~~Rewrite decoder.~~ Landed 0.42.0 — `rfdetr_transformer.{hpp,cpp}` FusedMHA / MSDeformAttn1L / RFDetrMLP / RFDetrDecoderLayer / RFDetrDecoder + ref_point_head + shared cls/bbox heads + refpoint_embed/query_feat embeddings. **Detect-n/s/m/b bind 100% from upstream**; large needs 4-level cross-attn (#65C2-large follow-up). | done | — | — |
-| ~~#65D2~~ | ~~Two-stage encoder-output.~~ Landed 0.42.0 — `RFDetrTransformer` siblings `enc_output / enc_output_norm / enc_out_class_embed / enc_out_bbox_embed` (13 entries each, group_detr). | done | — | — |
-| #65C2-l | Large variant cross-attn dims: 4-level × 3-point deformable (currently 1×2); plus extra `stages_sampling` projector block. | medium | 0.25 session | — |
-| #65E2 | `rfdetr_weights.{hpp,cpp}` — direct loader from upstream `.pt` / `.pth`. **Partial:** loader landed in 0.39.0 (handles flat-dict pickle, runs full `--mode predict` path through random-init scaffold; reports matched/unmatched coverage). Promotion to `strict=true` blocked on #65A2..D2 module renames. | partial (0.39.0) | 0.25 session remaining | #65A2..D2 |
-| ~~#65F2~~ | ~~Real-arch forward end-to-end.~~ **Done 0.60.0** — full backbone + projector + two-stage + iterative-decoder + heads + NMS-free decode produces real detections from upstream `rf-detr-*.pth` weights. detect-base: 5/5 dets on bus.jpg at conf=0.7. fp64 enc-output for deterministic topk. CLI hook now actually wires through `rfdetr_predict_image`. n/s/m/b verified working; large pending #65C2-l. | done | — | — |
-| ~~#65E~~  | ~~Predict path / NMS-free decode.~~ Landed 0.36.0 — `inference/rfdetr_predictor.{hpp,cpp}::rfdetr_decode` (threshold + top-K) + `rfdetr_predict_image` (letterbox → forward → decode → unscale). Tests: `test_rfdetr_decode.cpp` against synthetic forward tensor. Registry hook still throws at converter (#65D). | done | — | — |
-| ~~#65F~~  | ~~Hungarian-matching set loss.~~ Landed 0.35.0 — `losses/hungarian.{hpp,cpp}` Jonker-Volgenant rectangular assignment + `losses/rfdetr_loss.{hpp,cpp}::rfdetr_set_loss` (focal cls + L1 + GIoU, auxiliary loss across decoder layers, last-layer matching). Tests: `test_rfdetr_loss.cpp`. Independent of #65D — works against random-init forward. | done | — | — |
-| ~~#65G~~  | ~~Trainer integration.~~ Landed 0.37.0 — `LossTraits<RFDetr>` specialization in `engine/trainer.cpp` (de-interleaves flat forward_train, converts YOLO `[N,6]` tgt → per-image RFDetrTarget lists). `TrainerRFDetr` typedef. `forward_eval` now returns xyxy-pixels per YOLO contract. Registry hook calls TrainerRFDetr::run instead of throwing. | done | — | — |
-| #65H  | Validator + per-area mAP (S/M/L per #54). Wire `run_val` adapter hook. Drop-in via existing `engine::Validator` once forward_eval lands. | high | 0.25 session | #65E + #54 mAP S/M/L |
-| #65I  | ONNX emitter: `src/serialization/rfdetr_onnx.cpp::export_rfdetr_onnx`. Standard transformer ops (MatMul, Softmax, Add, LayerNorm, Gather, Gemm) — mostly reusable; deformable-attn op needs a custom decomposition into per-level grid_sample (no `MultiscaleDeformableAttention` op in stock onnxruntime). Wire `export_onnx` adapter hook. | high | 1 session | #65D |
-| #65J  | TRT pipeline: route through shared `build_trt_engine`; verify TF32 on Blackwell sm_120 doesn't regress query attention numerics. Wire `benchmark_pt` adapter hook. | high | 0.5 session | #65I |
-| #65K  | Segment variant: per-query mask coefficients + shared proto bank (à la YOLACT, mirrored from YOLO's segment head); wire `RFDetrSegment` forward + load_state_dict + a `-seg` filename suffix. | high | 1 session | #65E + segment-task infra |
-| #65L  | Per-variant parity smokes: `tests/test_rfdetr_e2e.cpp` (SKIP-gated when weights missing) + ONNX-vs-Python forward comparison through onnxruntime CPU on a fixed `arange/(N-1)` input; cls max\|Δ\| ≤ 1e-3 detect, ≤ 5e-3 segment. | medium | 0.25 session | #65I,K |
+Removed:
+
+- Sources: `src/models/rfdetr*.cpp`, `src/inference/rfdetr_predictor.cpp`,
+  `src/serialization/rfdetr_weights.cpp`, `src/losses/rfdetr_loss.cpp`,
+  `src/losses/hungarian.cpp` and all matching headers.
+- Tests: every `tests/test_rfdetr_*.cpp`.
+- Registry adapter `make_rfdetr()` + its `register_version` call.
+- Trainer specialisation `LossTraits<models::RFDetr>` and the
+  `TrainerRFDetr` typedef + explicit `TrainerT<RFDetr>` instantiation.
+- Validator `validate<RFDetr>` / `validate_with_records<RFDetr>`
+  template instantiations.
+- CLI: rfdetr/rtdetr branches in `resolve.cpp` (regex + dispatch),
+  the rfdetr-specific imgsz alignment block in `commands.cpp::cmd_train`,
+  and rfdetr/rtdetr from the version whitelist in
+  `cmd_predict_task`.
+- Scripts: `scripts/screen_rfdetr_sweep.sh`.
+- Docs: `docs/rfdetr_arch.md`.
+
+Do NOT reintroduce any of the above. The `version_from_filename`
+resolver no longer recognises `rfdetr` / `rtdetr` prefixes.
 
 ---
 
@@ -399,9 +394,6 @@ segment.
 
 ### yolo12 / yolo13
 - ⏳ Task heads (segment / pose / obb / classify) — neither the upstream maintainer nor iMoonLab publishes task weights upstream. **Planned future session:** train our own on COCO using the existing templated `Trainer`. v12 = 5 scales × 4 tasks = 20 runs; v13 = 4 scales × 4 tasks = 16 runs. v12 task scaffolding exists in `src/models/yolo12_tasks.cpp`; v13 task module declarations not yet written.
-
-### RT-DETR
-- 🟡 Architecture probed (Phase 4 — transformers). Header / source files exist; `mode=predict` returns a clear "not implemented yet" error pointing at the design plan.
 
 ---
 

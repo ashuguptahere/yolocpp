@@ -123,12 +123,6 @@ add_library(yolocpp_core
   src/models/yolo13.cpp
   src/models/yolo26.cpp
   src/models/yolo26_tasks.cpp
-  src/models/rfdetr.cpp
-  src/models/rfdetr_backbone.cpp
-  src/models/rfdetr_projector.cpp
-  src/models/rfdetr_transformer.cpp
-  src/models/rfdetr_encoder.cpp
-  src/models/rfdetr_decoder.cpp
   src/inference/task_predictors.cpp
   src/tasks/classify_train.cpp
   src/tasks/segment_train.cpp
@@ -142,13 +136,11 @@ add_library(yolocpp_core
   src/serialization/yolov10_weights.cpp
   src/serialization/yolov3_weights.cpp
   src/serialization/onnx_export.cpp
-  src/serialization/rfdetr_weights.cpp
   src/serialization/trt_export.cpp
   src/inference/trt_predictor.cpp
   src/inference/letterbox.cpp
   src/inference/nms.cpp
   src/inference/predictor.cpp
-  src/inference/rfdetr_predictor.cpp
   src/datasets/coco_dataset.cpp
   src/datasets/flat_dataset.cpp
   src/datasets/voc_dataset.cpp
@@ -158,8 +150,6 @@ add_library(yolocpp_core
   src/losses/yolo6_loss.cpp
   src/losses/yolo7_loss.cpp
   src/losses/yolo10_loss.cpp
-  src/losses/hungarian.cpp
-  src/losses/rfdetr_loss.cpp
   src/cli/api.cpp
   src/cli/commands.cpp
   src/cli/data_yaml.cpp
