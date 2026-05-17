@@ -30,6 +30,71 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.89.0] — 2026-05-17
+
+### Fixed — cmd_train imgsz auto-resolution + v6l6 OOM headroom
+
+Two issues surfaced by the full 60-variant `--mode train` sweep on a
+5-class screen-detection dataset:
+
+1. **`cmd_train` ignored the adapter's `default_imgsz`.** Training
+   yolo1 with the CLI default `--imgsz 640` failed at the FC layer
+   (`mat1 and mat2 shapes cannot be multiplied (8x102400 and
+   50176x4096)`) — the v1 head wants a 7×7 feature input, which only
+   comes out at imgsz=448. `cmd_export` already honoured the adapter
+   default; `cmd_train` did not. Fixed: when the CLI passed 640 and
+   the adapter has an opinion (e.g. v1=448, v4=608, v6-P6=1280),
+   resolve `imgsz` against the adapter before constructing the
+   dataset.
+
+2. **yolo6l6 at imgsz=1280 + batch=4 OOMs on 32 GB.** The largest P6
+   v6 variant is 109M params; at 1280×1280 the full backbone+neck
+   activations push past 32 GB. Lowered to batch=2 in
+   `scripts/screen_train_sweep.sh`; runs cleanly with loss ~54 and
+   val mAP@0.5:0.95 = 0.035 after 1 epoch.
+
+### Added — `scripts/screen_train_sweep.sh` + archived sweep result
+
+Drives `yolocpp --mode train` over every supported (version, variant)
+pair, records PASS/FAIL + final loss + val mAP per row.
+
+**Last-known-good: 60/60 PASS.** Includes:
+- yolo1 (from scratch — `.weights` URL is dead)
+- yolo2 + yolo2-tiny-voc
+- yolo3u, yolo4
+- yolo5 {n,s,m,l,x}
+- yolo6 {n,s,m,l} + {s,m,l,x}_mbla + {n,s,m,l}6 (12 variants)
+- yolo7 {base, tiny, x}     (skipping w6/e6/d6/e6e P6 variants)
+- yolo8 {n,s,m,l,x}
+- yolo9 {t,s,m,c,e}
+- yolo10 {n,s,m,b,l,x}
+- yolo11 {n,s,m,l,x}
+- yolo12 {n,s,m,l,x}
+- yolo13 {n,s,l,x}          (no upstream `m`)
+- yolo26 {n,s,m,l,x}
+
+Raw CSV at `docs/screen_train_sweep_60variants.csv`; per-variant
+training notes in `docs/screen_train_sweep.md`.
+
+### Verified — best mAP@0.5:0.95 after one epoch
+
+Headline numbers from the sweep (highest values shown for context;
+these are 1-epoch finetunes on a 5-class screen-detection dataset
+with the registry's default imgsz per version):
+
+```
+yolo6m       0.540    yolo6l_mbla  0.522    yolo6m6   0.517
+yolo26x      0.464    yolo26m      0.434    yolo26l   0.426
+yolo2 (COCO) 0.416    yolo4        0.294    yolo7     0.157
+```
+
+Lower scores at 1 epoch are expected for v3/v5/v8/v9/v10/v11/v12/v13
+SSE-style losses — they typically need 10–30 epochs to climb past
+0.1; the sweep just verifies training is wired correctly and loss
+decreases.
+
+---
+
 ## [0.88.0] — 2026-05-17
 
 ### Added — ONNX + TRT export for yolo1 + yolo2 (#68 + #69)

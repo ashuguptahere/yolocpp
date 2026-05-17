@@ -344,6 +344,30 @@ int cmd_train(const std::string& root, const std::string& names_csv,
     if (!fs_scale.empty()) scale_s = fs_scale;
   }
 
+  // Adapter-driven imgsz fallback: when the CLI passed the default
+  // 640 and the adapter has an opinion (e.g. v1=448, v4=608, v6-P6=
+  // 1280), honour the adapter. Without this, training v1 with default
+  // 640 fails at the FC layer because the backbone outputs 10×10
+  // instead of 7×7. Mirrors `cmd_export`'s same imgsz dispatch.
+  {
+    std::string v_h = init_weights.empty()
+        ? "" : yolocpp::cli::version_from_filename(init_weights);
+    if (imgsz == 640 && !v_h.empty()) {
+      yolocpp::registry::register_all_versions();
+      if (const auto* adapter =
+              yolocpp::registry::Registry::instance().find(v_h);
+          adapter && adapter->default_imgsz) {
+        int v = adapter->default_imgsz(scale_s, "detect");
+        if (v > 0 && v != imgsz) {
+          std::cerr << "[cmd_train] adapter default_imgsz=" << v
+                    << " for version=" << v_h
+                    << " — overriding the 640 default\n";
+          imgsz = v;
+        }
+      }
+    }
+  }
+
   // Format-aware dispatch: `root` accepts every loader the
   // dispatcher knows (#54B → CLI).
   auto train_ds = make_dataset(root, "train", imgsz, names,
@@ -378,6 +402,9 @@ int cmd_train(const std::string& root, const std::string& names_csv,
     // user can run `--mode val` separately on `last.pt`.
   }
 
+  // Extract v_hint from the ORIGINAL init_weights spec (not init_eff
+  // — even if the path doesn't resolve to a file, the bare name
+  // `yolo1` / `yolo2-tiny` carries the version hint).
   std::string v_hint =
       init_weights.empty() ? "" : yolocpp::cli::version_from_filename(init_weights);
 
