@@ -248,6 +248,26 @@ torch::Tensor RFDetrDecoderImpl::forward(torch::Tensor tgt,
   return norm->forward(tgt);
 }
 
+std::vector<torch::Tensor> RFDetrDecoderImpl::forward_aux(
+    torch::Tensor tgt, torch::Tensor refpoints, torch::Tensor memory,
+    int H, int W) {
+  // Same loop as `forward` but emits each layer's output post-LN.
+  // Used to drive auxiliary supervision in `RFDetrImpl::forward_train`.
+  auto sin_emb = gen_sineembed_for_position(
+      refpoints,
+      /*dim=*/static_cast<int>(memory.size(-1)) / 2);
+  auto query_pos = ref_point_head->forward(sin_emb);
+  std::vector<torch::Tensor> outs;
+  const int nl = static_cast<int>(layers->size());
+  outs.reserve(nl);
+  for (int i = 0; i < nl; ++i) {
+    tgt = layers[i]->as<RFDetrDecoderLayerImpl>()->forward(
+        tgt, query_pos, refpoints, memory, H, W);
+    outs.push_back(norm->forward(tgt));
+  }
+  return outs;
+}
+
 // ─── RFDetrEncOutput ────────────────────────────────────────────────────
 
 RFDetrEncOutputImpl::RFDetrEncOutputImpl(int group_detr, int hidden,
@@ -405,7 +425,92 @@ TransformerOutput RFDetrTransformerImpl::forward(
                   .contiguous();
 
   auto out = decoder->forward(tgt, refpoints, memory, H, W);
-  return {out, refpoints};
+  TransformerOutput res;
+  res.decoder_out = out;
+  res.refpoints   = refpoints;
+  return res;
+}
+
+TransformerOutput RFDetrTransformerImpl::forward_aux(
+    torch::Tensor memory_2d, torch::Tensor query_feat_first_group,
+    torch::Tensor refpoint_embed_first_group, int num_queries) {
+  // Run the same encoder-output + topk pipeline as `forward`, but
+  // ask the decoder for every layer's output (post-LN) so the loss
+  // can supervise each. We re-use the existing forward up to the
+  // decoder call to avoid duplicating the (large, fp64-careful)
+  // proposal+topk block; then call the decoder's aux variant.
+  auto B = memory_2d.size(0);
+  int  H = static_cast<int>(memory_2d.size(2));
+  int  W = static_cast<int>(memory_2d.size(3));
+  auto memory = memory_2d.flatten(2).transpose(1, 2).contiguous();
+
+  auto memory_f64 = memory.to(torch::kDouble);
+  auto props = gen_encoder_output_proposals_1l(memory_f64, H, W);
+  auto& output_memory_f64    = props.output_memory;
+  auto& output_proposals_f64 = props.output_proposals;
+
+  auto& eo_lin = *enc_output[0]->as<torch::nn::LinearImpl>();
+  auto eo = torch::matmul(output_memory_f64,
+                            eo_lin.weight.to(torch::kDouble).t())
+              + eo_lin.bias.to(torch::kDouble);
+  auto& ln = *enc_output_norm[0]->as<torch::nn::LayerNormImpl>();
+  auto mean = eo.mean(/*dim=*/-1, /*keepdim=*/true);
+  auto var  = (eo - mean).pow(2).mean(/*dim=*/-1, /*keepdim=*/true);
+  auto eps_v = ln.options.eps();
+  auto out_mem_f64 = (eo - mean) / (var + eps_v).sqrt();
+  out_mem_f64 = out_mem_f64 * ln.weight.to(torch::kDouble) +
+                  ln.bias.to(torch::kDouble);
+
+  auto& cls_lin = *enc_out_class_embed[0]->as<torch::nn::LinearImpl>();
+  auto cls_logits_f64 = torch::matmul(out_mem_f64,
+                                        cls_lin.weight.to(torch::kDouble).t())
+                          + cls_lin.bias.to(torch::kDouble);
+
+  auto& bbox_mlp = *enc_out_bbox_embed[0]->as<RFDetrMLPImpl>();
+  torch::Tensor bbox_delta_f64 = out_mem_f64;
+  int n_bbox_layers = static_cast<int>(bbox_mlp.layers->size());
+  for (int i = 0; i < n_bbox_layers; ++i) {
+    auto& lin = *bbox_mlp.layers[i]->as<torch::nn::LinearImpl>();
+    bbox_delta_f64 = torch::matmul(bbox_delta_f64,
+                                     lin.weight.to(torch::kDouble).t())
+                       + lin.bias.to(torch::kDouble);
+    if (i < n_bbox_layers - 1) bbox_delta_f64 = torch::relu(bbox_delta_f64);
+  }
+
+  auto coord_cxcy = bbox_delta_f64.slice(-1, 0, 2) *
+                        output_proposals_f64.slice(-1, 2, 4) +
+                    output_proposals_f64.slice(-1, 0, 2);
+  auto coord_wh   = bbox_delta_f64.slice(-1, 2, 4).exp() *
+                        output_proposals_f64.slice(-1, 2, 4);
+  auto coord_f64  = torch::cat({coord_cxcy, coord_wh}, -1);
+
+  auto top_scores = std::get<0>(cls_logits_f64.max(-1));
+  int  K = std::min<int>(num_queries, static_cast<int>(top_scores.size(1)));
+  auto sorted = torch::sort(top_scores, /*stable=*/true,
+                              /*dim=*/1, /*descending=*/true);
+  auto topk_idx = std::get<1>(sorted).slice(/*dim=*/1, 0, K);
+  auto idx_4    = topk_idx.unsqueeze(-1).expand({B, K, 4});
+  auto refpoint_embed_ts = torch::gather(coord_f64, /*dim=*/1, idx_4)
+                              .to(torch::kFloat);
+
+  auto subset = refpoint_embed_first_group.unsqueeze(0).expand({B, K, 4})
+                    .contiguous();
+  auto rp_cxcy = subset.slice(-1, 0, 2) *
+                    refpoint_embed_ts.slice(-1, 2, 4) +
+                  refpoint_embed_ts.slice(-1, 0, 2);
+  auto rp_wh   = subset.slice(-1, 2, 4).exp() *
+                  refpoint_embed_ts.slice(-1, 2, 4);
+  auto refpoints = torch::cat({rp_cxcy, rp_wh}, -1);
+
+  auto tgt = query_feat_first_group.unsqueeze(0).expand({B, K, hidden_})
+                  .contiguous();
+  auto outs = decoder->forward_aux(tgt, refpoints, memory, H, W);
+
+  TransformerOutput res;
+  res.aux_outs    = outs;                                  // every layer
+  res.decoder_out = outs.empty() ? torch::Tensor() : outs.back();
+  res.refpoints   = refpoints;
+  return res;
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────

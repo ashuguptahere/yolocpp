@@ -147,6 +147,15 @@ class RFDetrDecoderImpl : public torch::nn::Module {
   // Returns last-layer output [B, Q, C] after final LN.
   torch::Tensor forward(torch::Tensor tgt, torch::Tensor refpoints,
                          torch::Tensor memory, int spatial_h, int spatial_w);
+  // Same forward pass but emits each intermediate layer's output
+  // (each passed through `norm`) in addition to the final. Used by
+  // `forward_train` for auxiliary supervision — standard DETR
+  // practice that gives ~6× the gradient signal (one supervision per
+  // decoder layer) and is critical for short training budgets.
+  std::vector<torch::Tensor> forward_aux(torch::Tensor tgt,
+                                           torch::Tensor refpoints,
+                                           torch::Tensor memory,
+                                           int spatial_h, int spatial_w);
   torch::nn::ModuleList layers{nullptr};
   torch::nn::LayerNorm  norm{nullptr};
   RFDetrMLP             ref_point_head{nullptr};
@@ -170,6 +179,9 @@ TORCH_MODULE(RFDetrEncOutput);
 struct TransformerOutput {
   torch::Tensor decoder_out;   // [B, Q, C] after final LN
   torch::Tensor refpoints;     // [B, Q, 4] cxcywh in [0,1]
+  // When set, per-decoder-layer outputs (each [B, Q, C], post-LN).
+  // Populated only by `forward_aux`; ignored by inference paths.
+  std::vector<torch::Tensor> aux_outs;
 };
 
 class RFDetrTransformerImpl : public torch::nn::Module {
@@ -188,6 +200,12 @@ class RFDetrTransformerImpl : public torch::nn::Module {
                               torch::Tensor query_feat_first_group,
                               torch::Tensor refpoint_embed_first_group,
                               int num_queries);
+  // Aux variant — same as forward() but populates `aux_outs` with
+  // per-decoder-layer outputs for auxiliary supervision.
+  TransformerOutput forward_aux(torch::Tensor memory_2d,
+                                  torch::Tensor query_feat_first_group,
+                                  torch::Tensor refpoint_embed_first_group,
+                                  int num_queries);
   RFDetrDecoder    decoder{nullptr};
   torch::nn::ModuleList enc_output{nullptr};
   torch::nn::ModuleList enc_output_norm{nullptr};

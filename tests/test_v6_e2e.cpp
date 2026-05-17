@@ -61,7 +61,7 @@ int main() {
   nm.iou_thresh  = 0.45f;
   auto dets = inference::predict_v6_to_file(
       pt.string(), "data/bus.jpg", "build/v6_e2e_bus.jpg",
-      /*imgsz=*/640, /*device=*/"", /*nc=*/80, models::kYolo6s, nm);
+      /*imgsz=*/640, /*device=*/"", /*nc=*/80, models::kYolo6s, /*p6=*/false, nm);
 
   std::map<int, int> by_cls;
   for (auto& d : dets) ++by_cls[d.cls];
@@ -94,7 +94,7 @@ int main() {
     auto dets_n = inference::predict_v6_to_file(
         pt_n.string(), "data/bus.jpg",
         "build/v6" + p.first + "_e2e_bus.jpg",
-        640, "", 80, p.second, nm);
+        640, "", 80, p.second, /*p6=*/false, nm);
     std::map<int, int> by;
     for (auto& d : dets_n) ++by[d.cls];
     std::cout << "[v6-e2e] v6" << p.first << ": " << dets_n.size()

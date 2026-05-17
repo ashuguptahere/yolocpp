@@ -30,6 +30,75 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.83.0] — 2026-05-17
+
+### Added — rfdetr auxiliary supervision (Tier 1 #2 — partial)
+
+Standard DETR practice supervises every decoder layer with the same
+matched targets (the Hungarian matcher runs once on the final layer,
+its assignment is reused for all earlier layers). The aux loss gives
+roughly `nl × ` more gradient signal per step than supervising only
+the last layer — papers report this is the difference between
+"converges in ~50 epochs" and "needs ~500".
+
+What landed:
+
+- `RFDetrDecoderImpl::forward_aux` — new method that returns
+  `std::vector<torch::Tensor>` with one entry per decoder layer
+  (each post-LN). Reuses the existing `forward` loop body verbatim,
+  just stores each layer's output instead of overwriting.
+- `RFDetrTransformerImpl::forward_aux` — wraps the existing
+  encoder-output + topk pipeline (fp64-careful block kept intact)
+  and calls `decoder->forward_aux`. Returns a `TransformerOutput`
+  with `aux_outs` populated.
+- `TransformerOutput.aux_outs` — new field for the per-layer
+  decoder outputs. Eval paths ignore it (still read
+  `decoder_out`).
+- `RFDetrImpl::forward_train` — switched to `forward_aux`. Applies
+  `class_embed` + bbox-reparam to each layer's output. Returns
+  interleaved `[cls_l0, bbox_l0, …, cls_lN, bbox_lN]` so the
+  existing `LossTraits<RFDetr>::compute` splits and feeds them
+  into `rfdetr_set_loss` which already handles
+  `cls_logits_per_layer / bbox_unact_per_layer` of arbitrary
+  length.
+
+### Verified — structural wiring works, but convergence still gated
+
+| run | epochs | peak mAP@0.5 |
+|---|---:|---:|
+| 0.82.0 final-layer-only       | 10 | 0.027 (osc) |
+| **0.83.0 aux loss**           | 10 | **0.011** (osc) |
+| 0.83.0 aux loss + constant LR | 10 | 0.011 (osc) |
+
+The aux loss is correctly wired (total loss is ~6× the single-layer
+value, matching `nl × ` per-layer contribution) but mAP doesn't
+improve, even with constant LR. The remaining blocker is the
+optimizer: upstream rf-detr trains with **AdamW**, a per-parameter-
+group LR (backbone 10× lower than the head), and a long schedule.
+Our trainer is plain SGD + single LR group, which can't drive the
+sparse Hungarian-matched gradient (≈3 GTs per image × 6 layers × 4
+batch = 72 supervised cls cells out of ~218k per step) into useful
+updates on transformer weights.
+
+### Next for rfdetr (separate session)
+
+1. AdamW optimizer support in `TrainerT` (or a per-version optimizer
+   override).
+2. Per-param-group LR — backbone at 0.1× of head LR.
+3. Longer schedule (50+ epochs, matches upstream).
+
+The aux-loss infrastructure committed here is a prerequisite for
+the above to actually pay off; without aux loss, AdamW alone
+wouldn't be enough either. This is a "build the foundation" commit.
+
+### Fixed
+
+- `tests/test_v6_e2e.cpp` — two `predict_v6_to_file` call sites were
+  still on the pre-`p6=` signature, breaking the test target build.
+  Threaded `/*p6=*/false` through both.
+
+---
+
 ## [0.82.0] — 2026-05-17
 
 ### Fixed — yolo26 plateau-then-stop (Tier 1 #1)

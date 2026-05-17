@@ -206,31 +206,56 @@ torch::Tensor RFDetrImpl::forward_eval(torch::Tensor x) {
 }
 
 std::vector<torch::Tensor> RFDetrImpl::forward_train(torch::Tensor x) {
-  // Match the production forward_eval pipeline (real backbone +
-  // projector + transformer + heads). Returns
-  // `(cls_logits, bbox_cxcywh_normalised)` for the Hungarian set
-  // loss — bbox is already bbox_reparam'd to cxcywh in [0,1] so
-  // the loss doesn't need to re-sigmoid (which would optimise the
-  // wrong function relative to the inference-time bbox_reparam path).
+  // Auxiliary supervision over EVERY decoder layer, matching standard
+  // DETR practice. Without this, only the final decoder layer
+  // receives gradient from the Hungarian set loss — the earlier
+  // layers (typically ~5 of them) get only the residual gradient
+  // through skip connections, which is too sparse to drive
+  // convergence on short fine-tuning budgets. With aux loss the
+  // model gets nl × richer gradient signal per step, which is what
+  // the original DETR / Deformable-DETR papers report as the
+  // difference between "converges in ~50 epochs" and "needs ~500".
+  //
+  // Return layout (interleaved for compatibility with
+  // `LossTraits<RFDetr>::compute` which already splits a flat list
+  // into per-layer cls/bbox pairs):
+  //   [cls_l0, bbox_l0, cls_l1, bbox_l1, …, cls_lN, bbox_lN]
+  // Layer N (last) is the one used at inference; earlier layers are
+  // auxiliary.
   auto& slot = *backbone_real_[0]
                     ->as<yolocpp::models::rfdetr::BackboneSlotImpl>();
   auto memory_2d = slot.forward(std::move(x));
   int Q = scale.num_queries;
   auto qfeat_first = query_feat_.slice(/*dim=*/0, 0, Q);
   auto rpemb_first = refpoint_embed_.slice(/*dim=*/0, 0, Q);
-  auto tf_out = transformer_->forward(memory_2d, qfeat_first, rpemb_first, Q);
-  auto cls_logits = class_embed_->forward(tf_out.decoder_out);   // [B, Q, 91]
-  auto bbox_delta = bbox_embed_->forward(tf_out.decoder_out);    // [B, Q, 4]
-  auto& refpts    = tf_out.refpoints;                              // [B, Q, 4]
-  // bbox_reparam: cxcy = delta[..., :2] * ref[..., 2:] + ref[..., :2];
-  //               wh   = delta[..., 2:].exp() * ref[..., 2:].
-  // (Same formula as inference; ensures the loss optimises EXACTLY
-  // the function the inference path uses to produce final boxes.)
-  auto cxcy = bbox_delta.slice(-1, 0, 2) * refpts.slice(-1, 2, 4) +
-                refpts.slice(-1, 0, 2);
-  auto wh   = bbox_delta.slice(-1, 2, 4).exp() * refpts.slice(-1, 2, 4);
-  auto bbox_cxcywh = torch::cat({cxcy, wh}, /*dim=*/-1);
-  return {cls_logits, bbox_cxcywh};
+  auto tf_out = transformer_->forward_aux(memory_2d, qfeat_first,
+                                            rpemb_first, Q);
+
+  auto& refpts = tf_out.refpoints;     // [B, Q, 4]
+  // Shared bbox_reparam helper — applied to each layer's delta.
+  auto reparam_box = [&](const torch::Tensor& dec_out) {
+    auto bbox_delta = bbox_embed_->forward(dec_out);             // [B, Q, 4]
+    auto cxcy = bbox_delta.slice(-1, 0, 2) * refpts.slice(-1, 2, 4) +
+                  refpts.slice(-1, 0, 2);
+    auto wh   = bbox_delta.slice(-1, 2, 4).exp() * refpts.slice(-1, 2, 4);
+    return torch::cat({cxcy, wh}, /*dim=*/-1);
+  };
+
+  std::vector<torch::Tensor> out;
+  // If the transformer didn't populate aux outputs (defensive — newer
+  // builds always do), fall back to the final-layer-only path so the
+  // contract stays the same shape.
+  const auto& layer_outs = tf_out.aux_outs.empty()
+                                ? std::vector<torch::Tensor>{tf_out.decoder_out}
+                                : tf_out.aux_outs;
+  out.reserve(layer_outs.size() * 2);
+  for (const auto& dec_out : layer_outs) {
+    auto cls_logits = class_embed_->forward(dec_out);   // [B, Q, n_classes+1]
+    auto bbox_xywh  = reparam_box(dec_out);             // [B, Q, 4]
+    out.push_back(cls_logits);
+    out.push_back(bbox_xywh);
+  }
+  return out;
 }
 
 int RFDetrImpl::load_from_state_dict(
