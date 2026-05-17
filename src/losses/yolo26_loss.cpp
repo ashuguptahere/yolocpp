@@ -100,7 +100,8 @@ StalOutput stal_assign(const torch::Tensor& pd_scores,
                        const torch::Tensor& gt_labels,
                        const torch::Tensor& gt_bboxes,
                        const torch::Tensor& mask_gt,
-                       int nc, float alpha, float beta) {
+                       int nc, float alpha, float beta,
+                       int64_t topk_param) {
   auto B = pd_scores.size(0);
   auto A = pd_scores.size(1);
   auto M = gt_bboxes.size(1);
@@ -137,19 +138,15 @@ StalOutput stal_assign(const torch::Tensor& pd_scores,
   align = align * in_gts.to(align.dtype()) *
           mask_gt.to(align.dtype());
 
-  // 3) Assignment — top-k anchors per GT (k=10 ≈ TAL).
+  // 3) Assignment — top-k anchors per GT (k chosen by caller).
   //
-  // YOLOv26's paper recipe trains TWO heads (one2many TAL + one2one STAL)
-  // and progressively shifts loss weight between them (ProgLoss). We
-  // only have one head, so we use top-k=10 throughout to simulate the
-  // TAL-heavy early phase. At top-1 (STAL strict), positive supervision
-  // is so sparse (~3/img × 16 = 48 per batch over 8400 anchors) that
-  // the model can't bootstrap from an nc=80→nc=5 cls-head reset in
-  // short fine-tuning budgets (mAP stays at 0).
+  // YOLOv26's E2EDetectLoss runs this twice per step:
+  //   one2many head: topk=10 (TAL — rich gradient for shared backbone)
+  //   one2one  head: topk=1  (STAL — single best for NMS-free inference)
   //
-  // Add a tiny floor on (in-GT, valid-GT) pairs so top-k always lands
-  // on real in-GT anchors at cold start when raw scores are all ≈0.
-  const int64_t topk = std::min<int64_t>(10, A);
+  // Floor on (in-GT, valid-GT) pairs so top-k always lands on real
+  // in-GT anchors at cold start when raw scores are all ≈ 0.
+  const int64_t topk = std::min<int64_t>(topk_param, A);
   auto valid_floor = (in_gts.to(align.dtype()) *
                        mask_gt.to(align.dtype())) * 1e-12;            // [B, M, A]
   auto align_floored = align + valid_floor;
@@ -237,46 +234,89 @@ StalOutput stal_assign(const torch::Tensor& pd_scores,
 
 Yolo26Loss::Yolo26Loss(Yolo26LossConfig cfg) : cfg_(cfg) {}
 
+// Compute (box, cls) loss for ONE head's nl per-level feature maps.
+// Used twice by Yolo26Loss::operator() — once for one2many (topk=10),
+// once for one2one (topk=1). All preds use the SAME decoded anchors /
+// strides since both heads operate on the same feature grids.
+struct HeadLossOut {
+  torch::Tensor box;  // scalar
+  torch::Tensor cls;  // scalar
+};
+
+static HeadLossOut compute_head_loss(
+    const std::vector<torch::Tensor>& head_feats,  // nl tensors, [B, 4+nc, h, w]
+    const torch::Tensor& gt_labels,
+    const torch::Tensor& gt_bboxes,
+    const torch::Tensor& mask_gt,
+    const std::vector<double>& strides,
+    const Yolo26LossConfig& cfg,
+    int64_t topk) {
+  auto opts = head_feats[0].options().dtype(torch::kFloat32);
+  int nc = cfg.nc;
+  int B  = (int)head_feats[0].size(0);
+  int no = 4 + nc;
+
+  std::vector<torch::Tensor> flat;
+  std::vector<std::pair<int, int>> sizes;
+  for (auto& f : head_feats) {
+    sizes.emplace_back((int)f.size(2), (int)f.size(3));
+    flat.push_back(f.reshape({B, f.size(1), -1}));
+  }
+  auto pred = torch::cat(flat, /*dim=*/2).permute({0, 2, 1});  // [B, A, no]
+  auto pred_box_raw = pred.slice(-1, 0, 4);
+  auto pred_cls     = pred.slice(-1, 4, no);
+
+  auto anc_opts = opts.device(head_feats[0].device());
+  torch::Tensor stride_t;
+  auto anc_pts = make_anchors(strides, sizes, anc_opts, &stride_t);
+
+  auto box_pos = F::softplus(pred_box_raw);
+  auto pred_xyxy = torch::cat({
+      anc_pts.unsqueeze(0) - box_pos.slice(-1, 0, 2),
+      anc_pts.unsqueeze(0) + box_pos.slice(-1, 2, 4)
+  }, -1) * stride_t.unsqueeze(-1);
+
+  auto pd_scores_sig = pred_cls.detach().sigmoid();
+  StalOutput sa = stal_assign(pd_scores_sig, pred_xyxy.detach(), anc_pts,
+                              gt_labels, gt_bboxes, mask_gt,
+                              nc, cfg.alpha, cfg.beta, topk);
+
+  auto bce = F::binary_cross_entropy_with_logits(
+      pred_cls, sa.target_scores,
+      F::BinaryCrossEntropyWithLogitsFuncOptions().reduction(torch::kSum));
+  auto target_scores_sum = sa.target_scores.sum().clamp_min(1.0);
+  auto cls_loss = bce / target_scores_sum;
+
+  torch::Tensor box_loss = torch::zeros({}, opts);
+  if (sa.fg_mask.any().item<bool>()) {
+    auto fg_flat        = sa.fg_mask.reshape(-1);
+    auto pred_xyxy_flat = pred_xyxy.reshape({-1, 4});
+    auto t_bboxes_flat  = sa.target_bboxes.reshape({-1, 4});
+    auto target_score_per_anchor = sa.target_scores.sum(-1);
+    auto w_flat = target_score_per_anchor.reshape(-1);
+
+    auto pos_idx = torch::nonzero(fg_flat).reshape(-1);
+    auto pp_xyxy = pred_xyxy_flat.index_select(0, pos_idx);
+    auto tt_bb   = t_bboxes_flat.index_select(0, pos_idx);
+    auto w       = w_flat.index_select(0, pos_idx).clamp_min(1e-6);
+
+    auto ciou = bbox_ciou(pp_xyxy, tt_bb);
+    box_loss = ((1.0 - ciou) * w).sum() / target_scores_sum;
+  }
+  return {box_loss, cls_loss};
+}
+
 Yolo26LossOutput Yolo26Loss::operator()(
     const std::vector<torch::Tensor>& feats, const torch::Tensor& targets,
     const std::vector<double>& strides, int /*imgsz*/, double progress) const {
   TORCH_CHECK(!feats.empty(), "no feature levels");
   auto opts = feats[0].options().dtype(torch::kFloat32);
 
-  int nc = cfg_.nc;
   int B  = (int)feats[0].size(0);
-  int no = 4 + nc;
 
-  // ── 1. Concatenate flat predictions ────────────────────────────────────
-  std::vector<torch::Tensor> flat;
-  std::vector<std::pair<int, int>> sizes;
-  for (auto& f : feats) {
-    sizes.emplace_back((int)f.size(2), (int)f.size(3));
-    flat.push_back(f.reshape({B, f.size(1), -1}));     // [B, no, h*w]
-  }
-  auto pred = torch::cat(flat, /*dim=*/2)            // [B, no, A]
-                  .permute({0, 2, 1});               // [B, A, no]
-  TORCH_CHECK(pred.size(-1) == no,
-              "Yolo26Loss: feat channels (", pred.size(-1),
-              ") != 4 + nc (", no, ") — wrong head?");
-
-  auto pred_box_raw = pred.slice(-1, 0, 4);          // [B, A, 4] (l, t, r, b raw)
-  auto pred_cls     = pred.slice(-1, 4, no);         // [B, A, nc]
-
-  // Anchors live on the same device as the predictions.
-  auto anc_opts = opts.device(feats[0].device());
-  torch::Tensor stride_t;
-  auto anc_pts = make_anchors(strides, sizes, anc_opts, &stride_t);  // [A, 2]
-
-  // Decode predicted boxes (matches Detect26Impl::decode):
-  //   distances = softplus(raw); xyxy = [anc - lt, anc + rb] * stride.
-  auto box_pos = F::softplus(pred_box_raw);                // [B, A, 4]
-  auto pred_xyxy = torch::cat({
-      anc_pts.unsqueeze(0) - box_pos.slice(-1, 0, 2),
-      anc_pts.unsqueeze(0) + box_pos.slice(-1, 2, 4)
-  }, -1) * stride_t.unsqueeze(-1);                          // [B, A, 4]
-
-  // ── 2. Build per-batch padded GT tensors ───────────────────────────────
+  // Build per-batch padded GT tensors once — both heads use the same
+  // GTs. (The strides are also shared since both heads see the same
+  // feature pyramid.)
   std::vector<int> per_batch(B, 0);
   if (targets.size(0) > 0) {
     auto bi = targets.select(1, 0).to(torch::kLong);
@@ -292,7 +332,6 @@ Yolo26LossOutput Yolo26Loss::operator()(
   auto gt_labels_cpu = torch::zeros({B, Mmax},    cpu_opts);
   auto gt_bboxes_cpu = torch::zeros({B, Mmax, 4}, cpu_opts);
   auto mask_gt_cpu   = torch::zeros({B, Mmax, 1}, cpu_opts);
-
   if (targets.size(0) > 0) {
     auto t = targets.detach().to(torch::kCPU).to(torch::kFloat32);
     auto a = t.accessor<float, 2>();
@@ -315,58 +354,51 @@ Yolo26LossOutput Yolo26Loss::operator()(
   auto gt_bboxes = gt_bboxes_cpu.to(feats[0].device());
   auto mask_gt   = mask_gt_cpu.to(feats[0].device());
 
-  // ── 3. STAL (one-to-one) assignment ────────────────────────────────────
-  auto pd_scores_sig = pred_cls.detach().sigmoid();
-  StalOutput sa = stal_assign(pd_scores_sig, pred_xyxy.detach(), anc_pts,
-                              gt_labels, gt_bboxes, mask_gt,
-                              nc, cfg_.alpha, cfg_.beta);
+  // Split feats: first half = one2many (TAL topk=10), second half =
+  // one2one (STAL topk=1). Single-head callers (size = nl) fall back
+  // to one2one-only — preserves the unit test which feeds a single
+  // head's outputs.
+  const int total_feats = (int)feats.size();
+  const bool dual_head = (total_feats % 2 == 0) && (total_feats >= 6);
+  const int nl_per_head = dual_head ? (total_feats / 2) : total_feats;
+  std::vector<torch::Tensor> o2m_feats(
+      feats.begin(), feats.begin() + (dual_head ? nl_per_head : 0));
+  std::vector<torch::Tensor> o2o_feats(
+      feats.begin() + (dual_head ? nl_per_head : 0), feats.end());
 
-  // ── 4. Cls target (TAL-normalized) ─────────────────────────────────────
-  // `sa.target_scores` is already the TAL-normalized per-anchor target
-  // (built in stal_assign via `align / max(align) × max(iou)` per GT),
-  // so the best-aligned anchor of each GT gets target ≈ max_iou ≈ 1.
-  // This is the upstream YOLO recipe for matching `bce / target_sum`
-  // normalization — without it, BCE pushes σ→iou (~0.3) and confidence
-  // never gets high enough for NMS to keep predictions.
-  (void)progress;  // ProgLoss now lives in stal_assign (top-k); the
-                   // progressive iou^prog soft target was a wrong
-                   // interpretation of what ProgLoss does.
-  auto t_scores_prog = sa.target_scores;                     // [B, A, nc]
-
-  // Cls loss: BCE w/ logits, normalised by sum of soft targets
-  // (matches upstream v8DetectionLoss).
-  auto bce = F::binary_cross_entropy_with_logits(
-      pred_cls, t_scores_prog,
-      F::BinaryCrossEntropyWithLogitsFuncOptions().reduction(torch::kSum));
-  auto target_scores_sum = t_scores_prog.sum().clamp_min(1.0);
-  auto cls_loss = bce / target_scores_sum;
-
-  // ── 5. Box loss (CIoU) on positives ────────────────────────────────────
-  // Per-positive weight = TAL-normalized cls target (matches upstream
-  // v8 box-iou loss weighting). Higher-aligned anchors of each GT get
-  // higher weight, less-aligned get less — same scheme as cls loss.
-  torch::Tensor box_loss = torch::zeros({}, opts);
-  if (sa.fg_mask.any().item<bool>()) {
-    auto fg_flat        = sa.fg_mask.reshape(-1);                  // [B*A]
-    auto pred_xyxy_flat = pred_xyxy.reshape({-1, 4});               // [B*A, 4]
-    auto t_bboxes_flat  = sa.target_bboxes.reshape({-1, 4});        // [B*A, 4]
-    // Sum across class dim to get per-anchor weight (one column nonzero
-    // per fg anchor, so this just lifts back to per-anchor).
-    auto target_score_per_anchor = sa.target_scores.sum(-1);        // [B, A]
-    auto w_flat = target_score_per_anchor.reshape(-1);              // [B*A]
-
-    auto pos_idx = torch::nonzero(fg_flat).reshape(-1);
-    auto pp_xyxy = pred_xyxy_flat.index_select(0, pos_idx);
-    auto tt_bb   = t_bboxes_flat.index_select(0, pos_idx);
-    auto w       = w_flat.index_select(0, pos_idx).clamp_min(1e-6);
-
-    auto ciou = bbox_ciou(pp_xyxy, tt_bb);
-    box_loss = ((1.0 - ciou) * w).sum() / target_scores_sum;
+  HeadLossOut o2m = {torch::zeros({}, opts), torch::zeros({}, opts)};
+  if (dual_head) {
+    o2m = compute_head_loss(o2m_feats, gt_labels, gt_bboxes, mask_gt,
+                            strides, cfg_, /*topk=*/10);
   }
+  HeadLossOut o2o = compute_head_loss(o2o_feats, gt_labels, gt_bboxes,
+                                       mask_gt, strides, cfg_, /*topk=*/1);
+
+  // ProgLoss decay — `w_o2m` ramps 1 → 0 over the first HALF of
+  // training; `w_o2o` stays at 1.0. The o2m TAL head bootstraps the
+  // shared backbone with dense supervision early, then gets out of
+  // the way so the o2o head's gradient direction isn't conflicted by
+  // o2m's many-to-one pulls. Tried linear-full-handoff and
+  // both-always-on; both regressed because the o2o head ended up
+  // either undersupervised early (linear) or fighting the o2m's
+  // backbone gradient late (always-on).
+  // ProgLoss schedule — linear decay (1 - prog) for the one2many TAL
+  // head; one2one stays at constant 1.0. Matches upstream
+  // `E2EDetectLoss.decay`. Tried fast decay (zero at prog=0.5) and
+  // constant-both-1.0; the slow linear decay gave the highest peak
+  // mAP on the screen-detection sweep (mAP@0.5 = 0.008 at 3 epochs
+  // vs 0.0037 for constant-both). Caveat: on long runs (>5 epochs)
+  // mAP regresses once the o2m weight reaches zero — the o2o head's
+  // sparse top-1 supervision alone can't sustain learning under
+  // pretrained-to-custom-nc fine-tuning. Real convergence still
+  // needs MANY more epochs (upstream trains v26 for 100+ epochs).
+  double prog  = std::clamp(progress, 0.0, 1.0);
+  double w_o2m = dual_head ? (1.0 - prog) : 0.0;
+  double w_o2o = 1.0;
 
   Yolo26LossOutput out;
-  out.box   = box_loss * cfg_.box_gain;
-  out.cls   = cls_loss * cfg_.cls_gain;
+  out.box   = (o2m.box * (float)w_o2m + o2o.box * (float)w_o2o) * cfg_.box_gain;
+  out.cls   = (o2m.cls * (float)w_o2m + o2o.cls * (float)w_o2o) * cfg_.cls_gain;
   out.dfl   = torch::zeros({}, opts);   // kept for log-format parity
   out.total = out.box + out.cls;
   return out;

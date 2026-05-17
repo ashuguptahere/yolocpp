@@ -104,15 +104,32 @@ struct Detect26Impl : torch::nn::Module {
   int  no = 0;                       // = 4 + nc
   std::vector<int>     ch;           // per-level input channels
   std::vector<double>  stride;       // per-level stride (set by parent)
-  torch::nn::ModuleList cv2{nullptr};   // regression branches (Sequential)
-  torch::nn::ModuleList cv3{nullptr};   // classification branches (Sequential)
+  // YOLO26's full e2e recipe (E2EDetectLoss): two parallel heads at
+  // the same feature map. Both branches have identical topology; they
+  // differ only in their training-time supervision.
+  //   one2many (cv2/cv3)           — v8DetectionLoss(tal_topk=10)
+  //   one2one  (one2one_cv2/cv3)   — v8DetectionLoss(tal_topk=1)
+  // Inference uses ONLY the one2one head (NMS-free, single best
+  // detection per object). The one2many head is auxiliary
+  // supervision that backprops into the shared backbone, giving
+  // dense gradient signal that lets the one2one head converge
+  // without NMS at deploy time.
+  torch::nn::ModuleList cv2{nullptr};           // o2m reg branches (Sequential)
+  torch::nn::ModuleList cv3{nullptr};           // o2m cls branches (Sequential)
+  torch::nn::ModuleList one2one_cv2{nullptr};   // o2o reg branches
+  torch::nn::ModuleList one2one_cv3{nullptr};   // o2o cls branches
 
   Detect26Impl(int nc, std::vector<int> ch);
+  // forward_features returns 2*nl tensors interleaved as
+  //   [o2m_l0, o2m_l1, ..., o2m_l{nl-1}, o2o_l0, ..., o2o_l{nl-1}]
+  // so loss/decode callers can split on a known offset.
   std::vector<torch::Tensor> forward_features(std::vector<torch::Tensor> x);
+  // Decode for inference — uses ONLY the one2one head's output
+  // (last nl entries of `feats`).
   torch::Tensor              decode(const std::vector<torch::Tensor>& feats);
-  // Apply the upstream detection-prior bias to the cls head's final 1×1
-  // conv and the reg head's bias. Idempotent — safe to call after a
-  // partial state-dict load that left cls heads at torch defaults.
+  // Apply the upstream detection-prior bias to BOTH heads' final
+  // 1×1 cls convs and the reg head bias. Idempotent — safe to call
+  // after a partial state-dict load.
   void                        init_biases();
 };
 TORCH_MODULE(Detect26);
