@@ -239,8 +239,9 @@ Yolo26Loss::Yolo26Loss(Yolo26LossConfig cfg) : cfg_(cfg) {}
 // once for one2one (topk=1). All preds use the SAME decoded anchors /
 // strides since both heads operate on the same feature grids.
 struct HeadLossOut {
-  torch::Tensor box;  // scalar
-  torch::Tensor cls;  // scalar
+  torch::Tensor box;  // CIoU
+  torch::Tensor cls;  // BCE
+  torch::Tensor l1;   // L1 on (l,t,r,b) normalized — upstream's "dfl_loss" branch when reg_max=1
 };
 
 static HeadLossOut compute_head_loss(
@@ -250,7 +251,8 @@ static HeadLossOut compute_head_loss(
     const torch::Tensor& mask_gt,
     const std::vector<double>& strides,
     const Yolo26LossConfig& cfg,
-    int64_t topk) {
+    int64_t topk,
+    int imgsz) {
   auto opts = head_feats[0].options().dtype(torch::kFloat32);
   int nc = cfg.nc;
   int B  = (int)head_feats[0].size(0);
@@ -270,7 +272,8 @@ static HeadLossOut compute_head_loss(
   torch::Tensor stride_t;
   auto anc_pts = make_anchors(strides, sizes, anc_opts, &stride_t);
 
-  auto box_pos = F::softplus(pred_box_raw);
+  // Decoded box distances (softplus → positive l/t/r/b in cell units).
+  auto box_pos = F::softplus(pred_box_raw);                  // [B, A, 4]
   auto pred_xyxy = torch::cat({
       anc_pts.unsqueeze(0) - box_pos.slice(-1, 0, 2),
       anc_pts.unsqueeze(0) + box_pos.slice(-1, 2, 4)
@@ -288,6 +291,7 @@ static HeadLossOut compute_head_loss(
   auto cls_loss = bce / target_scores_sum;
 
   torch::Tensor box_loss = torch::zeros({}, opts);
+  torch::Tensor l1_loss  = torch::zeros({}, opts);
   if (sa.fg_mask.any().item<bool>()) {
     auto fg_flat        = sa.fg_mask.reshape(-1);
     auto pred_xyxy_flat = pred_xyxy.reshape({-1, 4});
@@ -302,13 +306,52 @@ static HeadLossOut compute_head_loss(
 
     auto ciou = bbox_ciou(pp_xyxy, tt_bb);
     box_loss = ((1.0 - ciou) * w).sum() / target_scores_sum;
+
+    // Upstream BboxLoss-with-reg_max=1: L1 between normalized
+    // pred-distances and target-distances. Critical second box
+    // supervision term — CIoU alone optimizes IoU which is invariant
+    // to absolute box size for small overlaps, so the box coordinates
+    // can drift even when the loss appears stable. The L1 anchors
+    // both predicted and target distances to image-relative [0, 1]
+    // space and supervises them directly.
+    //   target_ltrb = (anchor - gt_lt, gt_rb - anchor)  in cell units
+    //   then × stride / imgsz       to get image-relative
+    //   pred_ltrb = box_pos (softplus(raw))
+    //   then × stride / imgsz
+    //   loss = L1(pred, target).mean(-1) × weight / target_scores_sum
+    auto box_pos_flat = box_pos.reshape({-1, 4});  // [B*A, 4] in cell units
+    auto pp_dist = box_pos_flat.index_select(0, pos_idx);  // [P, 4]
+    // Target distance: from anchor_points to target_bboxes corners,
+    // in cell units (anchor_points are also in cell units after we
+    // divide by stride_t).
+    auto str_flat = stride_t.reshape(-1);  // [A] in pixel units
+    auto str_per_pos = str_flat.index_select(0, pos_idx % str_flat.size(0))
+                          .unsqueeze(-1);  // [P, 1]
+    auto anc_flat = anc_pts.unsqueeze(0).expand({B, -1, -1}).reshape({-1, 2});
+    auto anc_per_pos = anc_flat.index_select(0, pos_idx);  // [P, 2] (in cell × stride units)
+    // anc_pts/stride is in CELL units (no stride); but we built anc_pts
+    // with `(arange + 0.5) * stride` so anc_pts is in pixel units. To
+    // recover cell units for ltrb, divide by stride.
+    auto anc_cell = anc_per_pos / str_per_pos;            // [P, 2] cell units
+    auto gt_lt    = tt_bb.slice(-1, 0, 2) / str_per_pos;  // [P, 2]
+    auto gt_rb    = tt_bb.slice(-1, 2, 4) / str_per_pos;
+    auto t_dist   = torch::cat({anc_cell - gt_lt, gt_rb - anc_cell}, -1);  // [P, 4]
+    // Normalize both pred and target by (imgsz / stride) — equivalent
+    // to upstream's `× stride / imgsz`.
+    float inv_imgsz = (imgsz > 0) ? (1.0f / (float)imgsz) : 1.0f;
+    auto pp_norm = pp_dist * str_per_pos * inv_imgsz;
+    auto tt_norm = t_dist  * str_per_pos * inv_imgsz;
+    auto l1 = F::l1_loss(pp_norm, tt_norm,
+                          F::L1LossFuncOptions().reduction(torch::kNone));
+    auto l1_per = l1.mean(-1).unsqueeze(-1) * w.unsqueeze(-1);
+    l1_loss = l1_per.sum() / target_scores_sum;
   }
-  return {box_loss, cls_loss};
+  return {box_loss, cls_loss, l1_loss};
 }
 
 Yolo26LossOutput Yolo26Loss::operator()(
     const std::vector<torch::Tensor>& feats, const torch::Tensor& targets,
-    const std::vector<double>& strides, int /*imgsz*/, double progress) const {
+    const std::vector<double>& strides, int imgsz, double progress) const {
   TORCH_CHECK(!feats.empty(), "no feature levels");
   auto opts = feats[0].options().dtype(torch::kFloat32);
 
@@ -366,41 +409,36 @@ Yolo26LossOutput Yolo26Loss::operator()(
   std::vector<torch::Tensor> o2o_feats(
       feats.begin() + (dual_head ? nl_per_head : 0), feats.end());
 
-  HeadLossOut o2m = {torch::zeros({}, opts), torch::zeros({}, opts)};
+  HeadLossOut o2m = {torch::zeros({}, opts), torch::zeros({}, opts),
+                     torch::zeros({}, opts)};
   if (dual_head) {
     o2m = compute_head_loss(o2m_feats, gt_labels, gt_bboxes, mask_gt,
-                            strides, cfg_, /*topk=*/10);
+                            strides, cfg_, /*topk=*/10, imgsz);
   }
   HeadLossOut o2o = compute_head_loss(o2o_feats, gt_labels, gt_bboxes,
-                                       mask_gt, strides, cfg_, /*topk=*/1);
+                                       mask_gt, strides, cfg_, /*topk=*/1, imgsz);
 
-  // ProgLoss decay — `w_o2m` ramps 1 → 0 over the first HALF of
-  // training; `w_o2o` stays at 1.0. The o2m TAL head bootstraps the
-  // shared backbone with dense supervision early, then gets out of
-  // the way so the o2o head's gradient direction isn't conflicted by
-  // o2m's many-to-one pulls. Tried linear-full-handoff and
-  // both-always-on; both regressed because the o2o head ended up
-  // either undersupervised early (linear) or fighting the o2m's
-  // backbone gradient late (always-on).
-  // ProgLoss schedule — linear decay (1 - prog) for the one2many TAL
-  // head; one2one stays at constant 1.0. Matches upstream
-  // `E2EDetectLoss.decay`. Tried fast decay (zero at prog=0.5) and
-  // constant-both-1.0; the slow linear decay gave the highest peak
-  // mAP on the screen-detection sweep (mAP@0.5 = 0.008 at 3 epochs
-  // vs 0.0037 for constant-both). Caveat: on long runs (>5 epochs)
-  // mAP regresses once the o2m weight reaches zero — the o2o head's
-  // sparse top-1 supervision alone can't sustain learning under
-  // pretrained-to-custom-nc fine-tuning. Real convergence still
-  // needs MANY more epochs (upstream trains v26 for 100+ epochs).
-  double prog  = std::clamp(progress, 0.0, 1.0);
-  double w_o2m = dual_head ? (1.0 - prog) : 0.0;
+  // Loss combination per upstream `E2EDetectLoss.__call__`:
+  //   return loss_one2many + loss_one2one
+  // Both heads contribute unconditionally at weight 1.0 — no decay
+  // schedule. The dual-head architecture works without scheduling
+  // because the o2o head's input features are DETACHED in
+  // `Detect26Impl::forward_features`, so the o2o gradient updates only
+  // its own weights and doesn't conflict with the o2m backbone
+  // gradient. (The 0.78.0 schedule attempts existed to paper over
+  // backbone gradient conflict — once features are detached, the
+  // conflict goes away and no schedule is needed.)
+  (void)progress;
+  double w_o2m = dual_head ? 1.0 : 0.0;
   double w_o2o = 1.0;
 
   Yolo26LossOutput out;
   out.box   = (o2m.box * (float)w_o2m + o2o.box * (float)w_o2o) * cfg_.box_gain;
   out.cls   = (o2m.cls * (float)w_o2m + o2o.cls * (float)w_o2o) * cfg_.cls_gain;
-  out.dfl   = torch::zeros({}, opts);   // kept for log-format parity
-  out.total = out.box + out.cls;
+  // L1 box-distance loss (upstream's `loss_dfl` when reg_max=1).
+  // Uses the dfl_gain hyperparameter (1.5 upstream default).
+  out.dfl   = (o2m.l1  * (float)w_o2m + o2o.l1  * (float)w_o2o) * 1.5f;
+  out.total = out.box + out.cls + out.dfl;
   return out;
 }
 

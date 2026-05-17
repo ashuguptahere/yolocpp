@@ -157,10 +157,16 @@ Detect26Impl::Detect26Impl(int nc_, std::vector<int> ch_)
 }
 
 void Detect26Impl::init_biases() {
-  // Upstream detection-prior init: cls head's final 1×1 conv bias is
-  // log(p / (1 - p)) for the prior probability p ≈ 0.01 → −4.595.
-  // Reg head's final bias is set to 1.0 so predicted (l, t, r, b)
-  // offsets start at 1 cell wide. Applied to BOTH heads (o2m + o2o).
+  // Upstream `Detect.bias_init` formula is
+  //   reg bias = 2.0
+  //   cls bias[i] = log(5 / nc / (640 / stride[i])²)   (≈ −9 at stride 8 / nc=5)
+  // which is calibrated for upstream's MuSGD optimizer with effective
+  // lr ~0.01. With plain SGD + lr0=1e-4 (what we use for stability on
+  // short fine-tuning), the strongly-negative cls bias can't be moved
+  // by enough in 3–5 epochs and the model stays in the
+  // "predict-nothing" regime. Falling back to the universal detection
+  // prior log(0.01/0.99) ≈ −4.6 (σ≈1%) which is reachable in the
+  // fine-tuning budgets we actually run. Applied to BOTH heads.
   torch::NoGradGuard ng;
   const float cls_bias_init = std::log(0.01f / (1.0f - 0.01f));  // ≈ −4.595
   auto init_branch = [&](torch::nn::ModuleList& reg_ml,
@@ -170,12 +176,14 @@ void Detect26Impl::init_biases() {
       auto* cls = cls_ml[i]->as<torch::nn::SequentialImpl>();
       if (reg && reg->size() >= 3) {
         if (auto* last = (*reg)[reg->size() - 1]->as<torch::nn::Conv2dImpl>()) {
-          if (last->bias.defined()) last->bias.fill_(1.0f);
+          if (last->bias.defined()) last->bias.fill_(2.0f);  // upstream
         }
       }
       if (cls && cls->size() >= 3) {
         if (auto* last = (*cls)[cls->size() - 1]->as<torch::nn::Conv2dImpl>()) {
-          if (last->bias.defined()) last->bias.fill_(cls_bias_init);
+          if (last->bias.defined() && nc > 0) {
+            last->bias.slice(0, 0, nc).fill_(cls_bias_init);
+          }
         }
       }
     }
@@ -189,23 +197,33 @@ Detect26Impl::forward_features(std::vector<torch::Tensor> x) {
   // Returns 2*nl tensors:
   //   indices [0 .. nl-1]      → one2many head (cv2/cv3)
   //   indices [nl .. 2*nl-1]   → one2one head (one2one_cv2/cv3)
-  // Both heads see the same feature inputs `x[i]` (shared backbone).
+  //
+  // CRITICAL — upstream `Detect.forward` detaches the inputs for the
+  // one2one head:  `x_detach = [xi.detach() for xi in x]`. The o2o
+  // head's gradient therefore never reaches the backbone — only the
+  // dense o2m TAL gradient trains the backbone, while the o2o head
+  // learns its own classifier weights on (effectively) frozen
+  // features. Without this detach, the o2o head's sparse top-1
+  // gradient fights the o2m head's dense top-10 gradient inside the
+  // shared backbone, producing the oscillating mAP we saw at 0.005.
   std::vector<torch::Tensor> out;
   out.reserve(2 * nl);
-  // First pass: one2many head.
+  // First pass: one2many head — backbone gradient flows here.
   for (int i = 0; i < nl; ++i) {
     auto* reg = cv2[i]->as<torch::nn::SequentialImpl>();
     auto* cls = cv3[i]->as<torch::nn::SequentialImpl>();
-    auto a = reg->forward(x[i]);   // [N, 4,  h, w]
-    auto b = cls->forward(x[i]);   // [N, nc, h, w]
-    out.push_back(torch::cat({a, b}, /*dim=*/1));  // [N, 4+nc, h, w]
+    auto a = reg->forward(x[i]);
+    auto b = cls->forward(x[i]);
+    out.push_back(torch::cat({a, b}, /*dim=*/1));
   }
-  // Second pass: one2one head.
+  // Second pass: one2one head — input features detached so the o2o
+  // loss only updates one2one_cv2/cv3 weights, not the backbone.
   for (int i = 0; i < nl; ++i) {
     auto* reg = one2one_cv2[i]->as<torch::nn::SequentialImpl>();
     auto* cls = one2one_cv3[i]->as<torch::nn::SequentialImpl>();
-    auto a = reg->forward(x[i]);
-    auto b = cls->forward(x[i]);
+    auto xd  = x[i].detach();
+    auto a = reg->forward(xd);
+    auto b = cls->forward(xd);
     out.push_back(torch::cat({a, b}, /*dim=*/1));
   }
   return out;

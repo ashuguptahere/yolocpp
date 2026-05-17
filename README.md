@@ -3,6 +3,14 @@
 Pure C++ computer-vision suite. LibTorch for training/eval, TensorRT for
 deployment, OpenCV for image I/O. **No Python in the runtime path.**
 
+**License:** AGPL-3.0 (see [`LICENSE`](LICENSE)). yolocpp interoperates
+with the upstream Ultralytics YOLO codebase (also AGPL-3.0) — model
+architectures, loss formulations, and the e2e dual-head training recipe
+are re-implementations of the corresponding pieces in
+[`ultralytics/ultralytics`](https://github.com/ultralytics/ultralytics).
+Any derivative work or network-deployed service built on yolocpp must
+satisfy the AGPL's source-availability requirement.
+
 **Pre-1.0.** The current release version lives in the top-level
 [`VERSION`](VERSION) file (one line, `MAJOR.MINOR.PATCH`) — that's the
 single source of truth. CMake reads it at configure time, embeds it
