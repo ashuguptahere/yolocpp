@@ -30,6 +30,39 @@ Every code change from this point forward gets:
 
 ---
 
+## [0.89.2] — 2026-05-18
+
+### Changed — TODO.md cleanup pass
+
+Bookkeeping only — no source or behaviour change. Walks `TODO.md`,
+marks landed items closed, prunes content that no longer needs to
+exist as separate live tasks:
+
+- **#46 (modular registry):** marked closed. All five pipelines
+  (export, predict, val, train, benchmark) dispatch through
+  `VersionAdapter` for every supported version. v1/v2 plugged in at
+  0.85.0..0.88.0.
+- **#46F (cmd_train migration):** marked closed — was 🟡 partial
+  pending the benchmark dispatch follow-up; that landed under
+  #46F2.
+- **#56A / #56B (yolo1 / yolo2 architecture in Group IV):** crossed
+  out — landed via #66..#69 in 0.85.0..0.88.0.
+- **#64 (test_v6_e2e compile error):** crossed out — fixed in
+  0.83.0 by threading `p6=false` through both call sites.
+- **§2B (DETR-family removal manifest):** collapsed from 26 lines to
+  a 3-line pointer. The full removal manifest stays in CHANGELOG
+  0.84.0.
+- **§2 (legacy session-task table):** collapsed the 25-row "all
+  closed" table to a one-line pointer; only the recurring #33 gap
+  audit row remains. Per-version landing details live in §1.x and
+  CHANGELOG.
+- **§3 (per-version pending):** added yolo1 and yolo2 entries — both
+  pipelines fully wired; documents the pjreddie 404 (yolov1.weights
+  no longer downloadable) and the yolov2-tiny COCO topology mismatch
+  as known caveats rather than open tasks.
+
+---
+
 ## [0.89.1] — 2026-05-17
 
 ### Added — low-resolution sweep, evidence-of-correctness

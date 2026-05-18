@@ -162,29 +162,13 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 
 ## 2. Pending / in-flight tasks (session task numbers)
 
+The session-numbered tasks #12..#45 (per-version predict / val / train /
+ONNX / TRT roll-out, parity gotchas, dual-head v10 training) are all
+closed; per-version landing details live in `CHANGELOG.md` and the
+§1.x sub-sections above. New work is filed under §2A (`#46..#69`).
+
 | # | scope | priority | session-cost estimate | blockers |
 |---|-------|----------|------------------------|----------|
-| #19 | v3..v10 ONNX/TRT export — CLI dispatch + per-version scoping | ✅ closed | n/a | split into #34..#39 |
-| #34 | v3 ONNX/TRT export | ✅ closed | n/a | landed in 0.14.0 — 7 dets via TRT FP32 matching C++ |
-| #35 | v4 ONNX/TRT export | ✅ closed | n/a | landed in 0.15.0 — 6 dets via TRT FP32 matching C++ |
-| #36 | v6 ONNX/TRT export — all 12 variants | ✅ closed | n/a | n/s in 0.17.0; m/l in 0.19.0 (BepC3+DFL+SimSPPF); P6 + MBLA in 0.21.0 (4-level head + MBLABlock with BottleRep3). bus.jpg TRT FP32: P5 n/s/m/l=4/5/5/6, MBLA s/m/l/x=6/6/6/5, P6 n6/s6/m6/l6=5/6/5/8 dets — all matching libtorch. |
-| #37 | v7 ONNX/TRT export | ✅ closed | n/a | landed in 0.16.0 — base 5 dets, tiny 0.90 conf matching C++ |
-| #38 | v9 ONNX/TRT export — all 5 scales | ✅ closed | n/a | t/s/m/c in 0.14.1; e (CBLinear+CBFuse two-pass backbone) added in 0.20.0; v9{c,e} TRT FP32 returns 5 dets matching libtorch. |
-| #39 | v10 ONNX export (one2one head) | ✅ closed | n/a | landed in 0.7.1 |
-| #40 | v10 TRT FP32 detection drop on s/m/b/l/x scales | ✅ closed | n/a | landed in 0.18.0 — root cause was three bugs: CLI scale default of "n" mis-built the engine; CLI11 export/predict/val skipped filename-based scale resolution; TRT default-on TF32 saturated v10 cls outputs. Fix: clear `kTF32` for v10 builds + auto-resolve scale. All 6 scales now match ORT (5 dets on bus.jpg). |
-| #41 | v10 train (one-shot from #32 deferral) | ✅ closed | n/a | landed in 0.13.0 (one2one head) |
-| #45 | v10 dual-head consistent-assignment training | ✅ closed | n/a | landed in 0.22.0 — added `Yolo10Impl(scale, nc, dual_head)` ctor with parallel `o2m_detect` (legacy=true v8-style cv3), `losses::V10DualLoss` (V8DetectionLoss with topk=10 + topk=1), `losses::Yolo10LossAdapter` runtime branch, `convert_yolov10_dual_pt` to load both heads' pretrained weights, CLI `dual_head=true` flag, and `tests/test_v10_dual_train.cpp` smoke (loss 16.85→15.14 in 4 steps on coco8, 432 tensors loaded). |
-| #21 | v10 s / m / b / l / x predict + val | ✅ closed | n/a | landed in 0.7.0 |
-| #23 | v6 MBLA variants — s_mbla / m_mbla / l_mbla / x_mbla | ✅ closed | n/a | landed in 0.8.0 |
-| #24 | v6 high-res P6 — n6/s6/m6/l6 all parity-clean | ✅ closed | n/a | n6/s6/m6 in 0.9.0; l6 closed in 0.18.1 |
-| #42 | v6l6 parity gap — saturated cls at conf=0.25 | ✅ closed | n/a | landed in 0.18.1 — root cause was BN eps=1e-5 vs upstream 1e-3 + V6ActScope leaking SiLU into structural neck convs (reduce_layer/Bifusion/downsample) which upstream hardcodes as ReLU. Backbone+neck now bit-exact vs Python; bus.jpg gives 8 dets at conf=0.25. |
-| #31 | v6 train (VFL + SIoU + TAL) | ✅ closed | n/a | landed in 0.11.x; mAP@0.5:0.95=0.74 finetune on coco8 |
-| #43 | v6 train scaffolding (V6DetectionLoss + TrainerV6) | ✅ closed | n/a | architecture in 0.11.0 |
-| #44 | v6 train TAL parity — fg_mask=0 on first iter | ✅ closed | n/a | one-line fix in 0.11.1 |
-| #29 | v3 train (yolov3u) | ✅ closed | n/a | landed in 0.10.0 |
-| #30 | v4 / v7 train (anchor-based v3-style loss) | ✅ closed | n/a | landed in 0.12.0 — V7DetectionLoss handles both |
-| #31 | v6 train (VFL + SIoU + TAL) | medium | 2 sessions | new loss class — anchor-free with KD `reg_preds_dist` as DFL target |
-| #32 | v10 train (single-head one2one) | ✅ closed | n/a | landed in 0.13.0 — V8DetectionLoss on one2one head |
 | #33 | Codebase gap audit | recurring | 30–60 min per pass | none — runs at task-batch / phase boundaries, or on demand |
 
 ---
@@ -199,13 +183,13 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 
 | # | scope | priority | session-cost estimate | blockers |
 |---|-------|----------|------------------------|----------|
-| #46  | Modular architecture for adding new YOLO versions in one pass | high | 2 sessions | export pipeline migrated; predict/val/train follow as #46D/#46E/#46F |
+| #46  | ✅ closed — modular per-version registry. All five pipelines (export, predict, val, train, benchmark) dispatch through `VersionAdapter` (`include/yolocpp/registry/version_adapter.hpp`). All 14 versions register themselves in `register_all_versions()`. The "how to add a new YOLO version" walkthrough lives at the top of `version_adapter.hpp`. Wrapped up across 0.46.x..0.65.x; v1/v2 plugged into the same surface in 0.85.0..0.88.0. | — | landed | — |
 | #46A | ✅ closed — `include/yolocpp/registry/version_adapter.hpp` + `src/registry/version_registry.cpp` provide a `VersionAdapter` (std::function-typed hooks) and a `Registry` singleton seeded by `register_all_versions()`. All 12 versions register themselves declaring `version_id`, `display_name`, `default_export_basename`, `supported_tasks`, `default_imgsz(scale, task)`, `export_onnx(...)`, and a `trt_disable_tf32` quirk flag. | — | landed | — |
 | #46B | ✅ closed (interim) — type erasure via std::function in `VersionAdapter` is the abstract base every concrete `Yolo<N>Impl` plugs into without inheritance. A real C++ concept-based base (one ABC every Impl satisfies via `forward_train` + `forward_eval` shapes) is deferred to #46H once predict/train are also on the registry; not blocking. | — | landed | — |
 | #46C | ✅ closed — "how to add a new YOLO version" walkthrough lives at the top of `include/yolocpp/registry/version_adapter.hpp` (4-step recipe: drop the model TU, write a `register_yolo<N>` helper, add it to `register_all_versions()`, list the TU in CMakeLists). Mirrored in CLAUDE.md. | — | landed | — |
 | #46D | ✅ closed — `cmd_predict_task` migrated. `VersionAdapter::predict_to_file` hook routes to the per-version `inference::predict_v<N>_to_file` helpers; v8 leaves the hook empty and falls back to the unified `inference::Predictor`. Replaced ~120 lines of if-else with a single registry call. Test extended (`tests/test_registry.cpp`) asserts every non-v8 adapter wires `predict_to_file`; smoke verified with v11 (5 dets) + v8 fallback (6 dets) on bus.jpg. | — | landed | — |
 | #46E | ✅ closed — `cmd_val` migrated. `VersionAdapter::run_val` hook constructs the right holder, calls `engine::validate<M>`, and returns `(map_50, map_50_95)`. v8 leaves it empty and falls back to the unified `inference::Predictor` (Yolo8Detect-only, the path's only architecture). v3..v10 + v11/v12/v13/v26 now correctly route through their concrete holder types — previously the fallback misloaded everything except v8 + v11/v26-via-Predictor's accidental shape match. Test extended (`tests/test_registry.cpp`); end-to-end val run on coco8 with yolo11s gives mAP@0.5=0.949 / mAP@0.5:0.95=0.707. | — | landed | — |
-| #46F | 🟡 partial — `cmd_train` (kv-style detect) migrated; `VersionAdapter::run_train_detect` constructs the holder, optionally `load_state_dict`s init weights, runs the matching `TrainerT<Holder>` (`LossTraits<M>` specialisation does the per-version loss binding for free). v8 falls back to `engine::Trainer` as before. Verified on coco8 1-epoch smoke: v11s mAP@0.5:0.95=0.58, v8l (fallback) 0.69. **Pending:** `engine::run_benchmark` per-version dispatch (`engine/benchmark.cpp:158-242`) — same shape, follow-up commit. | — | within #46 | — |
+| #46F | ✅ closed — `cmd_train` (kv-style detect) migrated; `VersionAdapter::run_train_detect` constructs the holder, optionally `load_state_dict`s init weights, runs the matching `TrainerT<Holder>` (`LossTraits<M>` specialisation does the per-version loss binding for free). v8 falls back to `engine::Trainer` as before. The benchmark-dispatch follow-up landed under #46F2; the kv-dispatch chain collapse landed under #46F3. | — | landed | — |
 | #46F2 | ✅ closed — `engine/benchmark.cpp` now consults the registry. `build_onnx_for` reduced from ~95 lines to a single `adapter->export_onnx(...)` call (reuses the export hook from #46A). `bench_pt` reduced from ~95 lines to `adapter->benchmark_pt(...)`. New `include/yolocpp/engine/benchmark_internal.hpp` factors out `GenericPredictor<Holder>` + `bench_one()` so registry TUs can use them. v8 still falls back to the legacy `inference::Predictor`. Smoke: yolo11s on bus.jpg → PT 4.98 ms, TRT FP32 2.91 ms (1.71×), TRT FP16 2.40 ms (2.07×); 5 dets across all three backends. `test_benchmark` (ctest) passes. | — | landed | — |
 | #46F3 | ✅ closed — `dispatch_kv` val + train chains collapsed. The val branch (~170 lines reimplementing v3..v11/v26 dispatch) → single `cmd_val()` call. The train branch (~286 lines reimplementing v3..v11/v26 inline trainers) → single `cmd_train()` call, with v10 dual-head case kept inline (its `Yolo10(scale, nc, dual_head)` ctor isn't on the standard adapter signature). **Net deletion: 432 → 19 lines.** Smoke verified: kv-style `task=detect mode=val model=yolo11s.pt data=coco8/data.yaml` gives mAP@0.5=0.949 / 0.5:0.95=0.707 (identical to pre-refactor numbers); 1-epoch train via kv style finishes with mAP@0.5:0.95=0.70. ctest 7/7 green. | — | landed | — |
 | #46G | Add a per-version registry test (`tests/test_registry.cpp`) — asserts every expected `version_id` is registered and the minimum hooks exist. | ✅ closed | landed | — |
@@ -280,8 +264,8 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #55G | NvSORT | — | within #55 | — |
 | #55H | SAHI (slicing-aided hyper inference) wrapper around `Predictor` for small-object recall | — | within #55 | — |
 | #56  | Add legacy / additional YOLO families (depends on #46 modularisation) | medium | many sessions | each variant is its own self-contained sub-task |
-| #56A | yolo1 — implement architecture from paper; convert pretrained weights to our `.pt`-equivalent (no Darknet) | — | within #56 | — |
-| #56B | yolo2 / yolo9000 — same approach (no Darknet) | — | within #56 | — |
+| ~~#56A~~ | ~~yolo1 — implement architecture from paper; convert pretrained weights to our `.pt` (no Darknet).~~ **Landed 0.85.0..0.88.0** — full predict + val + train + ONNX + TRT. See #66 / #68. | done | — | — |
+| ~~#56B~~ | ~~yolo2 / yolo9000 — same approach (no Darknet).~~ **Landed 0.85.0..0.88.0** — Full + Tiny variants, full pipeline. See #67 / #69. | done | — | — |
 | #56C | YOLOX | — | within #56 | — |
 | #56D | YOLO-NAS | — | within #56 | — |
 | #56E | YOLO-WORLD (open-vocab) | — | within #56 | — |
@@ -346,41 +330,27 @@ follow-up tasks below close the gap to v3+ parity (val/train/export).
 | #62 | Optional: Ninja generator support for faster builds | low (optional) | 0.25 session | none; just `cmake -G Ninja` validation + docs |
 | #63 | Optional: cross-platform GUI (Dear ImGui / Qt) for train/val/predict/export | low (optional) | many sessions | not on the critical path |
 | #50 | Optional: license decision (Apache 2.0 recommended). Moved here from Group I per maintainer — no quick decision wanted. Re-promote when the maintainer is ready to commit to a license; gates #60 *publication* but not #60 training itself. | optional | 0.25 session | — |
-| #64 | `tests/test_v6_e2e.cpp` lines 64 / 97 fail to compile — `predict_v6_to_file` signature took an `NMSConfig` previously but now expects a different type (compiler reports "cannot convert NMSConfig to bool"). Pre-existing breakage discovered during #46 — surfaced when the full build was kicked off, not caused by the registry refactor. Fix: update test to match current `predict_v6_to_file` signature, or restore the helper. | medium | 0.25 session | — |
+| ~~#64~~ | ~~`tests/test_v6_e2e.cpp` lines 64 / 97 fail to compile.~~ **Fixed 0.83.0** — `predict_v6_to_file` gained a `p6=false` arg between `nc` and `NMSConfig`; threaded through both call sites. | done | — | — |
 
 ---
 
-## 2B. RF-DETR / RT-DETR family — REMOVED 2026-05-17
+## 2B. DETR-family — moved to separate repo
 
-The entire `rfdetr` / `rtdetr` / DETR-family scaffold (#65 and its
-sub-tasks #65A..#65L) was removed from this repo in 0.84.0. The
-maintainer is moving DETR-family work to a separate repository so
-yolocpp stays focused on the closed set of twelve YOLO versions.
-
-Removed:
-
-- Sources: `src/models/rfdetr*.cpp`, `src/inference/rfdetr_predictor.cpp`,
-  `src/serialization/rfdetr_weights.cpp`, `src/losses/rfdetr_loss.cpp`,
-  `src/losses/hungarian.cpp` and all matching headers.
-- Tests: every `tests/test_rfdetr_*.cpp`.
-- Registry adapter `make_rfdetr()` + its `register_version` call.
-- Trainer specialisation `LossTraits<models::RFDetr>` and the
-  `TrainerRFDetr` typedef + explicit `TrainerT<RFDetr>` instantiation.
-- Validator `validate<RFDetr>` / `validate_with_records<RFDetr>`
-  template instantiations.
-- CLI: rfdetr/rtdetr branches in `resolve.cpp` (regex + dispatch),
-  the rfdetr-specific imgsz alignment block in `commands.cpp::cmd_train`,
-  and rfdetr/rtdetr from the version whitelist in
-  `cmd_predict_task`.
-- Scripts: `scripts/screen_rfdetr_sweep.sh`.
-- Docs: `docs/rfdetr_arch.md`.
-
-Do NOT reintroduce any of the above. The `version_from_filename`
-resolver no longer recognises `rfdetr` / `rtdetr` prefixes.
+`rfdetr` / `rtdetr` (and the umbrella task #65 with sub-tasks
+#65A..#65L) were removed in 0.84.0; CHANGELOG carries the full
+removal manifest. Do NOT reintroduce.
 
 ---
 
 ## 3. Pending — by version
+
+### yolo1
+- ✅ All wired (predict + val + train + ONNX/TRT). Pure-C++ Darknet `.weights` loader (no Darknet runtime); converter populates `data/yolo1.pt`.
+- ❌ pjreddie's `yolov1.weights` URL returns 404 — `tools/convert_weights` still works against any locally-supplied file, just no automated download. Train-from-scratch works end-to-end via `yolocpp --mode train -m yolo1`.
+
+### yolo2
+- ✅ All variants wired (`Full` + `Tiny`) for predict + val + train + ONNX/TRT. Pure-C++ `.weights` loader.
+- ❌ pjreddie's `yolov2-tiny.weights` (COCO) uses a slightly different topology than the VOC tiny (one fewer conv); our `Yolo2Scale::Tiny` matches the VOC layout. Filed for a future session if a user asks.
 
 ### yolo3
 - ✅ All wired (predict + val + train + ONNX/TRT) for the yolov3u variant.
