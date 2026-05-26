@@ -1,5 +1,6 @@
 #include "yolocpp/engine/trainer.hpp"
 
+#include <ATen/autocast_mode.h>
 #include <torch/optim.h>
 
 #include <chrono>
@@ -444,6 +445,15 @@ void TrainerT<M>::ema_update(double decay) {
 
 template <typename M>
 void TrainerT<M>::run() {
+  // CUDA perf globals — see CLAUDE.md "Training speed". cuDNN benchmark
+  // picks fastest conv algo per shape; TF32 stays on for training (the
+  // inverse of the v10-TRT-export quirk). Idempotent: safe to re-enter.
+  if (torch::cuda::is_available()) {
+    at::globalContext().setBenchmarkCuDNN(true);
+    at::globalContext().setAllowTF32CuBLAS(true);
+    at::globalContext().setAllowTF32CuDNN(true);
+  }
+
   // Initialise DDP from env vars; no-op when WORLD_SIZE is unset.
   auto ddp = init_ddp_from_env();
   if (ddp.active) {
@@ -513,7 +523,10 @@ void TrainerT<M>::run() {
       std::ostringstream ss; ss << device_;
       emit("device",      ss.str());
     }
-    emit("workers",     "8");
+    // Single-threaded sample_batch loop today; the upstream-shape
+    // metadata key stays for tooling compatibility but reflects reality.
+    // Real torch::data::DataLoader workers are tracked as a follow-up.
+    emit("workers",     "0");
     y << "project:\n";
     y << "name:\n";
     emit("exist_ok",    "false");
@@ -527,7 +540,8 @@ void TrainerT<M>::run() {
     emit("cos_lr",      "false");
     emit("close_mosaic","10");
     emit("resume",      "false");
-    emit("amp",         "true");
+    // AMP is on (bf16 autocast) when training on CUDA; off on CPU.
+    emit("amp",         torch::cuda::is_available() ? "true" : "false");
     emit("fraction",    "1.0");
     emit("profile",     "false");
     y << "freeze:\n";
@@ -638,6 +652,23 @@ void TrainerT<M>::run() {
 
   model_->to(device_);
   ema_->to(device_);
+  // channels_last on CUDA — extra 10-20% on Tensor Cores for the
+  // conv-heavy YOLO backbones. LibTorch C++ has no Module::to(memformat),
+  // so we walk 4D parameters + buffers ourselves. 1D tensors (BN stats,
+  // biases) are layout-invariant and skipped. Input batches are
+  // converted at sample time below to keep the format consistent.
+  if (device_.is_cuda()) {
+    auto to_nhwc = [](torch::nn::Module& m) {
+      for (auto& p : m.parameters()) {
+        if (p.dim() == 4) p.set_data(p.contiguous(torch::MemoryFormat::ChannelsLast));
+      }
+      for (auto& b : m.buffers()) {
+        if (b.dim() == 4) b.set_data(b.contiguous(torch::MemoryFormat::ChannelsLast));
+      }
+    };
+    to_nhwc(*model_);
+    to_nhwc(*ema_);
+  }
   // Sync rank-0 weights to all ranks before the first step.
   broadcast_module(ddp, *model_);
   broadcast_module(ddp, *ema_);
@@ -767,6 +798,11 @@ void TrainerT<M>::run() {
       auto batch = train_.sample_batch(cfg_.batch_size, rng);
       auto imgs  = batch.imgs.to(device_);
       auto tgt   = batch.targets.to(device_);
+      if (device_.is_cuda()) {
+        // Match the model's channels_last layout so the conv kernels
+        // pick the NHWC Tensor-Core path.
+        imgs = imgs.contiguous(torch::MemoryFormat::ChannelsLast);
+      }
 
       // Emit train_batchN.jpg sanity grids for the first 3 batches of the
       // first epoch — upstream convention.
@@ -779,6 +815,15 @@ void TrainerT<M>::run() {
         render_train_batch(batch.imgs, batch.targets, names, out);
       }
 
+      // AMP via bf16 autocast on CUDA. bf16 carries fp32's dynamic
+      // range so no GradScaler is needed (the Blackwell path). The
+      // autocast scope wraps forward + loss only; backward + step run
+      // with the loss tensor implicitly upcast to fp32 by autocast.
+      const bool use_amp = device_.is_cuda();
+      if (use_amp) {
+        at::autocast::set_autocast_dtype(at::kCUDA, at::kBFloat16);
+        at::autocast::set_autocast_enabled(at::kCUDA, true);
+      }
       auto feats = model_->forward_train(imgs);
       // ProgLoss progress: linearly ramp 0 → 1 across all training steps.
       // (Yolo26Loss uses it; the default trait ignores the argument.)
@@ -787,6 +832,10 @@ void TrainerT<M>::run() {
                             : 1.0;
       auto lo = Traits::compute(loss, feats, tgt, model_->stride,
                                 cfg_.imgsz, progress);
+      if (use_amp) {
+        at::autocast::set_autocast_enabled(at::kCUDA, false);
+        at::autocast::clear_cache();
+      }
 
       optim.zero_grad();
       lo.total.backward();

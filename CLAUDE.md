@@ -3,6 +3,105 @@
 This file provides guidance to Claude Code (claude.ai/code) when working
 with this repository.
 
+## Engineering principles (read first, applies to every change)
+
+These four rules override convenience. When they conflict with "just
+make it work", they win.
+
+- **Think before coding** — state your assumptions out loud, ask when
+  unsure, never guess. Reading two files is cheaper than rewriting one.
+- **Simplicity first** — write the minimum code that solves the
+  problem, nothing extra. No premature abstractions, no
+  "while-we're-here" refactors.
+- **Surgical changes** — every changed line must trace back to the
+  user's request. If you can't justify a hunk in a one-line PR
+  comment, drop it from the diff.
+- **Goal-driven** — turn vague instructions into verifiable success
+  criteria before starting. "Make training faster" is not a goal;
+  "AMP wired, cuDNN benchmark on, throughput ≥ 1.5× baseline on the
+  v8n smoke" is.
+
+### Language + style baseline
+
+- **C++ standard: C++20** (`CMAKE_CXX_STANDARD 20`, CUDA on C++17). The
+  codebase does not currently use any C++20-only feature; treat C++17
+  as the de-facto floor and reach for C++20 features only when they
+  earn their keep (`std::span` over `pointer+size`, `concept` over
+  SFINAE if it shortens the call site, etc.).
+- **RAII is non-negotiable.** No `new` / `delete` / `malloc` / `free`
+  in `src/` or `include/`. Resources go through `std::unique_ptr` /
+  `std::shared_ptr` / `std::ifstream` / `std::filesystem` / LibTorch
+  refcounted tensors / the existing `BnEpsScope` / `V6ActScope`
+  guard pattern. If you need a new resource type, wrap it in a
+  custom-deleter `unique_ptr` — never raw owning pointers.
+- **Don't reinvent STL / LibTorch.** Before writing a helper, check
+  `<algorithm>`, `<numeric>`, `<ranges>`, `std::filesystem`,
+  `torch::`, `at::`, and `cv::` first. Hand-rolled `clamp` / `min` /
+  `sign` / `lerp` / string-split / file-read utilities are rejected
+  on review. The legitimate exceptions are perf-critical kernels
+  (NMS, letterbox) that exist for parity with upstream — those stay
+  hand-written and are marked as such.
+- **SOLID + KISS.** Single-responsibility per file; registry/adapter
+  hooks for cross-cutting per-version behavior (see
+  `version_adapter.hpp`). When a `.cpp` crosses ~800 lines, that's a
+  smell — split by responsibility, not by line count.
+- **Naming: `snake_case`** for functions / variables / namespaces;
+  `PascalCase` for types / templates / enum values. This matches the
+  existing codebase and LibTorch; it does NOT match Google C++ Style
+  verbatim. If a tool enforces strict Google style, propose adding
+  `.clang-format` / `.clang-tidy` before reformatting — don't do
+  silent style sweeps.
+
+### Build + run speed
+
+The dev loop is the bottleneck before the model is. Keep these wired:
+
+- **Generator: Ninja** when available (`cmake -S . -B build -G Ninja`).
+  Falls back to Make if Ninja isn't installed, but Ninja's parallel
+  scheduler is ~2× faster on cold rebuilds of this codebase.
+- **Compiler launcher: ccache** when available. Wire via
+  `-DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+  -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache`. Single biggest dev-loop win
+  on incremental rebuilds.
+- **Linker: mold** (preferred) or **lld**. Pass
+  `-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold` (or `lld`). GNU `gold` is
+  the floor; default `ld.bfd` is too slow for a LibTorch link.
+- **Builds are Release by default** (set in `CMakeLists.txt`). Don't
+  override to Debug for "easier debugging" — it changes numerical
+  behavior on tensor cores. Use `RelWithDebInfo` if you need symbols.
+
+### Training speed (what fast actually means)
+
+These knobs are mandatory in `TrainerT::run()` on CUDA, not optional:
+
+1. **cuDNN benchmark on** — `at::globalContext().setBenchmarkCuDNN(true)`
+   at trainer entry. Picks the fastest conv algo per shape.
+2. **TF32 on** — `setAllowTF32CuBLAS(true)` + `setAllowTF32CuDNN(true)`.
+   Ampere / Hopper / Blackwell tensor cores; ~1.3× MM throughput,
+   numerically safe for training. (Inverse of the v10-TRT-export
+   quirk — there we *clear* TF32; for training it stays on.)
+3. **AMP via bf16 autocast** — `at::autocast::set_autocast_enabled
+   (at::kCUDA, true)` + `set_autocast_dtype(at::kCUDA, at::kBFloat16)`
+   around the forward + loss block. bf16 has fp32's range so no
+   `GradScaler` is needed on Blackwell. **Never advertise `amp=true`
+   in metadata without wiring it** — that lied for two minor
+   versions before being caught.
+4. **`channels_last` on CUDA** — convert model + inputs to
+   `torch::MemoryFormat::ChannelsLast`. Another 10–20% on Tensor
+   Cores for conv-heavy nets.
+5. **Real DataLoader with workers** — `torch::data::make_data_loader`
+   over a stateless adapter, pinned memory + prefetch. Replaces the
+   single-threaded `sample_batch` loop. (Tracked as a follow-up
+   refactor; do not silently leave the metadata claiming
+   `workers=8` while the code does 1.)
+6. **No per-batch `.item<T>()` host syncs** — accumulate loss tensors
+   on-device and `.item()` once per epoch. Per-step `.item()` calls
+   force a CUDA sync and serialise the pipeline.
+
+If you add a perf-relevant knob, prove the win with a before/after
+on the v8n smoke (`ctest -R test_v8_train`) and record it in the
+CHANGELOG entry. No unverified perf claims.
+
 ## Single source of truth: TODO.md
 
 [`TODO.md`](TODO.md) is the canonical list of every task — completed,

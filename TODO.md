@@ -284,6 +284,9 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #57A | Multi-threaded data prefetch (existing TODO in §5) | — | within #57 | — |
 | #57B | Audit + parallelise per-image preprocess / NMS / export emitters where safe | — | within #57 | — |
 | #57C | CUDA streams overlap for multi-batch predict | — | within #57 | — |
+| #57D | **`torch::data::DataLoader` with worker threads + pinned memory** — replace `YoloDataset::sample_batch`'s single-threaded loop. Requires `YoloDataset` to expose `torch::data::datasets::Dataset` and the augmentation/mosaic/mixup paths to be worker-thread-safe. Likely the new bottleneck post-0.90.0 (AMP+TF32+channels_last). | medium | 1–2 sessions | — |
+| #57E | **Remove per-batch `.item<double>()` host syncs** in trainer loss accumulators — sum on-device, `.item()` once per epoch. CUDA-sync per step today serialises the pipeline. | medium | 0.25 session | — |
+| #57F | **Wire ccache + Ninja + mold/lld into CMake auto-detect** — currently CLAUDE.md documents the expected flags but none of these tools are installed on the dev box. Detect-and-use blocks belong in the top of `CMakeLists.txt`. | low | 0.25 session | install tooling first |
 | #58  | Multi-device + cross-platform deployment (depends on #51H for CLI) | medium | 3 sessions | per-platform sub-tasks |
 | #58A | CPU / multi-CUDA / MPS device dispatch in core | — | within #58 | — |
 | #58B | iPhone / iOS deployment (CoreML export) | — | within #58 | — |

@@ -4,6 +4,44 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.90.0] — 2026-05-26
+
+### Added
+- **Engineering principles** section at the top of `CLAUDE.md`: the
+  four core rules (think-before-coding, simplicity-first, surgical-
+  changes, goal-driven), explicit C++20-as-baseline language policy,
+  RAII / no-reinvention / SOLID / KISS / naming policy, and a
+  build-speed checklist (Ninja, ccache, mold). Future sessions must
+  read these before changing code.
+- **Training-speed checklist** in `CLAUDE.md` documenting the
+  mandatory CUDA training knobs and what `fast` actually means here.
+
+### Changed
+- **Trainer perf pass** (`src/engine/trainer.cpp`): cuDNN benchmark
+  on, TF32 enabled for cuBLAS + cuDNN, **AMP via bf16 autocast** on
+  CUDA wrapped around the forward + loss block (no GradScaler needed —
+  bf16 has fp32 range, this is the Blackwell path), and the model +
+  ema + per-step input batches are converted to
+  `torch::MemoryFormat::ChannelsLast` for the NHWC Tensor-Core path.
+  All 9 `*_train` ctests + the full 39/39 suite pass after the change.
+- **Honest training metadata**: `args.yaml` no longer claims
+  `amp=true` unconditionally — it now reflects whether AMP actually
+  ran (true on CUDA, false on CPU). `workers=8` corrected to
+  `workers=0` until a real `torch::data::DataLoader` lands (tracked
+  as a follow-up).
+
+### Deferred
+- **Real `torch::data::DataLoader`** with worker threads + pinned
+  memory + prefetch. The current `sample_batch` is a single-threaded
+  loop and likely the new bottleneck once AMP+TF32+channels_last
+  remove the GPU-side stalls. Needs `YoloDataset` to expose
+  `torch::data::datasets::Dataset` and the
+  augmentation/mosaic/mixup paths to be made worker-thread-safe —
+  bigger refactor, separate commit chain.
+- **Build-speed tooling** (ccache + Ninja + mold) — none installed on
+  the dev machine today; CLAUDE.md documents the expected wiring so
+  it lands as soon as the tools are available.
+
 ## Versioning policy (pre-1.0)
 
 The project is **pre-1.0** — the public API, on-disk weight format,
