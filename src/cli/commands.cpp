@@ -378,7 +378,10 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   // AugConfig{} defaults stay mosaic_p=0.0 so other callers (e.g.
   // overfit smoke tests) aren't affected.
   yolocpp::datasets::AugConfig train_aug;
-  train_aug.mosaic_p = 1.0f;
+  train_aug.mosaic_p  = 1.0f;   // Ultralytics default
+  train_aug.translate = 0.1f;   // Ultralytics detect default
+  train_aug.scale_amp = 0.5f;   // Ultralytics detect default — scale in [0.5, 1.5]
+  // degrees/shear stay 0 — also the Ultralytics default for detect.
   auto train_ds = make_dataset(root, "train", imgsz, names,
                                 train_aug, seed);
 

@@ -49,6 +49,23 @@ struct AugConfig {
   // is applied to the resulting sample.
   float  mosaic_p = 0.0f;
   float  mixup_p  = 0.0f;
+  // RandomPerspective parameters (#57G). Applied per-sample after
+  // mosaic and before mixup, matching the Ultralytics order. All
+  // default to 0 so existing call sites are unaffected; cmd_train
+  // overrides with Ultralytics' detect defaults (translate=0.1,
+  // scale_amp=0.5). Shear/rotation/perspective default off because
+  // upstream's detect default keeps them off too (degrees=0,
+  // shear=0, perspective=0).
+  //
+  //   degrees   ° of random rotation around image center, +/- this value
+  //   translate fraction of imgsz to translate, +/- this value
+  //   scale_amp scale factor sampled uniformly from [1-amp, 1+amp]
+  //   shear     ° of random shear (currently unused — degrees=shear=0
+  //             is the Ultralytics detect default)
+  float  degrees    = 0.0f;
+  float  translate  = 0.0f;
+  float  scale_amp  = 0.0f;
+  float  shear      = 0.0f;
 };
 
 struct YoloExample {

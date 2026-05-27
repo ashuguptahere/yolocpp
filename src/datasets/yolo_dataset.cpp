@@ -218,14 +218,24 @@ YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
   return ex;
 }
 
+// Forward decl — defined below; build_mosaic4 calls it to apply the
+// affine warp + s×s crop on the 2s mosaic canvas in one shot.
+static std::pair<cv::Mat, std::vector<float>>
+random_perspective_mat(const cv::Mat& in_img,
+                        const std::vector<float>& in_lbls,
+                        int out_w, int out_h,
+                        const AugConfig& aug,
+                        std::mt19937& rng);
+
 // ─── Mosaic-4 (#54D) ────────────────────────────────────────────────────
 // Build one example by stitching 4 sampled images into a 2*imgsz
-// canvas with a random center, cropping to imgsz×imgsz. Bboxes from
-// each tile are translated into mosaic coords + clipped to the
-// crop. Standard YOLOv5/v8 implementation; no rotation / scale
-// jitter at this slice (those are MixedAffine — separate
-// follow-up).
+// canvas with a random center, then applying RandomPerspective with
+// output_size=(imgsz, imgsz) — that one call combines the warp with
+// the crop, matching Ultralytics' pipeline order and avoiding the
+// dead-pixel issue you get when stacking warp on an already-cropped
+// mosaic.
 static YoloExample build_mosaic4(const YoloDataset& ds, std::size_t imgsz,
+                                  const AugConfig& aug,
                                   std::mt19937& rng) {
   std::uniform_int_distribution<std::size_t> u_idx(0, ds.size() - 1);
   std::array<YoloExample, 4> tiles;
@@ -297,38 +307,20 @@ static YoloExample build_mosaic4(const YoloDataset& ds, std::size_t imgsz,
     }
   }
 
-  // Crop the centred imgsz×imgsz region at (xc, yc) — wait, no, the
-  // mosaic centre is at (xc, yc) which is already inside the 2s
-  // canvas. The standard upstream cropfraction is to crop
-  // (s/2..3s/2 × s/2..3s/2) ⇒ gives a centred imgsz crop. But the
-  // common variant uses a random crop centred at (xc, yc) of size
-  // (s, s). We use the (xc, yc)-centred crop:
-  int cx0 = std::max(0, std::min(xc - s / 2, 2 * s - s));
-  int cy0 = std::max(0, std::min(yc - s / 2, 2 * s - s));
-  cv::Mat crop = canvas(cv::Rect(cx0, cy0, s, s)).clone();
-
-  // Clip + filter labels to the crop.
-  std::vector<float> kept;
-  for (std::size_t k = 0; k + 5 <= all_labels.size(); k += 5) {
-    float cls = all_labels[k];
-    float cx  = all_labels[k + 1] - cx0;
-    float cy  = all_labels[k + 2] - cy0;
-    float w   = all_labels[k + 3];
-    float h   = all_labels[k + 4];
-    float x1  = cx - w * 0.5f, y1 = cy - h * 0.5f;
-    float x2  = cx + w * 0.5f, y2 = cy + h * 0.5f;
-    x1 = std::max(0.f,    x1); y1 = std::max(0.f,    y1);
-    x2 = std::min((float)s, x2); y2 = std::min((float)s, y2);
-    float nw = x2 - x1, nh = y2 - y1;
-    if (nw <= 1.f || nh <= 1.f) continue;  // drop tiny / off-canvas
-    kept.push_back(cls);
-    kept.push_back((x1 + x2) * 0.5f);
-    kept.push_back((y1 + y2) * 0.5f);
-    kept.push_back(nw);
-    kept.push_back(nh);
-  }
+  // Combined warp + crop via random_perspective_mat: input is the 2s
+  // canvas with bboxes in 2s coords; output is the s×s region centred
+  // on the canvas center with random affine applied. When the affine
+  // knobs are all zero this collapses to a pure central crop (the
+  // (xc, yc)-centred random crop variant is gone; spatial variability
+  // now comes from the warp's translate). Matches Ultralytics' Mosaic
+  // pipeline order: stitch 2s → random_perspective(out=s).
+  auto [crop, kept] = random_perspective_mat(canvas, all_labels,
+                                              s, s, aug, rng);
 
   YoloExample out;
+  // image_to_tensor expects uint8 BGR (or BGR cv::Mat in either depth
+  // — see letterbox.cpp). canvas was built from cv::COLOR_RGB2BGR'd
+  // tiles so it's BGR.
   out.img = inference::image_to_tensor(crop);
   if (kept.empty()) {
     out.targets = torch::zeros({0, 5}, torch::kFloat32);
@@ -339,6 +331,108 @@ static YoloExample build_mosaic4(const YoloDataset& ds, std::size_t imgsz,
   }
   out.orig_w = s; out.orig_h = s; out.gain = 1.0;
   return out;
+}
+
+// RandomPerspective (#57G): affine warp (rotate + scale + translate)
+// integrated into the mosaic pipeline per upstream Ultralytics. The
+// warp is applied to the 2s mosaic canvas and the output is cropped
+// to (out_w, out_h) centred on the input — this avoids the
+// dead-pixel issue you get when you stack RandomPerspective on top
+// of an already-cropped mosaic output. For non-mosaic samples
+// (which are already letterboxed to imgsz×imgsz with no surrounding
+// canvas to crop into) RandomPerspective is intentionally skipped.
+//
+// Affine matrix layout (2x3 for cv::warpAffine):
+//   M = T_random · T_recenter · R(angle, scale)
+//   where R is built via getRotationMatrix2D around the input
+//   center, T_recenter shifts the warped center to (out_w/2, out_h/2),
+//   and T_random adds the random translate.
+// Bboxes (in input-coord space): 4 corners transformed by the same
+// M; aabb; clip to (out_w, out_h); drop boxes with side < 2 px or
+// post-warp area < 10% of original.
+//
+// in_img:  HWC float32 cv::Mat (any channel order — warpAffine is
+//          channel-agnostic)
+// in_lbls: flat (cls, cx, cy, w, h) flat array in input-coord pixels
+// out_w/h: output canvas size (may differ from input — that's how we
+//          combine warp + crop in one cv::warpAffine call)
+//
+// Returns: (warped HWC float32 cv::Mat, transformed labels) in
+// output-coord pixels, ready to be packed into a YoloExample.
+static std::pair<cv::Mat, std::vector<float>>
+random_perspective_mat(const cv::Mat& in_img,
+                        const std::vector<float>& in_lbls,
+                        int out_w, int out_h,
+                        const AugConfig& aug,
+                        std::mt19937& rng) {
+  const int W_in = in_img.cols, H_in = in_img.rows;
+  std::uniform_real_distribution<float> u(-1.f, 1.f);
+  std::uniform_real_distribution<float> uscale(1.f - aug.scale_amp,
+                                                1.f + aug.scale_amp);
+  const double angle_deg = (double)(aug.degrees * u(rng));
+  const double scale     = (double)uscale(rng);
+  const double tx        = (double)(aug.translate * (float)out_w * u(rng));
+  const double ty        = (double)(aug.translate * (float)out_h * u(rng));
+
+  // Build affine: rotate+scale around input center, then shift so
+  // the output's [0,0] maps to ((W_in - out_w)/2, (H_in - out_h)/2),
+  // then add the random translate.
+  cv::Mat M = cv::getRotationMatrix2D(
+      cv::Point2d(W_in * 0.5, H_in * 0.5), angle_deg, scale);
+  M.at<double>(0, 2) += tx - (W_in - out_w) * 0.5;
+  M.at<double>(1, 2) += ty - (H_in - out_h) * 0.5;
+
+  // Border color matches YOLO's neutral 114-grey at the depth of
+  // whichever cv::Mat we received (uint8 mosaic canvas vs float32
+  // single-image tensor).
+  cv::Scalar border = (in_img.depth() == CV_32F)
+      ? cv::Scalar(114.0 / 255.0, 114.0 / 255.0, 114.0 / 255.0)
+      : cv::Scalar(114, 114, 114);
+  cv::Mat warped;
+  cv::warpAffine(in_img, warped, M, {out_w, out_h}, cv::INTER_LINEAR,
+                 cv::BORDER_CONSTANT, border);
+
+  // Bbox transform.
+  std::vector<float> kept;
+  if (!in_lbls.empty()) {
+    const double m00 = M.at<double>(0, 0), m01 = M.at<double>(0, 1), m02 = M.at<double>(0, 2);
+    const double m10 = M.at<double>(1, 0), m11 = M.at<double>(1, 1), m12 = M.at<double>(1, 2);
+    auto warp = [&](double x, double y, double& xo, double& yo) {
+      xo = m00 * x + m01 * y + m02;
+      yo = m10 * x + m11 * y + m12;
+    };
+    kept.reserve(in_lbls.size());
+    for (std::size_t k = 0; k + 5 <= in_lbls.size(); k += 5) {
+      const float cls = in_lbls[k];
+      const float cx  = in_lbls[k + 1], cy = in_lbls[k + 2];
+      const float w   = in_lbls[k + 3], h  = in_lbls[k + 4];
+      const double x1 = cx - w * 0.5, y1 = cy - h * 0.5;
+      const double x2 = cx + w * 0.5, y2 = cy + h * 0.5;
+      double cx1, cy1, cx2, cy2, cx3, cy3, cx4, cy4;
+      warp(x1, y1, cx1, cy1);
+      warp(x2, y1, cx2, cy2);
+      warp(x2, y2, cx3, cy3);
+      warp(x1, y2, cx4, cy4);
+      double nx1 = std::min(std::min(cx1, cx2), std::min(cx3, cx4));
+      double ny1 = std::min(std::min(cy1, cy2), std::min(cy3, cy4));
+      double nx2 = std::max(std::max(cx1, cx2), std::max(cx3, cx4));
+      double ny2 = std::max(std::max(cy1, cy2), std::max(cy3, cy4));
+      nx1 = std::clamp(nx1, 0.0, (double)out_w);
+      ny1 = std::clamp(ny1, 0.0, (double)out_h);
+      nx2 = std::clamp(nx2, 0.0, (double)out_w);
+      ny2 = std::clamp(ny2, 0.0, (double)out_h);
+      const double nw = nx2 - nx1, nh = ny2 - ny1;
+      if (nw < 2.0 || nh < 2.0) continue;
+      const double orig_area = (double)w * (double)h;
+      if (orig_area > 0.0 && (nw * nh) / orig_area < 0.10) continue;
+      kept.push_back(cls);
+      kept.push_back((float)((nx1 + nx2) * 0.5));
+      kept.push_back((float)((ny1 + ny2) * 0.5));
+      kept.push_back((float)nw);
+      kept.push_back((float)nh);
+    }
+  }
+  return {warped, std::move(kept)};
 }
 
 // Mixup (#54D): blend two examples by α ~ Beta(8, 8); concatenate
@@ -374,7 +468,15 @@ YoloDataset::Batch YoloDataset::sample_batch(std::size_t bsz,
   for (size_t i = 0; i < bsz; ++i) {
     YoloExample ex;
     if (aug_.augment && aug_.mosaic_p > 0.f && u01(rng) < aug_.mosaic_p) {
-      ex = build_mosaic4(*this, (std::size_t)imgsz_, rng);
+      // Mosaic + RandomPerspective is combined: build_mosaic4 stitches
+      // the 2s canvas and then calls random_perspective_mat to warp
+      // and crop to (imgsz, imgsz) in one cv::warpAffine. This matches
+      // Ultralytics' pipeline order and avoids the dead-pixel issue
+      // you get when stacking perspective on top of an already-cropped
+      // mosaic. Non-mosaic samples come from get() pre-letterboxed to
+      // imgsz×imgsz and skip the perspective stage entirely (warping
+      // them would only create dead pixels at the borders).
+      ex = build_mosaic4(*this, (std::size_t)imgsz_, aug_, rng);
     } else {
       ex = get(u(rng), /*aug_seed=*/((uint64_t)rng()) << 32 | i);
     }

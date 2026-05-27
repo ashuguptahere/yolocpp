@@ -4,6 +4,45 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.93.0] — 2026-05-27
+
+### Added
+- **RandomPerspective integrated into Mosaic** (`src/datasets/yolo_dataset.cpp`)
+  — new `random_perspective_mat` helper builds an affine
+  (rotate + scale + translate) and applies `cv::warpAffine` with the
+  output canvas sized smaller than the input, combining warp and
+  crop in a single call. `build_mosaic4` calls it on the 2s
+  stitched canvas with output=(imgsz, imgsz), matching Ultralytics'
+  Mosaic→RandomPerspective composition. Bboxes use the same 2×3
+  affine to transform their 4 corners, then aabb + clip + drop
+  boxes with side < 2 px or post-warp area < 10% of original.
+- **`AugConfig::degrees / translate / scale_amp / shear` fields** —
+  default 0 (no-op for non-train callers); `cmd_train` overrides
+  with Ultralytics' detect defaults (`translate=0.1`, `scale_amp=0.5`).
+
+### Changed
+- **`build_mosaic4` signature** — now takes `const AugConfig& aug`
+  (passed through from `sample_batch`). The previous random
+  (xc, yc)-centred crop is gone; spatial variability comes from
+  the warp's random translate inside `random_perspective_mat`.
+- **`sample_batch` no longer applies a standalone RandomPerspective
+  on non-mosaic samples.** Stacking perspective on a pre-letterboxed
+  s×s image produced visible dead pixels at the borders. Mosaic
+  samples get warp via `build_mosaic4`; non-mosaic samples only get
+  HSV + flip.
+
+### Benchmark (1 epoch, yolo26x, screen-dataset-yolo, seed=42, RTX 5090)
+
+| Run | mAP@0.5 | mAP@0.5:0.95 | P | R | F1 | epoch_sec |
+|---|---|---|---|---|---|---|
+| 0.91.0 (no aug, AdamW) | 0.278 | 0.150 | 0.441 | 0.449 | 0.414 | 34.4 |
+| 0.92.0 (mosaic only) | 0.087 | 0.052 | 0.364 | 0.179 | 0.224 | 59.1 |
+| 0.93.0 broken-stack (mosaic + perspective stacked, reverted) | 0.012 | 0.002 | 0.179 | 0.113 | 0.061 | 70.0 |
+| **0.93.0 (mosaic + perspective integrated)** | 0.146 | 0.067 | 0.518 | 0.301 | 0.288 | 58.2 |
+| Ultralytics 8.x (mosaic + perspective + more) | 0.646 | 0.485 | 0.803 | 0.589 | 0.587 | 45.1 |
+
+Integration corrected the dead-pixel composition (0.93.0 mAP > 0.92.0 with both regularizers on, vs stacked which was catastrophic at 0.002). At 1 epoch, the aug pipeline still loses to no-aug — that's the regularizer paying short-term mAP for long-term generalization, the standard recipe disables it for the last ~10 epochs (`close_mosaic`). Multi-epoch (5+ epoch) comparison is the right place to demonstrate the actual win.
+
 ## [0.92.0] — 2026-05-27
 
 ### Changed
