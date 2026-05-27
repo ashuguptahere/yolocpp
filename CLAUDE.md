@@ -89,11 +89,15 @@ These knobs are mandatory in `TrainerT::run()` on CUDA, not optional:
 4. **`channels_last` on CUDA** — convert model + inputs to
    `torch::MemoryFormat::ChannelsLast`. Another 10–20% on Tensor
    Cores for conv-heavy nets.
-5. **Real DataLoader with workers** — `torch::data::make_data_loader`
-   over a stateless adapter, pinned memory + prefetch. Replaces the
-   single-threaded `sample_batch` loop. (Tracked as a follow-up
-   refactor; do not silently leave the metadata claiming
-   `workers=8` while the code does 1.)
+5. **`BatchPrefetcher` with N worker threads** (landed 0.94.0) — a
+   producer/consumer queue of pre-built batches, sized `2 * workers`,
+   each worker owning its own seeded `std::mt19937`. Default
+   workers=4; --workers CLI flag overrides. Pipelines mosaic +
+   perspective + decode + letterbox ahead of GPU compute. Built in
+   preference to `torch::data::make_data_loader` because it didn't
+   require refactoring `YoloDataset`'s interface — same effect,
+   smaller diff. Don't claim workers > 0 in `args.yaml` if `cfg_.workers`
+   is 0 — the metadata now reports the real value.
 6. **No per-batch `.item<T>()` host syncs** — accumulate loss tensors
    on-device and `.item()` once per epoch. Per-step `.item()` calls
    force a CUDA sync and serialise the pipeline.

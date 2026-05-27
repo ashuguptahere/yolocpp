@@ -6,12 +6,16 @@
 
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <sstream>
+#include <thread>
 
 #include "yolocpp/engine/ddp.hpp"
 #include "yolocpp/engine/validator.hpp"
@@ -55,6 +59,85 @@ static torch::Device pick_device(std::string s) {
 }
 
 namespace {
+
+// BatchPrefetcher — N background threads each call
+// `dataset.sample_batch` into a shared bounded queue; the main
+// training loop pulls from the queue via `next()`. This pipelines
+// data prep (decode + mosaic + perspective + letterbox + tensor
+// conversion) ahead of the GPU step, hiding the CPU latency that
+// was the single biggest 0.93.0 perf gap vs Ultralytics' Python
+// DataLoader-with-workers (~2× per-epoch wall time on yolo26x +
+// mosaic). Workers each own their own seeded `std::mt19937` so
+// reproducibility holds within each worker; the across-worker
+// batch ordering is non-deterministic (acceptable: SGD/AdamW
+// gradient estimates are over-batch averages — the per-step batch
+// composition is what matters, not its global ordering).
+class BatchPrefetcher {
+ public:
+  BatchPrefetcher(const datasets::YoloDataset& ds, int batch_size,
+                  int num_workers, uint64_t seed)
+      : ds_(ds), batch_size_(batch_size),
+        num_workers_(std::max(1, num_workers)),
+        max_q_((std::size_t)(2 * std::max(1, num_workers))) {
+    workers_.reserve((std::size_t)num_workers_);
+    const uint64_t base = seed != 0 ? seed : 0x9E3779B97F4A7C15ULL;
+    for (int i = 0; i < num_workers_; ++i) {
+      // Distinct, well-separated per-worker seeds (golden-ratio
+      // hash splat). Each worker's sample_batch produces a
+      // deterministic stream given its own seed.
+      const uint64_t ws = base + (uint64_t)i * 0x9E3779B97F4A7C15ULL;
+      workers_.emplace_back([this, ws] { worker_loop_(ws); });
+    }
+  }
+
+  ~BatchPrefetcher() {
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      stop_ = true;
+    }
+    cv_space_.notify_all();
+    cv_data_.notify_all();
+    for (auto& t : workers_) {
+      if (t.joinable()) t.join();
+    }
+  }
+
+  // Blocking pop. Returns the next batch; the caller owns it.
+  datasets::YoloDataset::Batch next() {
+    std::unique_lock<std::mutex> lk(mu_);
+    cv_data_.wait(lk, [this] { return !q_.empty() || stop_; });
+    auto b = std::move(q_.front());
+    q_.pop_front();
+    cv_space_.notify_one();
+    return b;
+  }
+
+ private:
+  void worker_loop_(uint64_t seed) {
+    std::mt19937 rng(seed);
+    while (true) {
+      // Sample a batch off-lock — this is the heavy CPU work
+      // (image decode + mosaic + perspective + letterbox) we want
+      // overlapping with the main thread's GPU step.
+      auto batch = ds_.sample_batch((std::size_t)batch_size_, rng);
+      std::unique_lock<std::mutex> lk(mu_);
+      cv_space_.wait(lk, [this] { return q_.size() < max_q_ || stop_; });
+      if (stop_) return;
+      q_.push_back(std::move(batch));
+      cv_data_.notify_one();
+    }
+  }
+
+  const datasets::YoloDataset&            ds_;
+  int                                     batch_size_;
+  int                                     num_workers_;
+  std::size_t                             max_q_;
+  std::deque<datasets::YoloDataset::Batch> q_;
+  std::mutex                              mu_;
+  std::condition_variable                 cv_data_, cv_space_;
+  bool                                    stop_ = false;
+  std::vector<std::thread>                workers_;
+};
 
 // Build the per-group optimizer. Three groups (decay-conv / bias / bn-weight)
 // for both SGD and AdamW — same partition, different per-group options.
@@ -570,10 +653,9 @@ void TrainerT<M>::run() {
       std::ostringstream ss; ss << device_;
       emit("device",      ss.str());
     }
-    // Single-threaded sample_batch loop today; the upstream-shape
-    // metadata key stays for tooling compatibility but reflects reality.
-    // Real torch::data::DataLoader workers are tracked as a follow-up.
-    emit("workers",     "0");
+    // Real value — BatchPrefetcher uses cfg_.workers background
+    // threads (0 = synchronous fallback).
+    emit("workers",     std::to_string(cfg_.workers));
     y << "project:\n";
     y << "name:\n";
     emit("exist_ok",    "false");
@@ -790,7 +872,19 @@ void TrainerT<M>::run() {
 
   std::cout << "[trainer] dataset=" << n << " imgs, "
             << steps << " steps/epoch, total=" << total_steps
-            << ", device=" << device_ << "\n";
+            << ", device=" << device_
+            << ", workers=" << cfg_.workers << "\n";
+
+  // BatchPrefetcher pipelines mosaic + perspective + decode + letterbox
+  // ahead of the GPU step. Constructed inside run() so its lifetime is
+  // strictly scoped to training — destructor stops + joins workers
+  // before validate() / save_ckpt() / curve rendering touch the dataset.
+  // workers=0 falls back to the synchronous per-step sample_batch path.
+  std::unique_ptr<BatchPrefetcher> prefetch;
+  if (cfg_.workers > 0) {
+    prefetch = std::make_unique<BatchPrefetcher>(
+        train_, cfg_.batch_size, cfg_.workers, cfg_.seed);
+  }
 
   // Helper to dump current EMA model to <save_dir>/<name>.pt in our
   // load_state_dict-compatible format.
@@ -844,7 +938,9 @@ void TrainerT<M>::run() {
       gs[1].options().set_lr(lr_bias);
       gs[2].options().set_lr(lr_main);
 
-      auto batch = train_.sample_batch(cfg_.batch_size, rng);
+      auto batch = prefetch
+          ? prefetch->next()
+          : train_.sample_batch(cfg_.batch_size, rng);
       auto imgs  = batch.imgs.to(device_);
       auto tgt   = batch.targets.to(device_);
       if (device_.is_cuda()) {
@@ -1001,6 +1097,10 @@ void TrainerT<M>::run() {
     }
   }
   if (is_rank0(ddp)) csv.close();
+
+  // Stop prefetcher workers before the final validate + curve render
+  // pass so they don't contend on CPU for image decode.
+  prefetch.reset();
 
   // Final saves + confusion matrix on rank 0 only.
   if (is_rank0(ddp)) {

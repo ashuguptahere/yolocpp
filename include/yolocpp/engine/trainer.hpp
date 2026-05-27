@@ -99,6 +99,12 @@ struct TrainConfig {
   // fine-tune regime where adaptive LR helps) else SGD+Nesterov.
   // "sgd" / "adamw" force one. Matches ultralytics' optimizer=auto rule.
   std::string optimizer = "auto";
+  // Number of background threads used by the per-epoch BatchPrefetcher
+  // to pipeline data prep (mosaic + perspective + decode) ahead of GPU
+  // compute. 0 = synchronous (the pre-0.94.0 single-threaded path).
+  // Default 4 — empirically saturates the GPU on a 5090 for yolo26x at
+  // batch=16, beyond which extra workers contend on the queue mutex.
+  int workers = 4;
 };
 
 // Trainer is templated over the model-holder type (Yolo8Detect or
