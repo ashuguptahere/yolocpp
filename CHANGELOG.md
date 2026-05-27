@@ -4,6 +4,57 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.91.0] — 2026-05-27
+
+### Added
+- **AdamW optimizer path** (`src/engine/trainer.cpp`) — new
+  `make_optimizer` factory dispatches on `TrainConfig::optimizer`
+  ("auto" | "sgd" | "adamw"). The "auto" rule (mirrors
+  Ultralytics): AdamW for batch_size < 64 (the short-fine-tune
+  regime where adaptive LR helps the cls head bootstrap from a 1%
+  prior), SGD+Nesterov otherwise. Resolver `engine::resolve_optimizer`
+  is exposed in the trainer header so version adapters can predicate
+  their LR overrides on the effective optimizer.
+- **Auto LR-scale when auto-switching SGD → AdamW** — when the user
+  leaves both `optimizer=auto` and `lr0` at the SGD-natural default
+  (0.01), AdamW's lr0 is scaled to 1e-3 (factor 0.1). Matches
+  Ultralytics' `optimizer=auto`'s lr0=0.001111 behaviour. Logged
+  to stdout so it's auditable.
+- **`--optimizer` CLI flag** — plumbed through `cmd_train` →
+  `TrainConfig`. Default "auto"; accepts "sgd" or "adamw".
+- **P/R/F1 in `results.csv`** — three new columns
+  `metrics/precision(B)`, `metrics/recall(B)`, `metrics/F1(B)`
+  written per epoch. Computed from `compute_curves` at the best-F1
+  confidence threshold, averaged across classes weighted by GT
+  count. Matches Ultralytics' results.csv column set.
+
+### Changed
+- **v26 SGD LR override is now SGD-only** — the cls-head
+  prior-bias preservation (`lr0=0.01 → 1e-4`) was a fix for SGD's
+  cls-bias overshoot. AdamW's per-parameter adaptive scaling
+  (`v / sqrt(v + eps)`) caps the same per-step delta and doesn't
+  need the override. The check now reads the effective optimizer
+  via `engine::resolve_optimizer` before firing.
+- **Polymorphic LR set/get in the training loop** — replaced
+  `static_cast<SGDOptions&>(...).lr(x)` with the base class's
+  virtual `OptimizerOptions::set_lr(x)` / `.get_lr()`. Required
+  for AdamW + SGD to share the same per-step LR-update code.
+
+### Benchmark (1 epoch, yolo26x, screen-dataset-yolo, seed=42, batch=16, imgsz=640, RTX 5090)
+
+| Run | mAP@0.5 | mAP@0.5:0.95 | P | R | F1 | epoch_sec |
+|---|---|---|---|---|---|---|
+| yolocpp 0.91.0 `--optimizer auto` (→ adamw lr=1e-3) | 0.278 | 0.150 | 0.441 | 0.449 | 0.414 | 34.35 |
+| yolocpp 0.91.0 `--optimizer sgd` (lr=1e-4 v26 override) | 0.189 | 0.157 | 0.422 | 0.315 | 0.326 | 33.37 |
+| Ultralytics 8.x (auto → AdamW lr=1.1e-3) | 0.646 | 0.485 | 0.803 | 0.589 | 0.587 | 45.11 |
+
+yolocpp is faster per epoch in both modes (~25% faster than
+Ultralytics) but its 1-epoch quality is still ~2-3× behind. The
+remaining gap is most likely in (a) v26 cls-loss reduction
+divergence (`cls=34` vs `cls=3` magnitude on identical batches —
+sums vs means across anchors) and (b) mosaic augmentation pipeline
+differences. Both are tracked under TODO §2.
+
 ## [0.90.0] — 2026-05-26
 
 ### Added

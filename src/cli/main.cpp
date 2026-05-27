@@ -44,6 +44,7 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   // 1.0 for constant LR (no cosine decay). Threaded through cmd_train
   // → TrainConfig.lrf.
   double lrf   = -1.0;
+  std::string optimizer = "auto";  // auto → AdamW for batch<64, else SGD
   float  conf  = 0.25f, iou = 0.45f;
   bool   export_fp16 = true;
   uint64_t seed = 0;
@@ -62,6 +63,8 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   app.add_option("--epochs,-e",  epochs,      "epochs (train)");
   app.add_option("--batch,-b",   batch_size,  "batch size (train)");
   app.add_option("--lr0",        lr0,         "initial LR (train)");
+  app.add_option("--optimizer",  optimizer,
+                  "train optimizer: auto (default) | sgd | adamw");
   app.add_option("--lrf",        lrf,
                   "final LR fraction of lr0 (cosine schedule end). "
                   "Default 0.01 = decay to 1%% of lr0; pass 1.0 for constant LR.");
@@ -185,7 +188,7 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
       // Detect train is registry-routed.
       rc = cmd_train(data, names_csv, imgsz, epochs, batch_size, lr0,
                       device, scale_s, save_dir, weights,
-                      patience, /*args_for_yaml=*/{}, seed, lrf);
+                      patience, /*args_for_yaml=*/{}, seed, lrf, optimizer);
     } else {
       // Non-detect train uses the v8 task families.
       rc = cmd_train_task(task, data, names_csv, imgsz, epochs, batch_size,

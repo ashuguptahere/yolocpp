@@ -105,6 +105,12 @@ int main() {
   cfg.log_every     = 10;
   cfg.save_dir      = "build/ovfit_run";
   cfg.device        = torch::cuda::is_available() ? "cuda" : "cpu";
+  // Pin to SGD — this test relies on the high LR (0.01) memorising a
+  // tiny dataset within 30 epochs. With batch=4 the "auto" rule would
+  // pick AdamW at the SGD-default lr=0.01 (10× too hot for AdamW) and
+  // the run would diverge. SGD is the correct optimizer for this
+  // overfit-on-tiny-dataset success criterion.
+  cfg.optimizer     = "sgd";
 
   // Quick "before" loss measurement.
   losses::LossConfig lc; lc.nc = (int)names.size();

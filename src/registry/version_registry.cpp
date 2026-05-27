@@ -1056,8 +1056,16 @@ VersionAdapter make_v26() {
     // Override both to STAL-appropriate values. Caller can still
     // pass `--lr0 <value>` to opt back into a higher rate.
     engine::TrainConfig tc = cfg;
-    if (std::abs(tc.lr0 - 0.01) < 1e-9) {
-      std::cerr << "[info] yolo26 train: lr0=0.01 (YOLO default) → 1e-4 "
+    // The STAL cold-start LR override is SGD-specific: at SGD+lr=0.01
+    // with clip_grad_norm=10, the cls bias (init log(0.01/0.99)≈−4.6)
+    // accumulates >0.1/step from the negative-mass gradient and
+    // overshoots within ~30 steps. AdamW's per-parameter adaptive
+    // scaling (v / sqrt(v+eps)) caps the per-step bias delta and
+    // doesn't need the override — so we only drop lr0 when the
+    // effective optimizer is SGD.
+    const std::string eff_opt = engine::resolve_optimizer(tc.optimizer, tc.batch_size);
+    if (eff_opt == "sgd" && std::abs(tc.lr0 - 0.01) < 1e-9) {
+      std::cerr << "[info] yolo26 train (sgd): lr0=0.01 (YOLO default) → 1e-4 "
                    "(preserves the cls-head prior bias under STAL cold-"
                    "start). Pass --lr0 to override.\n";
       tc.lr0 = 1e-4;

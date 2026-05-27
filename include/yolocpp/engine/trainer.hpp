@@ -44,6 +44,16 @@
 
 namespace yolocpp::engine {
 
+// Resolve `optimizer` choice from a TrainConfig: "sgd" / "adamw"
+// pass through; "auto" picks AdamW for batch < 64 (the short-
+// fine-tune regime) and SGD otherwise. Mirrors ultralytics'
+// optimizer=auto rule. Exposed so version adapters (e.g. v26)
+// can predicate LR overrides on the effective optimizer.
+inline std::string resolve_optimizer(const std::string& choice, int batch_size) {
+  if (choice == "sgd" || choice == "adamw") return choice;
+  return (batch_size < 64) ? std::string("adamw") : std::string("sgd");
+}
+
 struct TrainConfig {
   int    epochs        = 100;
   int    batch_size    = 16;
@@ -85,6 +95,10 @@ struct TrainConfig {
   // Free-form (key, value) pairs dumped to <save_dir>/args.yaml at run start
   // for reproducibility — typically the CLI args verbatim.
   std::vector<std::pair<std::string, std::string>> args_for_yaml;
+  // Optimizer choice — "auto" picks AdamW for batch < 64 (the short-
+  // fine-tune regime where adaptive LR helps) else SGD+Nesterov.
+  // "sgd" / "adamw" force one. Matches ultralytics' optimizer=auto rule.
+  std::string optimizer = "auto";
 };
 
 // Trainer is templated over the model-holder type (Yolo8Detect or

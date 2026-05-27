@@ -2,6 +2,7 @@
 
 #include <ATen/autocast_mode.h>
 #include <torch/optim.h>
+#include <torch/optim/adamw.h>
 
 #include <chrono>
 #include <cmath>
@@ -54,6 +55,52 @@ static torch::Device pick_device(std::string s) {
 }
 
 namespace {
+
+// Build the per-group optimizer. Three groups (decay-conv / bias / bn-weight)
+// for both SGD and AdamW — same partition, different per-group options.
+//
+// AdamW defaults match ultralytics' auto-pick when fine-tuning from a
+// pretrained .pt at batch=16: lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
+// weight_decay split = (cfg.weight_decay, 0, 0). The adaptive
+// per-parameter scaling protects the v26 cls-head prior bias from
+// the same overshoot that SGD+lr=0.01 produces — which is why the v26
+// LR-override in `version_registry.cpp` only fires for SGD.
+std::unique_ptr<torch::optim::Optimizer> make_optimizer(
+    const std::string& kind_in,
+    const std::vector<at::Tensor>& decay,
+    const std::vector<at::Tensor>& bias,
+    const std::vector<at::Tensor>& bn,
+    double lr0, double momentum, double weight_decay) {
+  auto kind = kind_in;  // already-resolved by resolve_optimizer_kind
+  std::vector<torch::optim::OptimizerParamGroup> groups;
+  if (kind == "adamw") {
+    auto add = [&](const std::vector<at::Tensor>& ps, double wd) {
+      auto g = torch::optim::OptimizerParamGroup(ps);
+      auto opt = std::make_unique<torch::optim::AdamWOptions>(lr0);
+      opt->betas({0.9, 0.999}).eps(1e-8).weight_decay(wd);
+      g.set_options(std::move(opt));
+      groups.push_back(std::move(g));
+    };
+    add(decay, weight_decay);
+    add(bias,  0.0);
+    add(bn,    0.0);
+    return std::make_unique<torch::optim::AdamW>(
+        std::move(groups), torch::optim::AdamWOptions(lr0).weight_decay(weight_decay));
+  }
+  // SGD + Nesterov (default for batch >= 64 or explicit "sgd").
+  auto add = [&](const std::vector<at::Tensor>& ps, double wd) {
+    auto g = torch::optim::OptimizerParamGroup(ps);
+    auto opt = std::make_unique<torch::optim::SGDOptions>(lr0);
+    opt->momentum(momentum).weight_decay(wd).nesterov(true);
+    g.set_options(std::move(opt));
+    groups.push_back(std::move(g));
+  };
+  add(decay, weight_decay);
+  add(bias,  0.0);
+  add(bn,    0.0);
+  return std::make_unique<torch::optim::SGD>(
+      std::move(groups), torch::optim::SGDOptions(lr0).momentum(momentum).nesterov(true));
+}
 
 // Build three parameter groups (decay-conv, no-decay-bias-bn, BN-weight-no-decay)
 // matching the upstream SGD setup.
@@ -675,36 +722,33 @@ void TrainerT<M>::run() {
   model_->train();
 
   auto pg = split_params(*model_);
-  auto opt_options = torch::optim::SGDOptions(cfg_.lr0)
-                          .momentum(cfg_.momentum)
-                          .nesterov(true);
-
-  // Group 1: decay-conv weights (with weight_decay)
-  // Group 2: biases (lr=warmup_bias_lr at start)
-  // Group 3: bn weights (no decay)
-  std::vector<torch::optim::OptimizerParamGroup> groups;
-  {
-    auto g = torch::optim::OptimizerParamGroup(pg.decay);
-    auto opt = std::make_unique<torch::optim::SGDOptions>(cfg_.lr0);
-    opt->momentum(cfg_.momentum).weight_decay(cfg_.weight_decay).nesterov(true);
-    g.set_options(std::move(opt));
-    groups.push_back(std::move(g));
+  // Resolve optimizer choice. "auto" → AdamW for batch < 64 (the
+  // short-fine-tune regime), SGD otherwise. The factory wraps either
+  // in std::unique_ptr<torch::optim::Optimizer>; the rest of the loop
+  // talks to the polymorphic base only.
+  const std::string opt_kind = resolve_optimizer(cfg_.optimizer, cfg_.batch_size);
+  // When AdamW is auto-picked from the SGD-natural lr0 default (0.01),
+  // scale lr0 by 0.1 to land at AdamW's natural ~1e-3 range (matches
+  // ultralytics' auto-lr behaviour: 0.01 → 0.001111 ≈ /9 when auto
+  // switches SGD → AdamW). Skipped when the user explicitly chose
+  // "adamw" with a non-default lr0 — we assume they meant it.
+  if (opt_kind == "adamw" && cfg_.optimizer == "auto" &&
+      std::abs(cfg_.lr0 - 0.01) < 1e-9) {
+    if (is_rank0(ddp)) {
+      std::cout << "[trainer] auto-lr: optimizer=adamw → lr0 0.01 → 1e-3 "
+                   "(matches upstream auto-lr). Pass --lr0 to override.\n";
+    }
+    cfg_.lr0 = 1e-3;
+    if (std::abs(cfg_.warmup_bias_lr - 0.1) < 1e-9) cfg_.warmup_bias_lr = cfg_.lr0;
   }
-  {
-    auto g = torch::optim::OptimizerParamGroup(pg.bias);
-    auto opt = std::make_unique<torch::optim::SGDOptions>(cfg_.lr0);
-    opt->momentum(cfg_.momentum).weight_decay(0.0).nesterov(true);
-    g.set_options(std::move(opt));
-    groups.push_back(std::move(g));
+  if (is_rank0(ddp)) {
+    std::cout << "[trainer] optimizer=" << opt_kind
+              << " (requested=" << cfg_.optimizer
+              << ") lr0=" << cfg_.lr0 << "\n";
   }
-  {
-    auto g = torch::optim::OptimizerParamGroup(pg.bn);
-    auto opt = std::make_unique<torch::optim::SGDOptions>(cfg_.lr0);
-    opt->momentum(cfg_.momentum).weight_decay(0.0).nesterov(true);
-    g.set_options(std::move(opt));
-    groups.push_back(std::move(g));
-  }
-  torch::optim::SGD optim(groups, opt_options);
+  auto optim_ptr = make_optimizer(opt_kind, pg.decay, pg.bias, pg.bn,
+                                  cfg_.lr0, cfg_.momentum, cfg_.weight_decay);
+  auto& optim = *optim_ptr;
 
   using Traits = LossTraits<M>;
   auto loss = Traits::make(model_);
@@ -761,9 +805,14 @@ void TrainerT<M>::run() {
     std::cout << "[trainer] saved → " << ckpt << "\n";
   };
 
-  // Open results.csv (upstream-compatible header).
+  // Open results.csv. Columns match the upstream Ultralytics layout
+  // so downstream tooling (results.png renderer, external plotters)
+  // can read either framework's output. P/R/F1 are sampled at the
+  // best-F1 confidence threshold (max of the F1 curve averaged across
+  // classes), then averaged across classes weighted by GT count.
   std::ofstream csv((fs::path(cfg_.save_dir) / "results.csv").string());
   csv << "epoch,time,train/box_loss,train/cls_loss,train/dfl_loss,"
+         "metrics/precision(B),metrics/recall(B),metrics/F1(B),"
          "metrics/mAP50(B),metrics/mAP50-95(B),lr0\n";
   csv << std::fixed;
 
@@ -791,9 +840,9 @@ void TrainerT<M>::run() {
         double w = (double)gstep / (double)warmup_steps;
         lr_bias = cfg_.warmup_bias_lr + (lr_main - cfg_.warmup_bias_lr) * w;
       }
-      static_cast<torch::optim::SGDOptions&>(gs[0].options()).lr(lr_main);
-      static_cast<torch::optim::SGDOptions&>(gs[1].options()).lr(lr_bias);
-      static_cast<torch::optim::SGDOptions&>(gs[2].options()).lr(lr_main);
+      gs[0].options().set_lr(lr_main);
+      gs[1].options().set_lr(lr_bias);
+      gs[2].options().set_lr(lr_main);
 
       auto batch = train_.sample_batch(cfg_.batch_size, rng);
       auto imgs  = batch.imgs.to(device_);
@@ -880,13 +929,44 @@ void TrainerT<M>::run() {
     // Only rank 0 runs val (all ranks have synchronised weights via the
     // grad all-reduce path; running on every rank would just duplicate IO).
     double cur_map_50 = -1.0, cur_map_50_95 = -1.0;
+    double cur_p = -1.0, cur_r = -1.0, cur_f1 = -1.0;
     if (is_rank0(ddp) && cfg_.val_every > 0 && cfg_.val_dataset &&
         (epoch + 1) % cfg_.val_every == 0) {
-      auto res = validate(ema_, *cfg_.val_dataset, device_);
+      // validate_with_records returns the full det+gt rows so we can
+      // run compute_curves and extract scalar P/R/F1 at best-F1.
+      auto vo = validate_with_records(ema_, *cfg_.val_dataset, device_);
+      auto& res = vo.map;
       cur_map_50    = res.map_50;
       cur_map_50_95 = res.map_50_95;
+      const int nc_ = cfg_.val_dataset->num_classes();
+      auto cd = metrics::compute_curves(vo.dets, vo.gts, nc_);
+      // Mean F1 across classes (weighted by GT count) at each
+      // confidence threshold; argmax gives the best operating point.
+      const int L = (int)cd.px.size();
+      double best_mean_f1 = -1.0;
+      int    best_i = 0;
+      double total_gt = 0.0;
+      for (int c = 0; c < nc_; ++c) total_gt += (double)cd.n_gt_per_class[c];
+      if (total_gt > 0.0 && nc_ > 0) {
+        for (int i = 0; i < L; ++i) {
+          double s = 0.0;
+          for (int c = 0; c < nc_; ++c)
+            s += cd.f1[c][i] * (double)cd.n_gt_per_class[c];
+          double m = s / total_gt;
+          if (m > best_mean_f1) { best_mean_f1 = m; best_i = i; }
+        }
+        double sp = 0.0, sr = 0.0;
+        for (int c = 0; c < nc_; ++c) {
+          sp += cd.p[c][best_i] * (double)cd.n_gt_per_class[c];
+          sr += cd.r[c][best_i] * (double)cd.n_gt_per_class[c];
+        }
+        cur_p  = sp / total_gt;
+        cur_r  = sr / total_gt;
+        cur_f1 = best_mean_f1;
+      }
       std::cout << "[trainer] val: mAP@0.5=" << res.map_50
-                << " mAP@0.5:0.95=" << res.map_50_95 << "\n";
+                << " mAP@0.5:0.95=" << res.map_50_95
+                << " P=" << cur_p << " R=" << cur_r << " F1=" << cur_f1 << "\n";
       if (res.map_50_95 > best_map) {
         best_map = res.map_50_95;
         best_epoch = epoch;
@@ -905,9 +985,9 @@ void TrainerT<M>::run() {
       csv << epoch << "," << sec << ","
           << (sum_box / steps) << "," << (sum_cls / steps) << ","
           << (sum_dfl / steps) << ","
+          << cur_p << "," << cur_r << "," << cur_f1 << ","
           << cur_map_50 << "," << cur_map_50_95 << ","
-          << static_cast<torch::optim::SGDOptions&>(
-                optim.param_groups()[0].options()).lr()
+          << optim.param_groups()[0].options().get_lr()
           << "\n";
       csv.flush();
     }
