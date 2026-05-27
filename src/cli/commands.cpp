@@ -370,9 +370,17 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   }
 
   // Format-aware dispatch: `root` accepts every loader the
-  // dispatcher knows (#54B → CLI).
+  // dispatcher knows (#54B → CLI). Augmentation defaults mirror
+  // Ultralytics' detect-train defaults: mosaic_p=1.0 (4-in-1
+  // composite per sample — the single biggest quality lever in 1-2
+  // epoch comparisons), mixup off (0.0), HSV + flip kept at the
+  // existing AugConfig defaults (h=0.015, s=0.7, v=0.4, flip=0.5).
+  // AugConfig{} defaults stay mosaic_p=0.0 so other callers (e.g.
+  // overfit smoke tests) aren't affected.
+  yolocpp::datasets::AugConfig train_aug;
+  train_aug.mosaic_p = 1.0f;
   auto train_ds = make_dataset(root, "train", imgsz, names,
-                                yolocpp::datasets::AugConfig{}, seed);
+                                train_aug, seed);
 
   yolocpp::engine::TrainConfig cfg;
   cfg.epochs     = epochs;

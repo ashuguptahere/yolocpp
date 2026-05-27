@@ -4,6 +4,48 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.92.0] — 2026-05-27
+
+### Changed
+- **`cmd_train` enables mosaic by default for the train split**
+  (`src/cli/commands.cpp`) — `train_aug.mosaic_p = 1.0f`. Mirrors
+  Ultralytics' default and is the standard YOLO recipe for the
+  bulk of training (typically combined with `close_mosaic=10`
+  near the end). `AugConfig{}`'s default stays `mosaic_p=0.0` so
+  other call sites (overfit smoke tests, ad-hoc dataset loads)
+  remain unaffected. Val/test splits never get mosaic.
+
+### Documented (not fixed — investigated and confirmed correct)
+- **v26 cls/box magnitude differs from Ultralytics' progress-bar
+  display.** Read of `src/losses/yolo26_loss.cpp` confirms
+  `loss = loss_one2many + loss_one2one` per upstream
+  `E2EDetectLoss.__call__` (line 424–445). The o2m + o2o sum
+  doubles displayed cls relative to a single-head model — that's
+  the architecture, not a reduction bug. Under AdamW the
+  optimizer step is roughly invariant to loss scale (v_t
+  adaptive normaliser), so the magnitude gap doesn't affect
+  convergence. A note documenting this was added in-line so it
+  isn't re-investigated next session.
+
+### Benchmark (1 epoch, yolo26x, screen-dataset-yolo, seed=42, batch=16, imgsz=640, RTX 5090)
+
+| Run | mAP@0.5 | mAP@0.5:0.95 | P | R | F1 | epoch_sec |
+|---|---|---|---|---|---|---|
+| 0.91.0 `auto` (AdamW, **no mosaic**) | 0.278 | 0.150 | 0.441 | 0.449 | 0.414 | 34.35 |
+| **0.92.0 `auto` (AdamW, mosaic on)** | 0.087 | 0.052 | 0.364 | 0.179 | 0.224 | 59.06 |
+| 0.92.0 `sgd` (mosaic on) | 0.144 | 0.103 | 0.558 | 0.310 | 0.265 | 58.07 |
+| Ultralytics 8.x (auto → AdamW, mosaic on) | 0.646 | 0.485 | 0.803 | 0.589 | 0.587 | 45.11 |
+
+Mosaic costs short-term mAP (composite samples are harder per
+epoch) but is the correct default for long training where it
+acts as a regularizer; the standard recipe disables it for the
+last ~10 epochs (`close_mosaic`). The remaining gap vs
+Ultralytics at 1 epoch is the **augmentation pipeline overall**:
+Ultralytics layers RandomPerspective + translate + scale + rotation
+on top of mosaic, filling the composite tiles much more
+aggressively than yolocpp's mosaic-only path. Tracked as a
+follow-up (TODO §2A).
+
 ## [0.91.0] — 2026-05-27
 
 ### Added

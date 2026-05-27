@@ -431,6 +431,15 @@ Yolo26LossOutput Yolo26Loss::operator()(
   // gradient. (The 0.78.0 schedule attempts existed to paper over
   // backbone gradient conflict — once features are detached, the
   // conflict goes away and no schedule is needed.)
+  //
+  // NOTE on displayed-loss magnitudes vs upstream Ultralytics:
+  // yolocpp logs raw per-batch cls/box/dfl losses; Ultralytics' progress
+  // bar shows the same losses divided by accumulated EMA across the
+  // epoch. With AdamW the optimizer step size is roughly invariant to
+  // loss scale (v_t adaptive normaliser), so this magnitude gap is a
+  // display artifact, not a training bug. The o2m + o2o sum doubles
+  // displayed cls relative to a single-head model — that's the
+  // architecture, not a reduction error.
   (void)progress;
   double w_o2m = dual_head ? 1.0 : 0.0;
   double w_o2o = 1.0;
