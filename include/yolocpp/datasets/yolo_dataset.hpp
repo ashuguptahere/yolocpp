@@ -20,6 +20,7 @@
 // Mosaic / mixup are TODO.
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <torch/torch.h>
 
 #include <random>
@@ -66,6 +67,15 @@ struct AugConfig {
   float  translate  = 0.0f;
   float  scale_amp  = 0.0f;
   float  shear      = 0.0f;
+  // Pre-decode all dataset images into a std::vector<cv::Mat> at
+  // construction time (uint8 BGR, original resolution). Workers read
+  // from the cache + clone for in-place hsv_jitter; eliminates the
+  // redundant per-step JPEG decode that dominated small-model
+  // training wall time (mosaic_p=1 needs 4 decodes per sample → ~10k
+  // decodes/epoch). Memory cost: ~1 MB per image avg on the screen
+  // dataset (2465 imgs → ~2.5 GB RAM). Off by default; opt-in via
+  // cmd_train and `--cache`.
+  bool   cache_ram  = false;
 };
 
 struct YoloExample {
@@ -148,6 +158,11 @@ class YoloDataset {
   int                       imgsz_ = 640;
   std::vector<std::string>  names_;
   AugConfig                 aug_;
+  // RAM image cache (aug_.cache_ram=true). Populated once at
+  // construction, then read-only for the dataset's lifetime — workers
+  // safely read cache_imgs_[idx] and .clone() before mutating. Empty
+  // vector when cache_ram=false (lazy `cv::imread` path).
+  std::vector<cv::Mat>      cache_imgs_;
 };
 
 }  // namespace yolocpp::datasets

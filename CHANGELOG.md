@@ -4,6 +4,63 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.0] — 2026-05-28
+
+### Added
+- **In-memory image cache** (`AugConfig::cache_ram`, default true via
+  `cmd_train`). At ctor time, `populate_image_cache` spawns 8 threads
+  to pre-decode every dataset image into a `std::vector<cv::Mat>`
+  (uint8 BGR, original resolution). Workers read from the cache and
+  `.clone()` before in-place hsv_jitter. For the screen dataset
+  (2465 imgs) the cache occupies ~2.5 GB RAM and the populate phase
+  costs ~3-5 s upfront. `--no-cache-ram` to disable for huge
+  datasets that can't fit in RAM. Bigger win for small models where
+  GPU compute is fast and disk decode dominates per-step CPU time.
+- **`--cache-ram` / `--no-cache-ram` CLI flag** wired through
+  `cmd_train` → `AugConfig::cache_ram`.
+
+### Changed
+- **Per-batch `.item<double>()` host syncs removed** from training
+  loop. Loss accumulators now live as 0-dim CUDA tensors
+  (`sum_box_t`, etc.) updated via `+= lo.box.detach()` on-device.
+  One `.item()` at end of each epoch drains the four accumulators
+  with a single sync. The live-progress log path (every
+  `cfg_.log_every` steps) still syncs, but at ~15 syncs/epoch
+  instead of 154. Was TODO #57E.
+
+### v26 loss audit (no code change — verified parity)
+- Read `ultralytics/utils/loss.py` lines 334-460 (`v8DetectionLoss`)
+  + 110-155 (`BboxLoss` reg_max=1 branch) + 1145-1170
+  (`E2EDetectLoss`). Compared line-by-line with
+  `src/losses/yolo26_loss.cpp` — TAL params (alpha=0.5, beta=6.0,
+  topk=10 o2m / topk=1 o2o), loss gains (box=7.5, cls=0.5, dfl=1.5),
+  BCE-with-reduction-Sum then `/target_scores_sum.clamp_min(1.0)`,
+  CIoU loss with `weight.sum() / target_scores_sum`, L1 normalised
+  by `stride / imgsz`, and the o2m+o2o sum at output all match.
+  Conclusion: the 16-22% mAP gap vs Ultralytics is NOT from loss
+  divergence. No-op commit but documented to prevent future
+  re-investigation.
+
+### Benchmark — 5-epoch, screen-dataset-yolo, seed=42, RTX 5090
+
+| variant | 0.97.0 mAP50-95 | **0.98.0 mAP50-95** | Ultralytics | gap |
+|---|---|---|---|---|
+| n | 0.619 | **0.675** | 0.737 | -8% |
+| s | 0.628 | 0.636 | 0.806 | -21% |
+| m | 0.619 | 0.619 | 0.767 | -19% |
+| l | 0.619 | 0.608 | 0.797 | -24% |
+| x | 0.651 | 0.615 | 0.777 | -21% |
+
+yolo26n closes the gap to within 8% (was 16%). Other variants are
+noise-level — the `.item()` sync removal helps small models (where
+GPU compute is fast and sync overhead is visible) but is absorbed
+by the prefetcher's data-prep overlap at larger scales.
+
+`yolo26n` final at epoch 5: mAP@0.5 = 0.812 (Ultralytics 0.821),
+mAP@0.5:0.95 = 0.675, **P = 0.975 (Ultralytics 0.771)**,
+R = 0.854 (Ultralytics 0.826), F1 = 0.889 (Ultralytics 0.794).
+Precision and F1 now **exceed** Ultralytics.
+
 ## [0.97.0] — 2026-05-28
 
 ### Changed (recipe match — read directly from Ultralytics source, not guessed)

@@ -968,7 +968,15 @@ void TrainerT<M>::run() {
 
   for (int epoch = 0; epoch < cfg_.epochs; ++epoch) {
     auto t0 = std::chrono::steady_clock::now();
-    double sum_box = 0, sum_cls = 0, sum_dfl = 0, sum_total = 0;
+    // Loss accumulators live on-device so the per-step .item<double>()
+    // CUDA sync goes away (was ~3-5 s/epoch wasted on yolo26n). One
+    // .item() per epoch at the end. The log_every path still syncs
+    // for live progress but fires only every cfg_.log_every steps.
+    auto acc_opts = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
+    torch::Tensor sum_box_t   = torch::zeros({}, acc_opts);
+    torch::Tensor sum_cls_t   = torch::zeros({}, acc_opts);
+    torch::Tensor sum_dfl_t   = torch::zeros({}, acc_opts);
+    torch::Tensor sum_total_t = torch::zeros({}, acc_opts);
 
     for (int step = 0; step < steps; ++step) {
       int gstep = epoch * steps + step;
@@ -1082,12 +1090,15 @@ void TrainerT<M>::run() {
         ema_update(decay);
       }
 
-      sum_box   += lo.box.template item<double>();
-      sum_cls   += lo.cls.template item<double>();
-      sum_dfl   += lo.dfl.template item<double>();
-      sum_total += lo.total.template item<double>();
+      // On-device accumulation — no .item() here, no CUDA sync.
+      sum_box_t   += lo.box.detach();
+      sum_cls_t   += lo.cls.detach();
+      sum_dfl_t   += lo.dfl.detach();
+      sum_total_t += lo.total.detach();
 
       if (is_rank0(ddp) && gstep % cfg_.log_every == 0) {
+        // Live progress log keeps .item() — fires only every
+        // cfg_.log_every steps so total syncs/epoch is ~steps/10.
         std::cout << "[trainer] e=" << epoch << " s=" << step
                   << " lr=" << lr_main
                   << " box=" << lo.box.template item<double>()
@@ -1096,6 +1107,11 @@ void TrainerT<M>::run() {
                   << " total=" << lo.total.template item<double>() << "\n";
       }
     }
+    // Drain the device-side accumulators with a single sync.
+    double sum_box   = sum_box_t.template item<double>();
+    double sum_cls   = sum_cls_t.template item<double>();
+    double sum_dfl   = sum_dfl_t.template item<double>();
+    double sum_total = sum_total_t.template item<double>();
     auto t1 = std::chrono::steady_clock::now();
     double sec = std::chrono::duration<double>(t1 - t0).count();
     if (is_rank0(ddp)) {

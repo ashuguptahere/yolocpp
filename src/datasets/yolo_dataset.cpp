@@ -4,12 +4,14 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <random>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 #include "yolocpp/inference/letterbox.hpp"
 
@@ -95,6 +97,36 @@ void hsv_jitter(cv::Mat& bgr, std::mt19937& rng,
 
 }  // anonymous namespace
 
+// Pre-decode all images into cache_imgs_ (one-shot at ctor time when
+// aug.cache_ram is set). Decoding 2465 JPEGs in parallel on 16 cores
+// takes ~3-5 s on the screen dataset. After this, ds.get() and
+// build_mosaic4 never touch the disk again — the dominant CPU cost
+// on small-model training disappears.
+//
+// Static-private free function (the lambda is std::thread-friendly).
+static void populate_image_cache(
+    const std::vector<std::string>& img_paths,
+    std::vector<cv::Mat>& cache,
+    int num_threads = 8) {
+  cache.assign(img_paths.size(), cv::Mat{});
+  std::atomic<std::size_t> next{0};
+  auto worker = [&] {
+    while (true) {
+      std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
+      if (i >= img_paths.size()) return;
+      cv::Mat bgr = cv::imread(img_paths[i], cv::IMREAD_COLOR);
+      if (bgr.empty()) {
+        throw std::runtime_error("cache_ram: failed to decode " + img_paths[i]);
+      }
+      cache[i] = std::move(bgr);
+    }
+  };
+  std::vector<std::thread> ts;
+  ts.reserve((std::size_t)num_threads);
+  for (int t = 0; t < num_threads; ++t) ts.emplace_back(worker);
+  for (auto& t : ts) t.join();
+}
+
 YoloDataset::YoloDataset(std::string root, std::string split, int imgsz,
                          std::vector<std::string> names, AugConfig aug)
     : imgsz_(imgsz), names_(std::move(names)), aug_(aug) {
@@ -111,6 +143,7 @@ YoloDataset::YoloDataset(std::string root, std::string split, int imgsz,
         "no images found at " + img_dir.string() +
         " (expected YOLO layout: <root>/images/<split>/*.jpg)");
   }
+  if (aug_.cache_ram) populate_image_cache(img_paths_, cache_imgs_);
 }
 
 YoloDataset::YoloDataset(std::vector<std::string> img_paths,
@@ -124,6 +157,7 @@ YoloDataset::YoloDataset(std::vector<std::string> img_paths,
       aug_(aug) {
   if (img_paths_.size() != lbl_paths_.size())
     throw std::runtime_error("YoloDataset: image/label list size mismatch");
+  if (aug_.cache_ram) populate_image_cache(img_paths_, cache_imgs_);
 }
 
 // Pre-loaded ctor: COCO JSON / Pascal VOC / Flat CSV all parse into
@@ -145,13 +179,22 @@ YoloDataset::YoloDataset(std::vector<std::string> img_paths,
     throw std::runtime_error(
         "YoloDataset(pre-loaded): img_paths/labels size mismatch");
   lbl_paths_.assign(img_paths_.size(), "");
+  if (aug_.cache_ram) populate_image_cache(img_paths_, cache_imgs_);
 }
 
 YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
   YoloExample ex;
   ex.img_path = img_paths_[idx];
 
-  cv::Mat bgr = cv::imread(ex.img_path, cv::IMREAD_COLOR);
+  // RAM cache hit: clone so hsv_jitter can mutate without affecting
+  // other workers reading the same cached entry concurrently.
+  // Miss: fall back to cv::imread (lazy path; pre-0.98.0 behaviour).
+  cv::Mat bgr;
+  if (!cache_imgs_.empty()) {
+    bgr = cache_imgs_[idx].clone();
+  } else {
+    bgr = cv::imread(ex.img_path, cv::IMREAD_COLOR);
+  }
   if (bgr.empty())
     throw std::runtime_error("failed to load image: " + ex.img_path);
   ex.orig_w = bgr.cols; ex.orig_h = bgr.rows;

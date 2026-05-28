@@ -315,7 +315,8 @@ int cmd_train(const std::string& root, const std::string& names_csv,
               uint64_t seed,
               double lrf,
               const std::string& optimizer,
-              int workers) {
+              int workers,
+              bool cache_ram) {
   auto names = split_csv(names_csv);
   // If --names wasn't passed, prefer the data.yaml's `names:` over the
   // COCO 80 fallback. Without this, training on a 5-class dataset
@@ -382,6 +383,7 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   train_aug.mosaic_p  = 1.0f;   // Ultralytics default
   train_aug.translate = 0.1f;   // Ultralytics detect default
   train_aug.scale_amp = 0.5f;   // Ultralytics detect default — scale in [0.5, 1.5]
+  train_aug.cache_ram = cache_ram;
   // degrees/shear stay 0 — also the Ultralytics default for detect.
   auto train_ds = make_dataset(root, "train", imgsz, names,
                                 train_aug, seed);
