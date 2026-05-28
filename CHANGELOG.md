@@ -4,6 +4,60 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.95.0] — 2026-05-28
+
+### Added
+- **`YoloDataset::sample_batch_from_anchors`** — caller-driven
+  primary-index variant. Each batch slot's "tile 0" (mosaic) or
+  sole image (non-mosaic) is taken from the provided anchor list;
+  the other 3 mosaic tiles + augmentation params still draw from
+  the passed-in RNG. Enables without-replacement epoch sampling.
+- **`build_mosaic4` optional `anchor` parameter** — when set,
+  tile 0 is fixed to the dataset index; tiles 1-3 stay random.
+  Backward-compat: `anchor = -1` (default) keeps the all-random
+  pre-0.95.0 behaviour.
+
+### Changed
+- **`BatchPrefetcher` now does without-replacement epoch sampling.**
+  Holds a shared shuffled anchor buffer + `std::mt19937 shuffle_rng_`.
+  Workers atomically pull `batch_size` anchors at a time; the
+  buffer is refilled + reshuffled when it drops below `batch_size`.
+  Each image therefore becomes the anchor of some batch exactly
+  once per epoch — matches Ultralytics' `DataLoader(shuffle=True,
+  replacement=False)` coverage instead of the prior independent
+  `u(rng)`-per-slot path that gave ~63% unique-image coverage.
+- **`BatchPrefetcher::stop_` promoted to `std::atomic<bool>`** so
+  the worker hot-loop early-exit check can be lock-free.
+
+### Why this was needed
+Until 0.95.0, `sample_batch` picked each slot via
+`uniform_int_distribution<size_t>(0, N-1)(rng)` per slot —
+independent uniform samples *with replacement*. Expected unique
+coverage of an N=2465 dataset across N draws is ≈ N·(1-(1-1/N)^N)
+≈ 0.63·N. yolocpp was effectively seeing 37% fewer unique images
+per epoch than Ultralytics, which translated directly to slower
+mAP convergence per epoch.
+
+### Benchmark (5-epoch, yolo26x, screen-dataset-yolo, seed=42, RTX 5090)
+
+mAP@0.5:0.95 trajectory:
+
+| epoch | 0.94.0 (with-repl) | **0.95.0 (without-repl)** | Ultralytics |
+|---|---|---|---|
+| 0 | 0.029 | **0.087** | 0.330 |
+| 1 | 0.215 | **0.300** | 0.483 |
+| 2 | 0.284 | 0.280 | 0.615 |
+| 3 | 0.397 | 0.360 | 0.663 |
+| 4 | 0.398 | **0.415** | 0.775 |
+
+Final mAP@0.5:0.95 0.398 → 0.415 (+4%). Bigger early-epoch
+improvement (epoch 1 +40%). Wall unchanged at 24.7 s/epoch — the
+sampling change is free. The remaining ~1.9× gap vs Ultralytics
+is something else — candidates: LR/warmup curve shape (yolocpp's
+v26 adapter forces lrf=1.0 = constant LR; Ultralytics decays
+cosine), per-step batch-order noise from 4 workers vs 1, or v26
+loss / EMA decay specifics. Tracked separately.
+
 ## [0.94.0] — 2026-05-27
 
 ### Added

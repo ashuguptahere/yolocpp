@@ -234,12 +234,25 @@ random_perspective_mat(const cv::Mat& in_img,
 // the crop, matching Ultralytics' pipeline order and avoiding the
 // dead-pixel issue you get when stacking warp on an already-cropped
 // mosaic.
+//
+// `anchor` is optional: when set (≥ 0), tile 0 is taken from that
+// dataset index and tiles 1-3 are random. This lets the
+// without-replacement BatchPrefetcher path guarantee every image
+// becomes the anchor exactly once per epoch. anchor = -1 keeps the
+// pre-0.94.x behaviour (all 4 tiles random).
 static YoloExample build_mosaic4(const YoloDataset& ds, std::size_t imgsz,
                                   const AugConfig& aug,
-                                  std::mt19937& rng) {
+                                  std::mt19937& rng,
+                                  std::int64_t anchor = -1) {
   std::uniform_int_distribution<std::size_t> u_idx(0, ds.size() - 1);
   std::array<YoloExample, 4> tiles;
-  for (auto& t : tiles) t = ds.get(u_idx(rng));
+  for (int t = 0; t < 4; ++t) {
+    if (t == 0 && anchor >= 0) {
+      tiles[t] = ds.get((std::size_t)anchor);
+    } else {
+      tiles[t] = ds.get(u_idx(rng));
+    }
+  }
 
   int s = (int)imgsz;
   // Random mosaic center in [imgsz*0.5, imgsz*1.5] of the 2s canvas.
@@ -453,6 +466,49 @@ static YoloExample apply_mixup(const YoloExample& a, const YoloExample& b,
   if (a.targets.size(0) == 0)      out.targets = b.targets.clone();
   else if (b.targets.size(0) == 0) out.targets = a.targets.clone();
   else                              out.targets = torch::cat({a.targets, b.targets}, /*dim=*/0);
+  return out;
+}
+
+YoloDataset::Batch YoloDataset::sample_batch_from_anchors(
+    const std::vector<std::size_t>& anchors, std::mt19937& aux_rng) const {
+  std::uniform_real_distribution<float> u01(0.f, 1.f);
+  std::vector<YoloExample> exs;
+  exs.reserve(anchors.size());
+  std::vector<torch::Tensor> imgs;
+  std::vector<torch::Tensor> tgts_with_b;
+  for (std::size_t i = 0; i < anchors.size(); ++i) {
+    YoloExample ex;
+    const std::size_t anchor = anchors[i];
+    if (aug_.augment && aug_.mosaic_p > 0.f && u01(aux_rng) < aug_.mosaic_p) {
+      // Anchor-driven mosaic: tile 0 from the provided index (epoch
+      // shuffle guarantees uniqueness), tiles 1-3 still random.
+      ex = build_mosaic4(*this, (std::size_t)imgsz_, aug_, aux_rng,
+                          (std::int64_t)anchor);
+    } else {
+      ex = get(anchor, /*aug_seed=*/((uint64_t)aux_rng()) << 32 | i);
+    }
+    if (aug_.augment && aug_.mixup_p > 0.f && u01(aux_rng) < aug_.mixup_p) {
+      // MixUp partner is random (not from the shuffled anchors) —
+      // matches Ultralytics' behaviour.
+      std::uniform_int_distribution<std::size_t> u(0, img_paths_.size() - 1);
+      auto other = get(u(aux_rng),
+                       /*aug_seed=*/((uint64_t)aux_rng()) << 32 | (i + 0x55));
+      ex = apply_mixup(ex, other, aux_rng);
+    }
+    auto t = ex.targets;
+    imgs.push_back(ex.img);
+    if (t.size(0) > 0) {
+      auto bcol = torch::full({t.size(0), 1}, (double)i, torch::kFloat32);
+      tgts_with_b.push_back(torch::cat({bcol, t}, /*dim=*/1));
+    }
+    exs.push_back(std::move(ex));
+  }
+  Batch out;
+  out.imgs = torch::stack(imgs, /*dim=*/0);
+  out.targets = tgts_with_b.empty()
+                  ? torch::zeros({0, 6}, torch::kFloat32)
+                  : torch::cat(tgts_with_b, /*dim=*/0);
+  out.examples = std::move(exs);
   return out;
 }
 

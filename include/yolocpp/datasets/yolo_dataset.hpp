@@ -121,6 +121,17 @@ class YoloDataset {
   };
   Batch sample_batch(std::size_t bsz, std::mt19937& rng) const;
 
+  // Without-replacement variant: caller pre-shuffles dataset indices
+  // and passes one anchor per batch slot. For mosaic samples the
+  // anchor is the "tile 0" image (the other 3 tiles still pick
+  // randomly via `aux_rng` — they're decorative). For non-mosaic
+  // samples the anchor is the sole image. Used by BatchPrefetcher
+  // to guarantee every image is the anchor of some batch exactly
+  // once per epoch, matching Ultralytics' DataLoader(shuffle=True,
+  // replacement=False) coverage.
+  Batch sample_batch_from_anchors(const std::vector<std::size_t>& anchors,
+                                  std::mt19937& aux_rng) const;
+
   int  num_classes() const { return (int)names_.size(); }
   int  imgsz()       const { return imgsz_; }
   const std::vector<std::string>& names() const { return names_; }

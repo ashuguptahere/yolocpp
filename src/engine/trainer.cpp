@@ -60,31 +60,43 @@ static torch::Device pick_device(std::string s) {
 
 namespace {
 
-// BatchPrefetcher — N background threads each call
-// `dataset.sample_batch` into a shared bounded queue; the main
-// training loop pulls from the queue via `next()`. This pipelines
-// data prep (decode + mosaic + perspective + letterbox + tensor
-// conversion) ahead of the GPU step, hiding the CPU latency that
-// was the single biggest 0.93.0 perf gap vs Ultralytics' Python
-// DataLoader-with-workers (~2× per-epoch wall time on yolo26x +
-// mosaic). Workers each own their own seeded `std::mt19937` so
-// reproducibility holds within each worker; the across-worker
-// batch ordering is non-deterministic (acceptable: SGD/AdamW
-// gradient estimates are over-batch averages — the per-step batch
-// composition is what matters, not its global ordering).
+// BatchPrefetcher — N background threads each pull anchor indices
+// from a shared shuffled buffer, call
+// `dataset.sample_batch_from_anchors` into a bounded queue; the
+// main training loop pulls from the queue via `next()`. Two roles:
+//
+//   1. Pipelines CPU data prep (decode + mosaic + perspective +
+//      letterbox) ahead of the GPU step. Was the single biggest
+//      0.93.0 perf gap vs Ultralytics' Python DataLoader-with-
+//      workers (~2× per-epoch wall time on yolo26x + mosaic).
+//   2. Guarantees without-replacement epoch sampling — every image
+//      is the anchor of some batch exactly once per epoch. Matches
+//      Ultralytics' `DataLoader(shuffle=True)` behaviour, which is
+//      a ~1.6× gradient-signal-density win vs the prior
+//      with-replacement `u(rng)` per-slot path.
+//
+// Workers each own their own seeded `std::mt19937` for the
+// per-sample aug RNG (mosaic flag, perspective params, HSV jitter,
+// flip). The anchor buffer is mutex-protected — workers atomically
+// pull `batch_size` anchors at a time; when the buffer drops below
+// `batch_size`, the next puller reshuffles the full dataset
+// indices on top. Batch *composition* is therefore deterministic
+// given (shuffle_seed, batch_size); only the assignment of
+// batch→step number is non-deterministic across worker scheduling.
 class BatchPrefetcher {
  public:
   BatchPrefetcher(const datasets::YoloDataset& ds, int batch_size,
                   int num_workers, uint64_t seed)
       : ds_(ds), batch_size_(batch_size),
         num_workers_(std::max(1, num_workers)),
-        max_q_((std::size_t)(2 * std::max(1, num_workers))) {
+        max_q_((std::size_t)(2 * std::max(1, num_workers))),
+        shuffle_rng_(seed != 0 ? seed : 0x9E3779B97F4A7C15ULL) {
     workers_.reserve((std::size_t)num_workers_);
     const uint64_t base = seed != 0 ? seed : 0x9E3779B97F4A7C15ULL;
     for (int i = 0; i < num_workers_; ++i) {
-      // Distinct, well-separated per-worker seeds (golden-ratio
-      // hash splat). Each worker's sample_batch produces a
-      // deterministic stream given its own seed.
+      // Distinct, well-separated per-worker aug seeds (golden-ratio
+      // hash splat). Drives per-sample augmentation only; anchor
+      // selection comes from the shared shuffled buffer.
       const uint64_t ws = base + (uint64_t)i * 0x9E3779B97F4A7C15ULL;
       workers_.emplace_back([this, ws] { worker_loop_(ws); });
     }
@@ -113,13 +125,36 @@ class BatchPrefetcher {
   }
 
  private:
+  // Pull the next batch_size anchors from the shuffled buffer.
+  // Refills + reshuffles when the buffer drops below batch_size.
+  // Mutex-protected; called by all workers.
+  std::vector<std::size_t> pull_anchors_() {
+    std::lock_guard<std::mutex> lk(idx_mu_);
+    if (anchor_buf_.size() < (std::size_t)batch_size_) {
+      const std::size_t N = ds_.size();
+      const std::size_t old = anchor_buf_.size();
+      anchor_buf_.resize(old + N);
+      std::iota(anchor_buf_.begin() + (std::ptrdiff_t)old,
+                anchor_buf_.end(), (std::size_t)0);
+      std::shuffle(anchor_buf_.begin() + (std::ptrdiff_t)old,
+                   anchor_buf_.end(), shuffle_rng_);
+    }
+    std::vector<std::size_t> picks(
+        anchor_buf_.begin(),
+        anchor_buf_.begin() + (std::ptrdiff_t)batch_size_);
+    anchor_buf_.erase(anchor_buf_.begin(),
+                       anchor_buf_.begin() + (std::ptrdiff_t)batch_size_);
+    return picks;
+  }
+
   void worker_loop_(uint64_t seed) {
     std::mt19937 rng(seed);
     while (true) {
-      // Sample a batch off-lock — this is the heavy CPU work
-      // (image decode + mosaic + perspective + letterbox) we want
-      // overlapping with the main thread's GPU step.
-      auto batch = ds_.sample_batch((std::size_t)batch_size_, rng);
+      if (stop_.load(std::memory_order_acquire)) return;
+      auto anchors = pull_anchors_();
+      // sample_batch_from_anchors is the without-replacement entry
+      // point: anchors[i] is the tile-0 image of batch slot i.
+      auto batch = ds_.sample_batch_from_anchors(anchors, rng);
       std::unique_lock<std::mutex> lk(mu_);
       cv_space_.wait(lk, [this] { return q_.size() < max_q_ || stop_; });
       if (stop_) return;
@@ -135,8 +170,13 @@ class BatchPrefetcher {
   std::deque<datasets::YoloDataset::Batch> q_;
   std::mutex                              mu_;
   std::condition_variable                 cv_data_, cv_space_;
-  bool                                    stop_ = false;
+  std::atomic<bool>                       stop_{false};
   std::vector<std::thread>                workers_;
+
+  // Without-replacement anchor buffer + its own shuffle RNG.
+  std::mutex                              idx_mu_;
+  std::deque<std::size_t>                 anchor_buf_;
+  std::mt19937                            shuffle_rng_;
 };
 
 // Build the per-group optimizer. Three groups (decay-conv / bias / bn-weight)
