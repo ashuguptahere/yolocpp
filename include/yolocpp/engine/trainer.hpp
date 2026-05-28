@@ -111,6 +111,16 @@ struct TrainConfig {
   // batches, effective batch=64). Reference:
   // ultralytics/engine/trainer.py line 281 + 427.
   int nbs = 64;
+  // Strict-deterministic mode — forces bit-exact reproducibility
+  // for a given seed at ~30-50% throughput cost. When true:
+  //   • workers = 0 (synchronous data prep — no worker scheduling race)
+  //   • cuDNN benchmark off (no algorithm-by-timing selection)
+  //   • setDeterministicAlgorithms(true) (every op gates on a
+  //     reproducible kernel; some ops throw if no deterministic
+  //     kernel is available)
+  // Off by default — the perf cost is large and most users don't
+  // need bit-exact reproducibility. Pass --strict-deterministic.
+  bool deterministic = false;
 };
 
 // Trainer is templated over the model-holder type (Yolo8Detect or

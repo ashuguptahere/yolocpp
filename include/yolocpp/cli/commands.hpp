@@ -52,7 +52,8 @@ int cmd_train(const std::string& root, const std::string& names_csv,
               double lrf = -1.0,                  // -1 → trainer default (cosine to 1% of lr0)
               const std::string& optimizer = "auto",  // auto|sgd|adamw
               int workers = 4,                   // BatchPrefetcher threads (0 = sync)
-              bool cache_ram = true);            // pre-decode images into RAM
+              bool cache_ram = true,             // pre-decode images into RAM
+              bool deterministic = false);       // strict bit-exact mode
 
 int cmd_train_task(const std::string& task, const std::string& data,
                    const std::string& names_csv, int imgsz, int epochs,

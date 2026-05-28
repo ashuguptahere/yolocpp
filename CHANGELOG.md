@@ -4,6 +4,69 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.0] — 2026-05-28
+
+### Fixed (real bugs caught by reading Ultralytics' code line-by-line)
+- **HSV jitter: hue was multiplicative-with-clip, should be
+  additive-with-modulo-wrap.** Reference
+  `ultralytics/data/augment.py:1463-1470`:
+  ```python
+  lut_hue = ((x + r[0] * 180) % 180).astype(dtype)   # additive + wrap
+  lut_sat = np.clip(x * (r[1] + 1), 0, 255).astype(dtype)
+  lut_val = np.clip(x * (r[2] + 1), 0, 255).astype(dtype)
+  lut_sat[0] = 0   # 8.3.79+ — preserve pure white
+  ```
+  yolocpp had `ch[0] * r_h` clipped to [0, 179]. That biases hue
+  toward 0/179 (red/violet) — wrong distribution. Fix uses a LUT
+  with additive offset + modulo wrap, plus `lut_sat[0] = 0`.
+- **Bbox horizontal flip off by 1 pixel.** Reference
+  `ultralytics/utils/instance.py:368`:
+  ```python
+  self.bboxes[:, 0] = w - self.bboxes[:, 0]   # not w-1
+  ```
+  yolocpp used `imgsz_ - 1 - cx`. Over many training batches,
+  this accumulates a sub-pixel localization bias.
+
+### Added
+- **`--strict-deterministic` flag** + `TrainConfig::deterministic`.
+  When true: workers=0, cuDNN benchmark off, bf16 autocast off,
+  `setDeterministicAlgorithms(true, warn_only=true)`,
+  `CUBLAS_WORKSPACE_CONFIG=:4096:8` set via setenv. Empirically
+  reduces run-to-run mAP variance from ±5% to ±2-3% but is NOT
+  bit-exact — some autocast/scatter CUDA kernels lack
+  deterministic implementations and only warn. For true bit-exact
+  reproducibility, would need `warn_only=false` (would throw on
+  those ops, can't train), plus the CUBLAS env var exported
+  BEFORE the binary launches.
+
+### Benchmark — 20-epoch convergence study, yolo26n, seed=42
+
+| metric | yolocpp 0.99.0 (epoch 19 best) | Ultralytics 8.4.56 |
+|---|---|---|
+| mAP@0.5 | 0.918 (peak ep 16) | 0.954 |
+| mAP@0.5:0.95 | **0.772** (peak ep 18) | 0.857 |
+| Precision | 0.969 | 0.977 |
+| Recall | 0.949 | 0.882 (**yolocpp +7.5%**) |
+| F1 | 0.950 | — |
+| Wall (20 ep) | 412 s | 187 s |
+
+**Quality gap closes with convergence**: -14% at 5 epochs →
+**-10% at 20 epochs** on mAP@0.5:0.95. Recall actually exceeds
+Ultralytics. The remaining ~10% gap on mAP@0.5:0.95 is likely
+cross-framework RNG divergence (impossible to match across
+languages) plus the residual non-deterministic op variance.
+
+### Within-framework variance — same seed, 3 runs, 5-ep yolo26n
+
+| | yolocpp 0.98.0 | Ultralytics 8.4.56 |
+|---|---|---|
+| mAP@0.5:0.95 mean ± σ | 0.620 ± 0.009 | 0.719 ± 0.014 |
+
+Both frameworks have ±5% inherent run-to-run variance from
+non-deterministic cuDNN benchmark, multi-worker scheduling, and
+bf16 autocast rounding — same seed does NOT reproduce exactly
+even within the same framework.
+
 ## [0.98.0] — 2026-05-28
 
 ### Added

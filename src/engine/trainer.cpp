@@ -618,10 +618,41 @@ void TrainerT<M>::run() {
   // CUDA perf globals — see CLAUDE.md "Training speed". cuDNN benchmark
   // picks fastest conv algo per shape; TF32 stays on for training (the
   // inverse of the v10-TRT-export quirk). Idempotent: safe to re-enter.
+  //
+  // Strict-deterministic mode (cfg_.deterministic): turn cuDNN benchmark
+  // OFF (kernel selection by timing is non-reproducible), force
+  // workers=0 (worker race is non-reproducible), and enable
+  // setDeterministicAlgorithms (every CUDA op gates on a reproducible
+  // kernel — some ops throw if none available). Expected ~30-50% cost.
+  // TF32 stays on; given identical inputs it's bit-exact reproducible.
+  if (cfg_.deterministic) {
+    cfg_.workers = 0;
+    // CUBLAS_WORKSPACE_CONFIG must be set before the first cuBLAS
+    // call. Setting it via setenv inside the program may or may not
+    // beat the first GEMM — depends on what's been touched before
+    // run() is entered. For airtight determinism, the user should
+    // also export this in their shell before launching yolocpp.
+    setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8", /*overwrite=*/1);
+    std::cout << "[trainer] strict-deterministic: workers=0, "
+                 "cuDNN benchmark off, deterministic algorithms on, "
+                 "CUBLAS_WORKSPACE_CONFIG=:4096:8 set. "
+                 "If still non-reproducible, export the env var BEFORE "
+                 "launching yolocpp (must precede first CUDA call).\n";
+  }
   if (torch::cuda::is_available()) {
-    at::globalContext().setBenchmarkCuDNN(true);
+    at::globalContext().setBenchmarkCuDNN(!cfg_.deterministic);
     at::globalContext().setAllowTF32CuBLAS(true);
     at::globalContext().setAllowTF32CuDNN(true);
+    if (cfg_.deterministic) {
+      // warn_only=true → just warn on non-deterministic ops; some
+      // CUDA ops (e.g. some scatter/gather kernels under autocast)
+      // don't have deterministic implementations and would throw
+      // under warn_only=false. We choose to keep warn_only=true so
+      // training runs; the user accepts the residual ~ULP noise
+      // these warn'd ops introduce.
+      at::globalContext().setDeterministicAlgorithms(
+          /*b=*/true, /*warn_only=*/true);
+    }
   }
 
   // Initialise DDP from env vars; no-op when WORLD_SIZE is unset.
@@ -1023,7 +1054,10 @@ void TrainerT<M>::run() {
       // range so no GradScaler is needed (the Blackwell path). The
       // autocast scope wraps forward + loss only; backward + step run
       // with the loss tensor implicitly upcast to fp32 by autocast.
-      const bool use_amp = device_.is_cuda();
+      // Strict-deterministic also disables bf16 autocast — bf16
+      // cuDNN kernels include reductions that aren't bit-exactly
+      // reproducible. fp32 path is slower but deterministic.
+      const bool use_amp = device_.is_cuda() && !cfg_.deterministic;
       if (use_amp) {
         at::autocast::set_autocast_dtype(at::kCUDA, at::kBFloat16);
         at::autocast::set_autocast_enabled(at::kCUDA, true);

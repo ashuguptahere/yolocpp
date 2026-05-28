@@ -4,6 +4,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -72,25 +73,50 @@ torch::Tensor load_targets(const std::string& lbl_path) {
 
 void hsv_jitter(cv::Mat& bgr, std::mt19937& rng,
                 float hg, float sg, float vg) {
+  // Matches ultralytics RandomHSV exactly (data/augment.py:1463):
+  //   r = uniform(-1, 1) * [hgain, sgain, vgain]
+  //   lut_hue = ((x + r[0] * 180) % 180)         ← ADDITIVE + WRAP
+  //   lut_sat = clip(x * (r[1] + 1), 0, 255)     ← multiplicative + clip
+  //   lut_val = clip(x * (r[2] + 1), 0, 255)     ← multiplicative + clip
+  //   lut_sat[0] = 0   (8.3.79+: keep pure white pure)
+  //
+  // Pre-0.99.0 yolocpp used `hue *= r_h` with clip — that's
+  // multiplicative-non-wrapping, which biases hues toward 0/179
+  // (red/violet) and produces a different aug distribution than
+  // upstream. The fix is the LUT-with-wrap approach.
   std::uniform_real_distribution<float> u(-1.f, 1.f);
-  float r_h = 1.f + u(rng) * hg;
-  float r_s = 1.f + u(rng) * sg;
-  float r_v = 1.f + u(rng) * vg;
+  const float r_h = u(rng) * hg;
+  const float r_s = u(rng) * sg;
+  const float r_v = u(rng) * vg;
+
+  // Build the three LUTs to match upstream exactly.
+  std::array<uint8_t, 256> lut_h{}, lut_s{}, lut_v{};
+  const float hue_off = r_h * 180.f;
+  for (int x = 0; x < 256; ++x) {
+    // Hue: additive offset, wrap mod 180. `% 180` in numpy on a
+    // negative integer returns non-negative; emulate that with
+    // `((a % 180) + 180) % 180`.
+    int hv = (int)std::lround((float)x + hue_off) % 180;
+    if (hv < 0) hv += 180;
+    lut_h[x] = (uint8_t)hv;
+    // Sat / Val: multiplicative gain (r+1) with hard clip.
+    int sv = (int)std::lround((float)x * (r_s + 1.f));
+    int vv = (int)std::lround((float)x * (r_v + 1.f));
+    lut_s[x] = (uint8_t)std::clamp(sv, 0, 255);
+    lut_v[x] = (uint8_t)std::clamp(vv, 0, 255);
+  }
+  lut_s[0] = 0;  // 8.3.79+ rule — preserve pure white
 
   cv::Mat hsv;
   cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
   std::vector<cv::Mat> ch;
   cv::split(hsv, ch);
-  // OpenCV H is 0..179, S/V are 0..255
-  ch[0].convertTo(ch[0], CV_32F);
-  ch[1].convertTo(ch[1], CV_32F);
-  ch[2].convertTo(ch[2], CV_32F);
-  ch[0] = cv::min(cv::max(ch[0] * r_h, 0.f), 179.f);
-  ch[1] = cv::min(cv::max(ch[1] * r_s, 0.f), 255.f);
-  ch[2] = cv::min(cv::max(ch[2] * r_v, 0.f), 255.f);
-  ch[0].convertTo(ch[0], CV_8U);
-  ch[1].convertTo(ch[1], CV_8U);
-  ch[2].convertTo(ch[2], CV_8U);
+  cv::Mat lut_h_mat(1, 256, CV_8UC1, lut_h.data());
+  cv::Mat lut_s_mat(1, 256, CV_8UC1, lut_s.data());
+  cv::Mat lut_v_mat(1, 256, CV_8UC1, lut_v.data());
+  cv::LUT(ch[0], lut_h_mat, ch[0]);
+  cv::LUT(ch[1], lut_s_mat, ch[1]);
+  cv::LUT(ch[2], lut_v_mat, ch[2]);
   cv::merge(ch, hsv);
   cv::cvtColor(hsv, bgr, cv::COLOR_HSV2BGR);
 }
@@ -253,7 +279,14 @@ YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
     w  = (float)(w  * lb.gain);
     h  = (float)(h  * lb.gain);
 
-    if (flip) cx = (float)imgsz_ - 1.f - cx;
+    // Bbox flip math matches Ultralytics' Instances.fliplr exactly:
+    //   new_cx = w - old_cx   (NOT w - 1 - old_cx)
+    // Reference: ultralytics/utils/instance.py:368 —
+    //   self.bboxes[:, 0] = w - self.bboxes[:, 0]
+    // The pre-0.99.0 yolocpp `w - 1 - cx` was off by 1 pixel; over
+    // many flipped batches during training, accumulates as a slight
+    // box-localization bias against upstream parity.
+    if (flip) cx = (float)imgsz_ - cx;
 
     a[i][1] = cx; a[i][2] = cy; a[i][3] = w; a[i][4] = h;
   }
