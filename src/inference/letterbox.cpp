@@ -65,6 +65,20 @@ torch::Tensor image_to_tensor(const cv::Mat& bgr) {
   return t.clone();  // detach from cv::Mat lifetime
 }
 
+torch::Tensor image_to_tensor_u8(const cv::Mat& bgr) {
+  // BGR uint8 HWC → BGR uint8 CHW. No dtype promotion, no normalisation.
+  // The trainer does both on GPU after HtoD for the gpu_aug path.
+  // Channel order stays BGR (matches what the existing GPU HSV helper
+  // expects). Caller can `permute` back to HWC if needed.
+  TORCH_CHECK(bgr.type() == CV_8UC3, "image_to_tensor_u8: need CV_8UC3 input");
+  auto t = torch::from_blob(
+               bgr.data, {bgr.rows, bgr.cols, 3},
+               torch::TensorOptions().dtype(torch::kUInt8))
+               .permute({2, 0, 1})
+               .contiguous();
+  return t.clone();  // own the data
+}
+
 void scale_boxes(torch::Tensor& xyxy, const LetterboxResult& lb) {
   // Inverse of letterbox: subtract pad, divide by gain, clamp to image.
   using torch::indexing::Slice;

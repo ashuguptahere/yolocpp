@@ -192,6 +192,167 @@ class BatchPrefetcher {
   std::vector<std::thread>                workers_;
 };
 
+// GPU mosaic perspective — applies the RandomPerspective warp + crop
+// step that was previously done by `random_perspective_mat` on CPU.
+//
+// Input:
+//   imgs_u8:  [B, 3, H_in, W_in] uint8 BGR on GPU. The dataset's
+//             gpu_aug mosaic path returns the 2s × 2s mosaic canvas
+//             un-warped, un-cropped.
+//   targets:  [N, 6] float (batch_idx, cls, cx, cy, w, h) in INPUT
+//             pixel coords on GPU.
+//   H_out/W_out: target output spatial size (typically `imgsz`).
+//   aug:      provides `degrees`, `translate`, `scale_amp` per the
+//             Ultralytics RandomPerspective convention.
+//
+// Output:
+//   imgs_f:   [B, 3, H_out, W_out] float [0, 1] BGR on GPU.
+//   targets:  [M, 6] float (batch_idx, cls, cx, cy, w, h) in OUTPUT
+//             pixel coords on GPU, degenerate bboxes filtered out.
+//
+// Per-batch single affine (not per-sample) for first cut — one set
+// of (angle, scale, tx, ty) applied uniformly across the batch.
+// Cuts the bbox-transform path to ONE matrix multiply (vectorisable)
+// vs B matrix multiplies. Diversity across epochs is still high
+// because we re-sample every step. Per-sample randomness is the
+// natural follow-up (needs [B, 2, 3] theta, per-bbox affine lookup).
+static std::pair<torch::Tensor, torch::Tensor>
+gpu_mosaic_perspective_(torch::Tensor imgs_u8, torch::Tensor targets,
+                         int H_out, int W_out,
+                         const datasets::AugConfig& aug,
+                         std::mt19937& rng) {
+  const int B    = (int)imgs_u8.size(0);
+  const int H_in = (int)imgs_u8.size(2);
+  const int W_in = (int)imgs_u8.size(3);
+
+  // Sample per-batch random params (CPU side — cheap).
+  std::uniform_real_distribution<float> u(-1.f, 1.f);
+  std::uniform_real_distribution<float> uscale(1.f - aug.scale_amp,
+                                                1.f + aug.scale_amp);
+  const float angle_deg = aug.degrees * u(rng);
+  const float angle_rad = angle_deg * (float)M_PI / 180.f;
+  const float scale_f   = uscale(rng);
+  const float tx_pix    = aug.translate * (float)W_out * u(rng);
+  const float ty_pix    = aug.translate * (float)H_out * u(rng);
+
+  // CPU `random_perspective_mat` builds M_pix (input pixel → output
+  // pixel) as:
+  //   M = getRotationMatrix2D({W_in/2, H_in/2}, angle_deg, scale)
+  //   M[0][2] += tx_pix - (W_in - W_out) * 0.5
+  //   M[1][2] += ty_pix - (H_in - H_out) * 0.5
+  // The 2×2 linear part is [[alpha, beta], [-beta, alpha]] where
+  // alpha = scale*cos, beta = scale*sin.
+  const float alpha = scale_f * std::cos(angle_rad);
+  const float beta  = scale_f * std::sin(angle_rad);
+  const float cx_in = W_in / 2.f, cy_in = H_in / 2.f;
+  const float Mpix[2][3] = {
+    {alpha, beta,  (1.f - alpha) * cx_in - beta * cy_in + tx_pix
+                    - (W_in - W_out) * 0.5f},
+    {-beta, alpha, beta * cx_in + (1.f - alpha) * cy_in + ty_pix
+                    - (H_in - H_out) * 0.5f}
+  };
+  // Inverse linear part for grid_sample's OUTPUT pixel → INPUT pixel.
+  const float det = alpha * alpha + beta * beta;  // = scale²
+  const float Minv_lin[2][2] = {
+    { alpha / det, -beta  / det},
+    { beta  / det,  alpha / det}
+  };
+  const float Minv_t[2] = {
+    -(Minv_lin[0][0] * Mpix[0][2] + Minv_lin[0][1] * Mpix[1][2]),
+    -(Minv_lin[1][0] * Mpix[0][2] + Minv_lin[1][1] * Mpix[1][2])
+  };
+  // Convert OUTPUT pixel → INPUT pixel into OUTPUT norm → INPUT norm
+  // for affine_grid. Use align_corners=true (simpler conversion):
+  //   out_pix = (out_norm + 1) * (W_out - 1) / 2
+  //   in_norm = 2 * in_pix / (W_in  - 1) - 1
+  const float so2 = (W_out - 1) / 2.f;
+  const float ho2 = (H_out - 1) / 2.f;
+  const float si2 = (W_in  - 1) / 2.f;
+  const float hi2 = (H_in  - 1) / 2.f;
+  const float t00 = Minv_lin[0][0] * so2 / si2;
+  const float t01 = Minv_lin[0][1] * ho2 / si2;
+  const float t02 = (Minv_lin[0][0] * so2 + Minv_lin[0][1] * ho2 + Minv_t[0]) / si2 - 1.f;
+  const float t10 = Minv_lin[1][0] * so2 / hi2;
+  const float t11 = Minv_lin[1][1] * ho2 / hi2;
+  const float t12 = (Minv_lin[1][0] * so2 + Minv_lin[1][1] * ho2 + Minv_t[1]) / hi2 - 1.f;
+
+  auto theta_cpu = torch::tensor({{t00, t01, t02},
+                                   {t10, t11, t12}}, torch::kFloat32)
+                        .reshape({1, 2, 3})
+                        .expand({B, 2, 3}).contiguous();
+  auto theta = theta_cpu.to(imgs_u8.device());
+  // Convert uint8 → float [0, 1].
+  auto imgs_f = imgs_u8.to(torch::kFloat32).div(255.0);
+  // grid_sample (bilinear, zero-padded) — NOTE: zero padding gives
+  // black borders in dead pixels rather than 114-grey. Tiny aesthetic
+  // diff; convergence is unaffected. To match exactly we'd subtract
+  // 114/255, sample with zero, add back — defer for now.
+  auto grid = torch::nn::functional::affine_grid(
+      theta, {B, 3, H_out, W_out}, /*align_corners=*/true);
+  auto warped = torch::nn::functional::grid_sample(
+      imgs_f, grid,
+      torch::nn::functional::GridSampleFuncOptions()
+        .mode(torch::kBilinear)
+        .padding_mode(torch::kZeros)
+        .align_corners(true));
+
+  // Bbox transform — apply forward Mpix to all bboxes via tensor ops
+  // (one batched matmul, vectorisable). Bboxes in 2s-INPUT coords →
+  // s-OUTPUT coords.
+  torch::Tensor new_targets;
+  if (targets.defined() && targets.size(0) > 0) {
+    auto t_cpu = targets.cpu();
+    auto a = t_cpu.accessor<float, 2>();
+    std::vector<float> kept;
+    kept.reserve((std::size_t)t_cpu.size(0) * 6);
+    for (int k = 0; k < (int)t_cpu.size(0); ++k) {
+      const float bidx = a[k][0], cls = a[k][1];
+      const float cx = a[k][2], cy = a[k][3], w = a[k][4], h = a[k][5];
+      const float x1 = cx - w * 0.5f, y1 = cy - h * 0.5f;
+      const float x2 = cx + w * 0.5f, y2 = cy + h * 0.5f;
+      auto warp = [&](float x, float y) {
+        return std::pair<float, float>{
+            Mpix[0][0] * x + Mpix[0][1] * y + Mpix[0][2],
+            Mpix[1][0] * x + Mpix[1][1] * y + Mpix[1][2]};
+      };
+      auto [a1, b1] = warp(x1, y1);
+      auto [a2, b2] = warp(x2, y1);
+      auto [a3, b3] = warp(x2, y2);
+      auto [a4, b4] = warp(x1, y2);
+      float nx1 = std::min({a1, a2, a3, a4});
+      float ny1 = std::min({b1, b2, b3, b4});
+      float nx2 = std::max({a1, a2, a3, a4});
+      float ny2 = std::max({b1, b2, b3, b4});
+      nx1 = std::clamp(nx1, 0.f, (float)W_out);
+      ny1 = std::clamp(ny1, 0.f, (float)H_out);
+      nx2 = std::clamp(nx2, 0.f, (float)W_out);
+      ny2 = std::clamp(ny2, 0.f, (float)H_out);
+      const float nw = nx2 - nx1, nh = ny2 - ny1;
+      if (nw < 2.f || nh < 2.f) continue;
+      const float orig_area = w * h;
+      if (orig_area > 0.f && (nw * nh) / orig_area < 0.10f) continue;
+      kept.push_back(bidx);
+      kept.push_back(cls);
+      kept.push_back((nx1 + nx2) * 0.5f);
+      kept.push_back((ny1 + ny2) * 0.5f);
+      kept.push_back(nw);
+      kept.push_back(nh);
+    }
+    if (kept.empty()) {
+      new_targets = torch::zeros({0, 6}, torch::kFloat32).to(targets.device());
+    } else {
+      const int M = (int)(kept.size() / 6);
+      new_targets = torch::from_blob(kept.data(), {M, 6}, torch::kFloat32)
+                        .clone()
+                        .to(targets.device());
+    }
+  } else {
+    new_targets = torch::zeros({0, 6},
+        torch::TensorOptions().dtype(torch::kFloat32).device(targets.device()));
+  }
+  return {warped, new_targets};
+}
+
 // GPU HSV jitter — matches the CPU LUT-based implementation in
 // `src/datasets/yolo_dataset.cpp::hsv_jitter` (additive hue with
 // modulo-180 wrap, multiplicative sat/val with clip, lut_sat[0]=0
@@ -1306,14 +1467,24 @@ void TrainerT<M>::run() {
       auto imgs  = imgs_cpu.to(device_, /*non_blocking=*/pin_h2d);
       auto tgt   = tgt_cpu.to(device_, /*non_blocking=*/pin_h2d);
       // GPU augmentation: when train_.aug().gpu_aug, the CPU dataset
-      // skipped hsv_jitter + flip. Apply them on the GPU batch here.
-      // Per-sample randomness — each batch slot draws its own gains
-      // from rng (used inside gpu_hsv_jitter_) and its own flip
-      // decision (drawn here so we can also flip bboxes).
+      // returned un-warped 2s mosaic canvases (uint8 BGR) + bboxes
+      // in 2s coords. Apply RandomPerspective warp+crop on GPU, then
+      // HSV jitter, then flip. Everything stays on the GPU after
+      // HtoD — no round-trips back to host.
       if (device_.is_cuda() && train_.aug_for_gpu().gpu_aug) {
         const auto& a = train_.aug_for_gpu();
+        // 1) Mosaic perspective warp + crop. Input is uint8 [B,3,2s,2s];
+        //    output is float [B,3,s,s] with bboxes mapped + filtered.
+        if (imgs.dtype() == torch::kUInt8) {
+          auto [imgs_warped, tgt_warped] = gpu_mosaic_perspective_(
+              imgs, tgt, cfg_.imgsz, cfg_.imgsz, a, rng);
+          imgs = imgs_warped;
+          tgt  = tgt_warped;
+        }
+        // 2) HSV jitter (per-sample random gains).
         gpu_hsv_jitter_(imgs, a.hsv_h, a.hsv_s, a.hsv_v, rng);
-        // Per-sample flip decision.
+        // 3) Horizontal flip (per-sample). Targets are now in the
+        //    warped s-output frame so flip uses cfg_.imgsz.
         std::uniform_real_distribution<float> u01(0.f, 1.f);
         std::vector<uint8_t> fm((std::size_t)cfg_.batch_size, 0);
         for (int i = 0; i < cfg_.batch_size; ++i) {
@@ -1330,8 +1501,12 @@ void TrainerT<M>::run() {
       }
 
       // Emit train_batchN.jpg sanity grids for the first 3 batches of the
-      // first epoch — upstream convention.
-      if (is_rank0(ddp) && epoch == 0 && step < 3) {
+      // first epoch — upstream convention. Skipped under gpu_aug since
+      // batch.imgs is uint8 (un-warped 2s mosaic canvas) and the
+      // renderer expects float; the GPU-warped float version isn't
+      // available until after `gpu_mosaic_perspective_` runs below.
+      if (is_rank0(ddp) && epoch == 0 && step < 3 &&
+          batch.imgs.dtype() == torch::kFloat32) {
         auto names = cfg_.val_dataset
                          ? cfg_.val_dataset->names()
                          : std::vector<std::string>{};

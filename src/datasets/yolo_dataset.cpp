@@ -398,20 +398,35 @@ static YoloExample build_mosaic4(const YoloDataset& ds, std::size_t imgsz,
     }
   }
 
-  // Combined warp + crop via random_perspective_mat: input is the 2s
-  // canvas with bboxes in 2s coords; output is the s×s region centred
-  // on the canvas center with random affine applied. When the affine
-  // knobs are all zero this collapses to a pure central crop (the
-  // (xc, yc)-centred random crop variant is gone; spatial variability
-  // now comes from the warp's translate). Matches Ultralytics' Mosaic
-  // pipeline order: stitch 2s → random_perspective(out=s).
+  // gpu_aug path: skip the CPU warp+crop entirely. Return the raw
+  // 2s × 2s uint8 canvas + bboxes in 2s coords; the trainer applies
+  // the random perspective (warp + crop to s × s) on the assembled
+  // GPU batch via affine_grid + grid_sample. uint8 keeps the HtoD
+  // transfer manageable (4× the spatial area vs s × s output, but
+  // 4× narrower than float so net same bandwidth).
+  if (aug.gpu_aug) {
+    YoloExample out;
+    out.img = inference::image_to_tensor_u8(canvas);  // [3, 2s, 2s] uint8 BGR
+    if (all_labels.empty()) {
+      out.targets = torch::zeros({0, 5}, torch::kFloat32);
+    } else {
+      const int n = (int)(all_labels.size() / 5);
+      out.targets = torch::from_blob(all_labels.data(), {n, 5},
+                                      torch::kFloat32).clone();
+    }
+    out.orig_w = 2 * s; out.orig_h = 2 * s; out.gain = 1.0;
+    return out;
+  }
+
+  // CPU path: combined warp + crop via random_perspective_mat. Input
+  // is the 2s canvas with bboxes in 2s coords; output is the s×s
+  // region centred on the canvas center with random affine applied.
+  // Matches Ultralytics' Mosaic pipeline order: stitch 2s →
+  // random_perspective(out=s).
   auto [crop, kept] = random_perspective_mat(canvas, all_labels,
                                               s, s, aug, rng);
 
   YoloExample out;
-  // image_to_tensor expects uint8 BGR (or BGR cv::Mat in either depth
-  // — see letterbox.cpp). canvas was built from cv::COLOR_RGB2BGR'd
-  // tiles so it's BGR.
   out.img = inference::image_to_tensor(crop);
   if (kept.empty()) {
     out.targets = torch::zeros({0, 5}, torch::kFloat32);

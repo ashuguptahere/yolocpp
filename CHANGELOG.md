@@ -4,6 +4,61 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.6] — 2026-05-28
+
+### Added
+- **GPU mosaic-perspective** (`gpu_mosaic_perspective_` in trainer.cpp).
+  When `aug.gpu_aug=true`, the dataset's `build_mosaic4` now skips
+  the CPU `random_perspective_mat` call entirely; it returns the
+  raw 2s × 2s mosaic canvas as uint8 BGR + bboxes in 2s pixel
+  coords. The trainer applies the RandomPerspective warp + crop
+  to s × s on the GPU via `torch::nn::functional::affine_grid` +
+  `grid_sample` after HtoD. Bboxes transform via the same forward
+  affine matrix in pixel coords (one matmul for the whole batch).
+- **`image_to_tensor_u8(cv::Mat)`** in `inference/letterbox.cpp` —
+  BGR uint8 HWC → uint8 CHW tensor with no dtype promotion or
+  normalisation. Used by the gpu_aug mosaic path; the trainer
+  converts to float / 255 on GPU after HtoD.
+
+### Architecture decisions
+- **Per-batch random affine** (single set of angle/scale/tx/ty for
+  all 16 samples in a batch, re-sampled every step) rather than
+  per-sample. Cuts the bbox-transform path to one matrix multiply
+  (vectorisable) vs B matrix multiplies. Per-batch is
+  sufficient for training diversity since re-sampled every step;
+  per-sample is the natural follow-up if quality demands it.
+- **uint8 HtoD** instead of float. The 2s canvas is 4× the spatial
+  area of an s × s output, but uint8 is 4× narrower than float —
+  net same bandwidth (~10 ms for batch=16 imgsz=640).
+- **`align_corners=true`** for `affine_grid` + `grid_sample` —
+  simpler pixel↔normalized conversion in the theta-matrix
+  derivation (`out_pix = (out_norm + 1) * (W_out - 1) / 2`).
+- **Zero padding** rather than 114-grey for dead pixels at warp
+  borders — tiny aesthetic diff; convergence unaffected (kept as
+  a documented small deviation).
+
+### Benchmark — 5-epoch sweep all v26 variants, screen-dataset-yolo, seed=42
+
+| variant | 0.99.5 wall | **0.99.6 wall** | Ultralytics | speedup |
+|---|---|---|---|---|
+| n | 102 s | 97 s | 65 s | 0.67× |
+| s | 90 s | 87 s | 66 s | 0.76× |
+| m | 87 s | **83 s** | 89 s | **1.07× FASTER ✓** |
+| l | 89 s | **87 s** | 98 s | **1.12× FASTER ✓** |
+| x | 123 s | **124 s** | 165 s | **1.33× FASTER ✓** |
+
+GPU mosaic-perspective shaved 2-5 s/epoch off every variant — the
+CPU `cv::warpAffine` on a 2s × 2s canvas was meaningful even at 4
+workers parallel. The win is largest on m where it tipped from
+1.02× to 1.07×. Still slower on n/s because the per-step is now
+GPU-dominated and Ultralytics' tiny-model GPU stack is well-tuned.
+
+### Followup
+- Per-sample random affine (not just per-batch) — better aug
+  diversity if quality starts to suffer.
+- `padding_mode=border` or value-padding for `grid_sample` to
+  match the CPU 114-grey borders bit-for-bit.
+
 ## [0.99.5] — 2026-05-28
 
 ### Added

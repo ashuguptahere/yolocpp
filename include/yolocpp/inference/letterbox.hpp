@@ -30,6 +30,12 @@ LetterboxResult letterbox(const cv::Mat& src,
 // Convert a letterboxed BGR image to a CHW float32 tensor in [0, 1] on CPU.
 torch::Tensor image_to_tensor(const cv::Mat& bgr);
 
+// Convert a letterboxed BGR image to a CHW uint8 tensor (no scale, no
+// dtype promotion). Used by the gpu_aug path which moves the float
+// conversion + perspective warp to GPU after HtoD — uint8 transfers
+// are 4× smaller for the same image data.
+torch::Tensor image_to_tensor_u8(const cv::Mat& bgr);
+
 // Map (x1, y1, x2, y2) boxes from letterboxed-image coordinates back to
 // original-image coordinates. Operates in place on a [N, 4] float tensor.
 void scale_boxes(torch::Tensor& xyxy, const LetterboxResult& lb);
