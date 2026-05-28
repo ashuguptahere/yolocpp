@@ -850,18 +850,24 @@ void TrainerT<M>::run() {
   // talks to the polymorphic base only.
   const std::string opt_kind = resolve_optimizer(cfg_.optimizer, cfg_.batch_size);
   // When AdamW is auto-picked from the SGD-natural lr0 default (0.01),
-  // scale lr0 by 0.1 to land at AdamW's natural ~1e-3 range (matches
-  // ultralytics' auto-lr behaviour: 0.01 → 0.001111 ≈ /9 when auto
-  // switches SGD → AdamW). Skipped when the user explicitly chose
-  // "adamw" with a non-default lr0 — we assume they meant it.
+  // fit lr0 to Ultralytics' nc-based formula and clear the bias warmup
+  // ramp. Reference: ultralytics/engine/trainer.py:1018-1020 —
+  //   lr_fit = round(0.002 * 5 / (4 + nc), 6)
+  //   warmup_bias_lr = 0.0  ("no higher than 0.01 for Adam")
+  // At nc=5 → lr_fit=0.001111 (close to our prior 1e-3 default).
+  // At nc=80 (COCO) → lr_fit=0.000119 (10× lower — important to honour).
   if (opt_kind == "adamw" && cfg_.optimizer == "auto" &&
       std::abs(cfg_.lr0 - 0.01) < 1e-9) {
+    const int nc = std::max(1, train_.num_classes());
+    const double lr_fit = std::round(1e6 * 0.002 * 5.0 / (4.0 + (double)nc)) / 1e6;
     if (is_rank0(ddp)) {
-      std::cout << "[trainer] auto-lr: optimizer=adamw → lr0 0.01 → 1e-3 "
-                   "(matches upstream auto-lr). Pass --lr0 to override.\n";
+      std::cout << "[trainer] auto-lr: optimizer=adamw, nc=" << nc
+                << " → lr0 0.01 → " << lr_fit
+                << ", warmup_bias_lr → 0.0 (matches upstream "
+                   "build_optimizer). Pass --lr0 to override.\n";
     }
-    cfg_.lr0 = 1e-3;
-    if (std::abs(cfg_.warmup_bias_lr - 0.1) < 1e-9) cfg_.warmup_bias_lr = cfg_.lr0;
+    cfg_.lr0 = lr_fit;
+    cfg_.warmup_bias_lr = 0.0;
   }
   if (is_rank0(ddp)) {
     std::cout << "[trainer] optimizer=" << opt_kind
@@ -894,19 +900,17 @@ void TrainerT<M>::run() {
   size_t       n      = train_.size();
   int          steps  = std::max<int>(1, (int)(n / cfg_.batch_size));
   int          total_steps   = steps * cfg_.epochs;
-  // Warmup: target = steps × warmup_epochs (upstream default 3 epochs).
-  // Floor at 100 steps for big datasets, but never exceed half the total —
-  // otherwise on tiny datasets all of training stays in linear warmup and
-  // cosine decay never kicks in.
-  // Cap warmup at 10% of total steps (not 50%). The upstream
-  // warmup_epochs=3 default assumes 100+ epochs of training; for the
-  // short 2–10 epoch budgets common in fine-tuning, 50% of training
-  // spent in warmup leaves the effective LR <10% of `lr0` for the
-  // entire run, which is what caused v26 fine-tuning to look
-  // "stuck" — convergence was fine but LR was wasted.
-  int          warmup_target = std::max(100, steps * cfg_.warmup_epochs);
-  int          warmup_cap    = std::max(100, total_steps / 10);
-  int          warmup_steps  = std::min(warmup_target, warmup_cap);
+  // Warmup: matches Ultralytics' formula exactly
+  // (trainer.py:383):
+  //   nw = max(round(warmup_epochs * nb), 100) if warmup_epochs > 0 else -1
+  // No 10% cap. The cap was introduced in 0.5x to make v26 + SGD
+  // short fine-tuning converge faster, but it diverged from upstream
+  // and hurt AdamW convergence at the 5-epoch screen-dataset bench
+  // (0.96.0 was 25% behind Ultralytics; removing the cap is one of
+  // the 0.97.0 fixes).
+  int          warmup_steps  = cfg_.warmup_epochs > 0
+                                 ? std::max(100, steps * cfg_.warmup_epochs)
+                                 : 0;
   warmup_steps = std::max(1, warmup_steps);
   int          ema_step      = 0;
 
@@ -954,6 +958,13 @@ void TrainerT<M>::run() {
   double best_map = -1.0;
   int    best_epoch = -1;
   int    epochs_since_best = 0;
+
+  // Gradient-accumulation bookkeeping: optimizer is stepped every
+  // `accumulate` batches (with accumulate ramping 1 → nbs/batch
+  // during warmup). last_opt_gstep tracks when we last stepped so
+  // the "step now?" check is `gstep - last_opt_gstep >= accumulate`.
+  optim.zero_grad();
+  int last_opt_gstep = -1;
 
   for (int epoch = 0; epoch < cfg_.epochs; ++epoch) {
     auto t0 = std::chrono::steady_clock::now();
@@ -1022,19 +1033,54 @@ void TrainerT<M>::run() {
         at::autocast::clear_cache();
       }
 
-      optim.zero_grad();
-      lo.total.backward();
-      // Average gradients across ranks (no-op single-process).
-      all_reduce_grads(ddp, *model_);
-      // Gradient clip (upstream default 10.0)
-      torch::nn::utils::clip_grad_norm_(model_->parameters(), /*max_norm=*/10.0);
-      optim.step();
+      // Backward: gradients accumulate into param.grad until we
+      // call optim.step() every `accumulate_now` batches. Matches
+      // ultralytics/engine/trainer.py:485-487:
+      //   if ni - last_opt_step >= self.accumulate:
+      //       self.optimizer_step()
+      //       last_opt_step = ni
+      //
+      // CRITICAL: scale the loss by batch_size before backward.
+      // Reference: ultralytics/utils/loss.py:480, 552 —
+      //   return loss * batch_size, loss.detach()
+      // The DISPLAY values (lo.box/cls/dfl as logged) stay the
+      // per-anchor averages; the BACKPROP target is scaled. Without
+      // this, yolocpp's gradients are 16× smaller per step at
+      // batch=16, which under AdamW (with small initial v_t)
+      // produces 16× smaller warmup-phase steps — the dominant
+      // cause of the post-0.96.0 convergence gap vs Ultralytics.
+      auto loss_for_backward = lo.total * (double)cfg_.batch_size;
+      loss_for_backward.backward();
 
-      // EMA
-      ema_step++;
-      double decay = cfg_.ema_decay *
-                     (1.0 - std::exp(-(double)ema_step / cfg_.ema_warmup));
-      ema_update(decay);
+      // accumulate ramps from 1 → nbs/batch over warmup (trainer.py:427).
+      const int accumulate_target = std::max(1,
+          (int)std::round((double)cfg_.nbs / (double)cfg_.batch_size));
+      int accumulate_now;
+      if (gstep < warmup_steps) {
+        const double t = (double)gstep / (double)warmup_steps;
+        accumulate_now = std::max(1,
+            (int)std::round(1.0 + t * (accumulate_target - 1)));
+      } else {
+        accumulate_now = accumulate_target;
+      }
+      const bool do_step =
+          ((gstep - last_opt_gstep) >= accumulate_now) || (step == steps - 1);
+      if (do_step) {
+        // Average gradients across ranks (no-op single-process).
+        all_reduce_grads(ddp, *model_);
+        // Gradient clip (upstream default 10.0)
+        torch::nn::utils::clip_grad_norm_(model_->parameters(),
+                                          /*max_norm=*/10.0);
+        optim.step();
+        optim.zero_grad();
+        last_opt_gstep = gstep;
+
+        // EMA only on optimizer steps (matches upstream).
+        ema_step++;
+        double decay = cfg_.ema_decay *
+                       (1.0 - std::exp(-(double)ema_step / cfg_.ema_warmup));
+        ema_update(decay);
+      }
 
       sum_box   += lo.box.template item<double>();
       sum_cls   += lo.cls.template item<double>();

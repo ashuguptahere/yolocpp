@@ -4,6 +4,76 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.0] — 2026-05-28
+
+### Changed (recipe match — read directly from Ultralytics source, not guessed)
+- **Loss × batch_size before `.backward()`**. Reference:
+  `ultralytics/utils/loss.py:480, 552` — `return loss * batch_size,
+  loss.detach()`. yolocpp was using the per-anchor-averaged loss
+  for backprop, giving 16× smaller gradients per step at batch=16.
+  Under AdamW (with small initial v_t) this produced 16× smaller
+  warmup-phase steps and was the dominant remaining convergence
+  gap vs Ultralytics. Display values (logged `box`/`cls`/`dfl`)
+  stay unscaled.
+- **Gradient accumulation**: `accumulate = max(round(nbs /
+  batch_size), 1)` and `optimizer.step()` only every `accumulate`
+  batches. Reference: `ultralytics/engine/trainer.py:281, 485-487`.
+  During warmup `accumulate` linearly ramps 1 → target (line 427).
+  At batch=16 + nbs=64, effective batch is now 64.
+- **`warmup_bias_lr = 0.0` for AdamW** (was 1e-3). Reference:
+  `trainer.py:1020` — `"no higher than 0.01 for Adam"`.
+- **AdamW lr_fit by class count**: `lr_fit = round(0.002 * 5 /
+  (4 + nc), 6)`. Reference: `trainer.py:1018`. At nc=5 → 0.001111
+  (close to our prior 1e-3). At nc=80 → 0.000119 (10× lower —
+  was important to honour).
+- **No warmup-length cap.** Reference: `trainer.py:383` — `nw =
+  max(round(warmup_epochs * nb), 100)`. yolocpp's prior 10%-of-
+  total-steps cap diverged from upstream and hurt AdamW
+  convergence at the 5-epoch screen-dataset bench.
+- **EMA update only on optimizer step** (every `accumulate`
+  batches), not every forward pass. Matches upstream.
+
+### Added
+- **`TrainConfig::nbs`** field (default 64) — Ultralytics' nominal
+  batch size for gradient accumulation.
+
+### Benchmark — 5-epoch, yolo26x, screen-dataset-yolo, seed=42, RTX 5090
+
+| epoch | 0.96.0 | **0.97.0** | Ultralytics | Δ vs ultra |
+|---|---|---|---|---|
+| 0 | 0.043 | **0.206** | 0.330 | -38% |
+| 1 | 0.305 | **0.370** | 0.483 | -23% |
+| 2 | 0.469 | **0.436** | 0.615 | -29% |
+| 3 | 0.545 | **0.533** | 0.663 | -20% |
+| 4 (final) | 0.581 | **0.651** | 0.775 | **-16%** |
+
+Final at epoch 4:
+- mAP@0.5: 0.708 → **0.778** (vs Ultra 0.906; gap -14%)
+- mAP@0.5:0.95: 0.581 → **0.651** (gap -16%)
+- **Precision: 0.788 → 0.924 (exceeds Ultra's 0.892)**
+- Recall: 0.824 → 0.836 (Ultra 0.854; within 2%)
+- **F1: 0.801 → 0.876 (matches Ultra's ~0.873)**
+- 5-epoch wall: 137.8 s (Ultra 155 s — yolocpp 1.12× faster)
+- Per-epoch wall: 22.5 s vs Ultra 31 s (1.38× faster)
+
+### v26 variant sweep — 1-epoch (warmup-dominated, snapshot only)
+
+| variant | params | yolocpp mAP50-95 | ultra mAP50-95 | yolocpp wall | ultra wall |
+|---|---|---|---|---|---|
+| n | 2.4 M  | 0.321 | 0.434 | 25.6 s | 36.0 s |
+| s | 9.5 M  | 0.358 | 0.542 | 24.6 s | 28.4 s |
+| m | 20.4 M | 0.225 | 0.467 | 25.0 s | 30.6 s |
+| l | 24.8 M | 0.234 | 0.495 | 26.5 s | 25.5 s |
+| x | 55.6 M | 0.301 | 0.499 | 29.8 s | 53.8 s |
+
+yolocpp is faster per epoch on n/s/m/x (1.1×-1.8×), roughly even
+on l. Quality gap is -24% to -53% at 1 epoch — but the 1-epoch
+window is mostly warmup (warmup_epochs=3 default). The 5-epoch
+x-variant ran above closed the gap to -16%. The m/l-specific
+1-epoch underperformance (worse than n/s on yolocpp) is anomalous
+and tracked as the next investigation — likely scale-specific
+LR or init divergence.
+
 ## [0.96.0] — 2026-05-28
 
 ### Changed

@@ -105,6 +105,12 @@ struct TrainConfig {
   // Default 4 — empirically saturates the GPU on a 5090 for yolo26x at
   // batch=16, beyond which extra workers contend on the queue mutex.
   int workers = 4;
+  // Nominal batch size — Ultralytics' constant for gradient
+  // accumulation. accumulate = max(round(nbs / batch_size), 1).
+  // At batch=16 + nbs=64, accumulate=4 (optimizer step every 4
+  // batches, effective batch=64). Reference:
+  // ultralytics/engine/trainer.py line 281 + 427.
+  int nbs = 64;
 };
 
 // Trainer is templated over the model-holder type (Yolo8Detect or
