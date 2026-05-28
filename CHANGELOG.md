@@ -4,6 +4,55 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.4] — 2026-05-28
+
+### Added
+- **`FusedAdamW`** — subclass of `torch::optim::AdamW` that
+  overrides `step()` with a single `at::_fused_adamw_` kernel
+  launch per parameter group. The base AdamW does ~5 small
+  kernel launches per parameter (mul_, addcmul_, addcdiv_,
+  weight-decay, step-counter) — for yolo26 models that's ~3000
+  per-step launches, the dominant per-step CPU launch overhead
+  on small models. State (`exp_avg`, `exp_avg_sq`, step counter)
+  goes through the base-class `state()` map, so serialization
+  + load are compatible. Automatic CPU fallback (calls base
+  `AdamW::step()`) when any param is on CPU since
+  `at::_fused_adamw_` is CUDA-only in our LibTorch.
+
+### Profile delta — per-step time on yolo26n (workers=4, batch=16)
+
+```
+              0.99.3       0.99.4 (FusedAdamW)
+htod          10 ms        10 ms
+fwd+loss      24 ms        25 ms
+backward      35 ms        32 ms
+post          33 ms        17 ms     ← halved by FusedAdamW
+total         ~100 ms      ~80 ms
+```
+
+### Benchmark — 5-epoch sweep, all v26 variants, screen-dataset-yolo, seed=42
+
+| variant | 0.99.3 wall | **0.99.4 wall** | Ultralytics | speedup |
+|---|---|---|---|---|
+| n | 110 s | 109 s | 65 s | 0.60× |
+| s | 96 s | 100 s | 66 s | 0.66× |
+| m | 98 s | 98 s | 89 s | 0.91× |
+| l | 101 s | 100 s | 98 s | 0.98× |
+| x | 125 s | **122 s** | 165 s | **1.36× FASTER** ✓ (was 1.32×) |
+
+FusedAdamW pulled x's speedup further ahead (1.32× → 1.36×).
+On n/s the per-step GPU savings unlocked a new bottleneck:
+worker data-prep can't keep up with the now-faster GPU step
+(`prefetch wait` reappeared at some steps in the profile).
+Bumping `--workers 8` actually slowed things further — the wall
+is the per-sample CPU aug work (mosaic + perspective +
+letterbox), not worker count.
+
+**Next gap-closer for n/s**: move mosaic + perspective + HSV
+aug to GPU (eliminates the per-sample CPU work entirely). This
+is the only intervention left that can make yolocpp faster than
+Ultralytics on every variant.
+
 ## [0.99.3] — 2026-05-28
 
 ### Added

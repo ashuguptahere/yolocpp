@@ -192,6 +192,97 @@ class BatchPrefetcher {
   std::vector<std::thread>                workers_;
 };
 
+// FusedAdamW — subclass of torch::optim::AdamW that overrides
+// `step()` with a single `at::_fused_adamw_` kernel launch per
+// parameter group. The base AdamW does ~5 small kernel launches per
+// parameter (mul_, addcmul_, addcdiv_, weight-decay, step-counter)
+// for a total of ~3000 kernels per step on a yolo26 model — the
+// dominant per-step launch overhead on small models. The fused
+// kernel does it all in a single launch per group. State (exp_avg,
+// exp_avg_sq, step counter) is stored via the base-class state()
+// map exactly like upstream, so serialization + load are compatible.
+class FusedAdamW : public torch::optim::AdamW {
+ public:
+  using torch::optim::AdamW::AdamW;
+
+  torch::Tensor step(LossClosure closure = nullptr) override {
+    // Fast path is CUDA-only — _fused_adamw_ lacks a CPU kernel in
+    // our LibTorch version. Fall back to upstream's per-param
+    // implementation when any param is on CPU (smoke tests run
+    // there).
+    bool any_cpu = false;
+    for (auto& group : param_groups()) {
+      for (auto& p : group.params()) {
+        if (!p.is_cuda()) { any_cpu = true; break; }
+      }
+      if (any_cpu) break;
+    }
+    if (any_cpu) return torch::optim::AdamW::step(closure);
+
+    torch::Tensor loss;
+    if (closure) {
+      torch::AutoGradMode enable_grad(true);
+      loss = closure();
+    }
+    torch::NoGradGuard ng;
+    for (auto& group : param_groups()) {
+      auto& opts = static_cast<torch::optim::AdamWOptions&>(group.options());
+      const double lr   = opts.lr();
+      const auto betas  = opts.betas();
+      const double b1   = std::get<0>(betas);
+      const double b2   = std::get<1>(betas);
+      const double eps  = opts.eps();
+      const double wd   = opts.weight_decay();
+      const bool ams    = opts.amsgrad();
+
+      std::vector<at::Tensor> params, grads, exp_avgs, exp_avg_sqs,
+                              max_exp_avg_sqs, state_steps;
+      params.reserve(group.params().size());
+      grads.reserve(group.params().size());
+      exp_avgs.reserve(group.params().size());
+      exp_avg_sqs.reserve(group.params().size());
+      max_exp_avg_sqs.reserve(group.params().size());
+      state_steps.reserve(group.params().size());
+
+      for (auto& p : group.params()) {
+        if (!p.grad().defined()) continue;
+        auto key = p.unsafeGetTensorImpl();
+        auto it = state().find(key);
+        if (it == state().end()) {
+          // Lazy state init on first step (matches upstream).
+          auto st = std::make_unique<torch::optim::AdamWParamState>();
+          st->step(0);
+          st->exp_avg(torch::zeros_like(p, at::MemoryFormat::Preserve));
+          st->exp_avg_sq(torch::zeros_like(p, at::MemoryFormat::Preserve));
+          if (ams) st->max_exp_avg_sq(torch::zeros_like(p, at::MemoryFormat::Preserve));
+          state()[key] = std::move(st);
+          it = state().find(key);
+        }
+        auto& s = static_cast<torch::optim::AdamWParamState&>(*it->second);
+        s.step(s.step() + 1);
+        // _fused_adamw_ expects step as a float scalar tensor; build
+        // on each call (1 tiny scalar per param, fast).
+        auto step_t = torch::full({}, (double)s.step(),
+            at::TensorOptions().dtype(at::kFloat).device(p.device()));
+        params.push_back(p);
+        grads.push_back(p.grad());
+        exp_avgs.push_back(s.exp_avg());
+        exp_avg_sqs.push_back(s.exp_avg_sq());
+        // _fused_adamw_ requires same list length; when !ams pass
+        // exp_avg_sq as a stand-in (the kernel ignores it).
+        max_exp_avg_sqs.push_back(ams ? s.max_exp_avg_sq() : s.exp_avg_sq());
+        state_steps.push_back(step_t);
+      }
+      if (params.empty()) continue;
+      at::_fused_adamw_(params, grads, exp_avgs, exp_avg_sqs,
+                         max_exp_avg_sqs, state_steps,
+                         lr, b1, b2, wd, eps,
+                         /*amsgrad=*/ams, /*maximize=*/false);
+    }
+    return loss;
+  }
+};
+
 // Build the per-group optimizer. Three groups (decay-conv / bias / bn-weight)
 // for both SGD and AdamW — same partition, different per-group options.
 //
@@ -220,7 +311,10 @@ std::unique_ptr<torch::optim::Optimizer> make_optimizer(
     add(decay, weight_decay);
     add(bias,  0.0);
     add(bn,    0.0);
-    return std::make_unique<torch::optim::AdamW>(
+    // FusedAdamW overrides step() with at::_fused_adamw_ — 1 kernel
+    // launch per param group instead of ~5 per param. Drop-in
+    // replacement, state-compatible with the base AdamW.
+    return std::make_unique<FusedAdamW>(
         std::move(groups), torch::optim::AdamWOptions(lr0).weight_decay(weight_decay));
   }
   // SGD + Nesterov (default for batch >= 64 or explicit "sgd").
