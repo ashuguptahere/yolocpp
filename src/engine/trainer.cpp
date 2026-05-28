@@ -2,6 +2,7 @@
 
 #include <ATen/autocast_mode.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <opencv2/core/utility.hpp>
 #include <torch/optim.h>
 #include <torch/optim/adamw.h>
 
@@ -225,68 +226,58 @@ gpu_mosaic_perspective_(torch::Tensor imgs_u8, torch::Tensor targets,
   const int H_in = (int)imgs_u8.size(2);
   const int W_in = (int)imgs_u8.size(3);
 
-  // Sample per-batch random params (CPU side — cheap).
+  // Per-sample random params (matches ultralytics RandomPerspective
+  // which calls get_params once per __getitem__). Each batch slot
+  // gets its own (angle, scale, tx, ty); affine_grid handles the
+  // [B, 2, 3] theta natively. Bbox transform uses per-bbox Mpix
+  // selected by batch_idx.
   std::uniform_real_distribution<float> u(-1.f, 1.f);
   std::uniform_real_distribution<float> uscale(1.f - aug.scale_amp,
                                                 1.f + aug.scale_amp);
-  const float angle_deg = aug.degrees * u(rng);
-  const float angle_rad = angle_deg * (float)M_PI / 180.f;
-  const float scale_f   = uscale(rng);
-  const float tx_pix    = aug.translate * (float)W_out * u(rng);
-  const float ty_pix    = aug.translate * (float)H_out * u(rng);
-
-  // CPU `random_perspective_mat` builds M_pix (input pixel → output
-  // pixel) as:
-  //   M = getRotationMatrix2D({W_in/2, H_in/2}, angle_deg, scale)
-  //   M[0][2] += tx_pix - (W_in - W_out) * 0.5
-  //   M[1][2] += ty_pix - (H_in - H_out) * 0.5
-  // The 2×2 linear part is [[alpha, beta], [-beta, alpha]] where
-  // alpha = scale*cos, beta = scale*sin.
-  const float alpha = scale_f * std::cos(angle_rad);
-  const float beta  = scale_f * std::sin(angle_rad);
+  std::vector<std::array<std::array<float, 3>, 2>> Mpix_per(B);
+  std::vector<float> theta_flat((std::size_t)B * 6, 0.f);
   const float cx_in = W_in / 2.f, cy_in = H_in / 2.f;
-  const float Mpix[2][3] = {
-    {alpha, beta,  (1.f - alpha) * cx_in - beta * cy_in + tx_pix
-                    - (W_in - W_out) * 0.5f},
-    {-beta, alpha, beta * cx_in + (1.f - alpha) * cy_in + ty_pix
-                    - (H_in - H_out) * 0.5f}
-  };
-  // Inverse linear part for grid_sample's OUTPUT pixel → INPUT pixel.
-  const float det = alpha * alpha + beta * beta;  // = scale²
-  const float Minv_lin[2][2] = {
-    { alpha / det, -beta  / det},
-    { beta  / det,  alpha / det}
-  };
-  const float Minv_t[2] = {
-    -(Minv_lin[0][0] * Mpix[0][2] + Minv_lin[0][1] * Mpix[1][2]),
-    -(Minv_lin[1][0] * Mpix[0][2] + Minv_lin[1][1] * Mpix[1][2])
-  };
-  // Convert OUTPUT pixel → INPUT pixel into OUTPUT norm → INPUT norm
-  // for affine_grid. Use align_corners=true (simpler conversion):
-  //   out_pix = (out_norm + 1) * (W_out - 1) / 2
-  //   in_norm = 2 * in_pix / (W_in  - 1) - 1
   const float so2 = (W_out - 1) / 2.f;
   const float ho2 = (H_out - 1) / 2.f;
   const float si2 = (W_in  - 1) / 2.f;
   const float hi2 = (H_in  - 1) / 2.f;
-  const float t00 = Minv_lin[0][0] * so2 / si2;
-  const float t01 = Minv_lin[0][1] * ho2 / si2;
-  const float t02 = (Minv_lin[0][0] * so2 + Minv_lin[0][1] * ho2 + Minv_t[0]) / si2 - 1.f;
-  const float t10 = Minv_lin[1][0] * so2 / hi2;
-  const float t11 = Minv_lin[1][1] * ho2 / hi2;
-  const float t12 = (Minv_lin[1][0] * so2 + Minv_lin[1][1] * ho2 + Minv_t[1]) / hi2 - 1.f;
+  for (int i = 0; i < B; ++i) {
+    const float angle_deg = aug.degrees * u(rng);
+    const float angle_rad = angle_deg * (float)M_PI / 180.f;
+    const float scale_f   = uscale(rng);
+    const float tx_pix    = aug.translate * (float)W_out * u(rng);
+    const float ty_pix    = aug.translate * (float)H_out * u(rng);
+    const float alpha = scale_f * std::cos(angle_rad);
+    const float beta  = scale_f * std::sin(angle_rad);
+    auto& M = Mpix_per[(std::size_t)i];
+    M[0][0] = alpha;  M[0][1] = beta;
+    M[0][2] = (1.f - alpha) * cx_in - beta * cy_in + tx_pix
+                - (W_in - W_out) * 0.5f;
+    M[1][0] = -beta;  M[1][1] = alpha;
+    M[1][2] = beta * cx_in + (1.f - alpha) * cy_in + ty_pix
+                - (H_in - H_out) * 0.5f;
+    // Inverse + normalized theta for affine_grid.
+    const float det = alpha * alpha + beta * beta;
+    const float il00 =  alpha / det, il01 = -beta  / det;
+    const float il10 =  beta  / det, il11 =  alpha / det;
+    const float it0 = -(il00 * M[0][2] + il01 * M[1][2]);
+    const float it1 = -(il10 * M[0][2] + il11 * M[1][2]);
+    theta_flat[(std::size_t)(i * 6 + 0)] = il00 * so2 / si2;
+    theta_flat[(std::size_t)(i * 6 + 1)] = il01 * ho2 / si2;
+    theta_flat[(std::size_t)(i * 6 + 2)] = (il00 * so2 + il01 * ho2 + it0) / si2 - 1.f;
+    theta_flat[(std::size_t)(i * 6 + 3)] = il10 * so2 / hi2;
+    theta_flat[(std::size_t)(i * 6 + 4)] = il11 * ho2 / hi2;
+    theta_flat[(std::size_t)(i * 6 + 5)] = (il10 * so2 + il11 * ho2 + it1) / hi2 - 1.f;
+  }
+  auto theta = torch::from_blob(theta_flat.data(), {B, 2, 3},
+                                 torch::kFloat32).clone()
+                    .to(imgs_u8.device());
 
-  auto theta_cpu = torch::tensor({{t00, t01, t02},
-                                   {t10, t11, t12}}, torch::kFloat32)
-                        .reshape({1, 2, 3})
-                        .expand({B, 2, 3}).contiguous();
-  auto theta = theta_cpu.to(imgs_u8.device());
-  // Convert uint8 → float [0, 1].
-  auto imgs_f = imgs_u8.to(torch::kFloat32).div(255.0);
-  // grid_sample (bilinear, zero-padded) — NOTE: zero padding gives
-  // black borders in dead pixels rather than 114-grey. Tiny aesthetic
-  // diff; convergence is unaffected. To match exactly we'd subtract
-  // 114/255, sample with zero, add back — defer for now.
+  // Convert uint8 → float [0, 1]. Subtract 114/255 BEFORE grid_sample
+  // so the zero-padding picks up neutral grey instead of black —
+  // matches Ultralytics' `borderValue=(114, 114, 114)` semantics.
+  const float kGrey = 114.f / 255.f;
+  auto imgs_f = imgs_u8.to(torch::kFloat32).div(255.0).sub(kGrey);
   auto grid = torch::nn::functional::affine_grid(
       theta, {B, 3, H_out, W_out}, /*align_corners=*/true);
   auto warped = torch::nn::functional::grid_sample(
@@ -295,10 +286,11 @@ gpu_mosaic_perspective_(torch::Tensor imgs_u8, torch::Tensor targets,
         .mode(torch::kBilinear)
         .padding_mode(torch::kZeros)
         .align_corners(true));
+  warped = warped.add(kGrey);  // restore so dead pixels = 114/255 grey
 
-  // Bbox transform — apply forward Mpix to all bboxes via tensor ops
-  // (one batched matmul, vectorisable). Bboxes in 2s-INPUT coords →
-  // s-OUTPUT coords.
+  // Bbox transform — per-bbox lookup of the warping affine via
+  // batch_idx (column 0 of targets). With per-sample affine each
+  // bbox gets the affine of ITS sample, not a shared per-batch one.
   torch::Tensor new_targets;
   if (targets.defined() && targets.size(0) > 0) {
     auto t_cpu = targets.cpu();
@@ -306,19 +298,22 @@ gpu_mosaic_perspective_(torch::Tensor imgs_u8, torch::Tensor targets,
     std::vector<float> kept;
     kept.reserve((std::size_t)t_cpu.size(0) * 6);
     for (int k = 0; k < (int)t_cpu.size(0); ++k) {
+      const int bidx_i = (int)a[k][0];
+      if (bidx_i < 0 || bidx_i >= B) continue;
+      const auto& M = Mpix_per[(std::size_t)bidx_i];
       const float bidx = a[k][0], cls = a[k][1];
       const float cx = a[k][2], cy = a[k][3], w = a[k][4], h = a[k][5];
       const float x1 = cx - w * 0.5f, y1 = cy - h * 0.5f;
       const float x2 = cx + w * 0.5f, y2 = cy + h * 0.5f;
-      auto warp = [&](float x, float y) {
+      auto warp_pt = [&](float x, float y) {
         return std::pair<float, float>{
-            Mpix[0][0] * x + Mpix[0][1] * y + Mpix[0][2],
-            Mpix[1][0] * x + Mpix[1][1] * y + Mpix[1][2]};
+            M[0][0] * x + M[0][1] * y + M[0][2],
+            M[1][0] * x + M[1][1] * y + M[1][2]};
       };
-      auto [a1, b1] = warp(x1, y1);
-      auto [a2, b2] = warp(x2, y1);
-      auto [a3, b3] = warp(x2, y2);
-      auto [a4, b4] = warp(x1, y2);
+      auto [a1, b1] = warp_pt(x1, y1);
+      auto [a2, b2] = warp_pt(x2, y1);
+      auto [a3, b3] = warp_pt(x2, y2);
+      auto [a4, b4] = warp_pt(x1, y2);
       float nx1 = std::min({a1, a2, a3, a4});
       float ny1 = std::min({b1, b2, b3, b4});
       float nx2 = std::max({a1, a2, a3, a4});
@@ -1051,6 +1046,18 @@ void TrainerT<M>::run() {
                  "If still non-reproducible, export the env var BEFORE "
                  "launching yolocpp (must precede first CUDA call).\n";
   }
+  // CPU thread budget. OpenCV defaults to one thread per HW core
+  // (e.g. 32 on this machine). With N BatchPrefetcher workers each
+  // calling cv::resize / cv::warpAffine, that's N × cores threads
+  // contending — heavy oversubscription. cv::setNumThreads(1) makes
+  // each worker single-threaded for cv ops; total CPU usage drops
+  // ~5× without hurting throughput (workers were already parallel
+  // at the batch level, not the op level). Same logic for libtorch's
+  // CPU intra-op pool — we only use CPU torch ops in workers (HtoD
+  // tensor construction) which doesn't benefit from intra-op
+  // parallelism either.
+  cv::setNumThreads(1);
+  if (torch::get_num_threads() > 4) torch::set_num_threads(4);
   if (torch::cuda::is_available()) {
     at::globalContext().setBenchmarkCuDNN(!cfg_.deterministic);
     at::globalContext().setAllowTF32CuBLAS(true);

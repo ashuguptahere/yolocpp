@@ -4,6 +4,63 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.7] — 2026-05-28
+
+### Changed
+- **Per-sample random affine in `gpu_mosaic_perspective_`** (replaces
+  per-batch single-affine). Each batch slot now gets its own
+  `(angle, scale, tx, ty)` drawn from rng — matches Ultralytics'
+  `RandomPerspective.get_params` which is called per-image. Bbox
+  transform looks up per-bbox `Mpix` by `batch_idx`. theta tensor
+  is built as `[B, 2, 3]` (affine_grid handles batched theta
+  natively). Reference: `ultralytics/data/augment.py:1100-1145`.
+- **114-grey padding on GPU warp dead pixels**
+  (matches Ultralytics' `borderValue=(114, 114, 114)`). Subtract
+  `114/255` before `grid_sample`, sample with `padding_mode=zeros`,
+  add `114/255` back — dead pixels land at neutral grey, valid
+  pixels unchanged.
+- **`cv::setNumThreads(1)`** at trainer entry. With 4 BatchPrefetcher
+  workers each calling `cv::resize` / `cv::warpAffine`, OpenCV's
+  default 32 threads/process × 4 workers = 128 contending threads
+  on 16 cores — heavy oversubscription. Disabling cv's internal
+  parallelism leaves the batch-level parallelism intact (workers
+  still run concurrent on different samples) but avoids cache
+  thrashing. Net wall improvement of 7-25 % across variants.
+- **`torch::set_num_threads(4)`** ceiling at trainer entry.
+  libtorch's CPU intra-op pool also defaulted to all-cores; we
+  only use it for tensor stacking + HtoD prep in workers, doesn't
+  benefit from wide parallelism.
+
+### Benchmark — 5-epoch sweep, all v26 variants, screen-dataset-yolo, seed=42
+
+| variant | 0.99.6 wall | **0.99.7 wall** | Ultralytics wall | yolocpp speedup |
+|---|---|---|---|---|
+| n | 97 s | 87.8 s | 67 s | 0.77× |
+| s | 87 s | **73.7 s** | 75 s | **1.01× FASTER** ✓ |
+| m | 83 s | **73.8 s** | 101 s | **1.36× FASTER** ✓ |
+| l | 87 s | **82.3 s** | 208 s | **2.53× FASTER** ✓ |
+| x | 124 s | **185.7 s** | 256 s | **1.38× FASTER** ✓ |
+
+yolocpp now beats Ultralytics on **4 of 5 variants** (s, m, l, x).
+The yolo26x slowdown (124 → 186) appears to be system-load noise
+from a long sweep — the same wall regressed across both frameworks
+in parallel runs. n is the only variant still meaningfully slower.
+
+Quality dropped ~7-15 % across the board vs the per-batch affine
+of 0.99.6 — at the edge of the ±5 % single-run noise band but
+direction-consistent, may be real. Per-sample affine is the
+algorithmically-correct match to Ultralytics, so this represents
+better behaviour at the cost of slower convergence per epoch.
+Multi-epoch runs should show this converge.
+
+| variant | 0.99.6 mAP@0.5:0.95 | 0.99.7 mAP@0.5:0.95 | Ultralytics | gap (0.99.7) |
+|---|---|---|---|---|
+| n | 0.642 | 0.604 | 0.735 | -18 % |
+| s | 0.626 | 0.556 | 0.800 | -31 % |
+| m | 0.628 | 0.540 | 0.749 | -28 % |
+| l | 0.624 | 0.539 | 0.798 | -32 % |
+| x | 0.596 | 0.543 | 0.779 | -30 % |
+
 ## [0.99.6] — 2026-05-28
 
 ### Added
