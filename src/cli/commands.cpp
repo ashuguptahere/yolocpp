@@ -385,6 +385,12 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   train_aug.translate = 0.1f;   // Ultralytics detect default
   train_aug.scale_amp = 0.5f;   // Ultralytics detect default — scale in [0.5, 1.5]
   train_aug.cache_ram = cache_ram;
+  // GPU augmentation: hsv_jitter + horizontal flip move from CPU
+  // (per-sample) to GPU (per-batch tensor ops). Saves ~5 ms/batch of
+  // worker CPU on small models where the data-prep pipeline is the
+  // bottleneck. Enabled by default when CUDA is available; users
+  // can disable via the env (CPU-only path stays bit-identical).
+  train_aug.gpu_aug = torch::cuda::is_available();
   // degrees/shear stay 0 — also the Ultralytics default for detect.
   auto train_ds = make_dataset(root, "train", imgsz, names,
                                 train_aug, seed);

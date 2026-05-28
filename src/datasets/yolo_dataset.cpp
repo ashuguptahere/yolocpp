@@ -228,8 +228,9 @@ YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
   std::mt19937 rng(aug_seed ? aug_seed
                             : (uint64_t)idx * 0x9E3779B97F4A7C15ULL);
 
-  // Augmentation (color) before letterbox.
-  if (aug_.augment) {
+  // Augmentation (color) before letterbox. Skipped when gpu_aug —
+  // the trainer applies HSV jitter on the assembled GPU batch.
+  if (aug_.augment && !aug_.gpu_aug) {
     hsv_jitter(bgr, rng, aug_.hsv_h, aug_.hsv_s, aug_.hsv_v);
   }
 
@@ -245,9 +246,10 @@ YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
   ex.pad_x = lb.pad_x;
   ex.pad_y = lb.pad_y;
 
-  // Optional horizontal flip.
+  // Optional horizontal flip. Skipped when gpu_aug — applied on the
+  // GPU batch by the trainer.
   bool flip = false;
-  if (aug_.augment) {
+  if (aug_.augment && !aug_.gpu_aug) {
     std::uniform_real_distribution<float> u(0.f, 1.f);
     flip = u(rng) < aug_.flip_p;
     if (flip) cv::flip(lb_img, lb_img, /*flipCode=*/1);  // horizontal

@@ -76,6 +76,13 @@ struct AugConfig {
   // dataset (2465 imgs → ~2.5 GB RAM). Off by default; opt-in via
   // cmd_train and `--cache`.
   bool   cache_ram  = false;
+  // GPU augmentation. When true, the CPU dataset path SKIPS hsv_jitter
+  // and horizontal flip — they're applied on the GPU batch after HtoD
+  // by the trainer (much cheaper than per-sample CPU `cv::cvtColor`
+  // + `cv::flip` on small models where the CPU pipeline is the
+  // bottleneck). Mosaic + RandomPerspective stay on CPU for now —
+  // moving those to GPU is a bigger refactor (#TODO next).
+  bool   gpu_aug    = false;
 };
 
 struct YoloExample {
@@ -145,6 +152,10 @@ class YoloDataset {
   int  num_classes() const { return (int)names_.size(); }
   int  imgsz()       const { return imgsz_; }
   const std::vector<std::string>& names() const { return names_; }
+  // Read-only accessor for AugConfig — the trainer needs the
+  // (hsv_h, hsv_s, hsv_v, flip_p, gpu_aug) fields to apply GPU
+  // augmentation post-HtoD when gpu_aug is enabled.
+  const AugConfig& aug_for_gpu() const { return aug_; }
 
  private:
   std::vector<std::string>  img_paths_;

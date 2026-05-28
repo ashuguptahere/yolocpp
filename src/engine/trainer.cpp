@@ -192,6 +192,135 @@ class BatchPrefetcher {
   std::vector<std::thread>                workers_;
 };
 
+// GPU HSV jitter — matches the CPU LUT-based implementation in
+// `src/datasets/yolo_dataset.cpp::hsv_jitter` (additive hue with
+// modulo-180 wrap, multiplicative sat/val with clip, lut_sat[0]=0
+// for pure-white preservation per ultralytics 8.3.79+).
+//
+// Input: imgs in [B, 3, H, W] float [0, 1] BGR order (the format
+// `image_to_tensor` produces). Modifies in-place.
+//
+// Per-sample random gains: each batch slot gets its own (r_h, r_s,
+// r_v) drawn from the trainer's `aux_rng` so the augmentation
+// matches the CPU path's behaviour (per-sample randomness).
+static void gpu_hsv_jitter_(torch::Tensor& imgs,
+                             float hg, float sg, float vg,
+                             std::mt19937& rng) {
+  if (hg == 0.f && sg == 0.f && vg == 0.f) return;
+  if (!imgs.is_cuda()) return;  // CPU fallback: caller didn't ask for gpu_aug
+  const int B = (int)imgs.size(0);
+  std::uniform_real_distribution<float> u(-1.f, 1.f);
+  // Build per-sample gain tensors on CPU then ship to GPU once.
+  std::vector<float> r_h(B), r_s_p1(B), r_v_p1(B);
+  for (int i = 0; i < B; ++i) {
+    r_h[i]    = u(rng) * hg * 360.f;   // hue offset in degrees
+    r_s_p1[i] = u(rng) * sg + 1.f;     // sat gain (r_s + 1)
+    r_v_p1[i] = u(rng) * vg + 1.f;     // val gain
+  }
+  const auto opts = imgs.options();
+  auto t_h = torch::from_blob(r_h.data(),    {B, 1, 1, 1}, torch::kFloat32).clone().to(opts);
+  auto t_s = torch::from_blob(r_s_p1.data(), {B, 1, 1, 1}, torch::kFloat32).clone().to(opts);
+  auto t_v = torch::from_blob(r_v_p1.data(), {B, 1, 1, 1}, torch::kFloat32).clone().to(opts);
+
+  // BGR → HSV via tensor ops. No torch::cvtColor exists; build it.
+  // Channels: index 0 = B, 1 = G, 2 = R (BGR order from cv pipeline).
+  auto Bc = imgs.select(1, 0).unsqueeze(1);   // [B, 1, H, W]
+  auto Gc = imgs.select(1, 1).unsqueeze(1);
+  auto Rc = imgs.select(1, 2).unsqueeze(1);
+  auto Vmax  = torch::max(torch::max(Rc, Gc), Bc);
+  auto Vmin  = torch::min(torch::min(Rc, Gc), Bc);
+  auto delta = Vmax - Vmin;
+  auto delta_safe = delta.clamp_min(1e-6);
+  auto S = torch::where(Vmax > 1e-6, delta / Vmax.clamp_min(1e-6),
+                                       torch::zeros_like(Vmax));
+  // Hue (in degrees, 0..360) — branchless via three candidates, picked
+  // by which channel equals Vmax.
+  auto h_r = (Gc - Bc) / delta_safe;
+  auto h_g = (Bc - Rc) / delta_safe + 2.f;
+  auto h_b = (Rc - Gc) / delta_safe + 4.f;
+  auto H = torch::where(Vmax == Rc, h_r,
+           torch::where(Vmax == Gc, h_g, h_b)) * 60.f;
+  H = torch::where(H < 0.f, H + 360.f, H);
+  H = torch::where(delta < 1e-6, torch::zeros_like(H), H);
+
+  // Apply jitter: hue additive + wrap; sat/val multiplicative + clip.
+  H = torch::fmod(H + t_h + 360.f, 360.f);
+  S = (S * t_s).clamp(0.f, 1.f);
+  auto V = (Vmax * t_v).clamp(0.f, 1.f);
+
+  // HSV → BGR — standard formula with hue sector h_i = floor(H / 60).
+  auto Hp = H / 60.f;
+  auto h_i = torch::floor(Hp).to(torch::kInt64);
+  auto f = Hp - torch::floor(Hp);
+  auto p = V * (1.f - S);
+  auto q = V * (1.f - S * f);
+  auto t = V * (1.f - S * (1.f - f));
+  // Six sectors: assemble R/G/B as masked select of (V, q, p, t)
+  // index_select per pixel would be huge; use torch::where stacks.
+  auto h0 = (h_i % 6) == 0;
+  auto h1 = (h_i % 6) == 1;
+  auto h2 = (h_i % 6) == 2;
+  auto h3 = (h_i % 6) == 3;
+  auto h4 = (h_i % 6) == 4;
+  auto h5 = (h_i % 6) == 5;
+  auto z = torch::zeros_like(V);
+  auto R2 = torch::where(h0, V,
+            torch::where(h1, q,
+            torch::where(h2, p,
+            torch::where(h3, p,
+            torch::where(h4, t,
+            torch::where(h5, V, z))))));
+  auto G2 = torch::where(h0, t,
+            torch::where(h1, V,
+            torch::where(h2, V,
+            torch::where(h3, q,
+            torch::where(h4, p,
+            torch::where(h5, p, z))))));
+  auto B2 = torch::where(h0, p,
+            torch::where(h1, p,
+            torch::where(h2, t,
+            torch::where(h3, V,
+            torch::where(h4, V,
+            torch::where(h5, q, z))))));
+  // Repack in BGR order to match input layout.
+  imgs = torch::cat({B2, G2, R2}, /*dim=*/1);
+}
+
+// GPU horizontal flip — per-sample with prob `flip_p`. Image flip is
+// `torch::flip(dim=-1)` on the selected rows; bbox flip subtracts cx
+// from imgsz for the same rows (using a [N, 6] target tensor with
+// batch_idx in column 0 — same layout the trainer uses).
+//
+// `flip_mask`: [B] uint8 with 1 for slots to flip.
+static void gpu_hflip_(torch::Tensor& imgs, torch::Tensor& targets,
+                        const std::vector<uint8_t>& flip_mask, int imgsz) {
+  if (!imgs.is_cuda()) return;
+  const int B = (int)imgs.size(0);
+  if ((int)flip_mask.size() != B) return;
+  // Build a CUDA bool mask once.
+  std::vector<bool> mask_bool(flip_mask.begin(), flip_mask.end());
+  std::vector<uint8_t> mask_u8(flip_mask);
+  auto cpu_mask = torch::from_blob(mask_u8.data(), {B},
+                                    torch::kUInt8).clone();
+  auto mask = cpu_mask.to(imgs.device()).to(torch::kBool);
+  // Flip selected images: imgs[mask] = flip(imgs[mask], -1)
+  if (mask.any().item<bool>()) {
+    auto idx = torch::nonzero(mask).squeeze(1);
+    auto flipped = imgs.index_select(0, idx).flip({-1});
+    imgs.index_copy_(0, idx, flipped);
+    // Flip bboxes whose batch_idx (column 0) is in `idx`.
+    // Targets are [N, 6]: (b_idx, cls, cx, cy, w, h) pixel coords.
+    if (targets.defined() && targets.size(0) > 0) {
+      auto bcol = targets.select(1, 0).to(torch::kLong);
+      auto mask_cols = mask.index_select(0, bcol);  // [N]
+      auto cx = targets.select(1, 2);  // [N]
+      // cx_new = imgsz - cx_old for rows in mask, else unchanged.
+      cx = torch::where(mask_cols, (float)imgsz - cx, cx);
+      targets.select(1, 2).copy_(cx);
+    }
+  }
+}
+
 // FusedAdamW — subclass of torch::optim::AdamW that overrides
 // `step()` with a single `at::_fused_adamw_` kernel launch per
 // parameter group. The base AdamW does ~5 small kernel launches per
@@ -1176,6 +1305,22 @@ void TrainerT<M>::run() {
       auto tgt_cpu  = pin_h2d ? batch.targets.pin_memory() : batch.targets;
       auto imgs  = imgs_cpu.to(device_, /*non_blocking=*/pin_h2d);
       auto tgt   = tgt_cpu.to(device_, /*non_blocking=*/pin_h2d);
+      // GPU augmentation: when train_.aug().gpu_aug, the CPU dataset
+      // skipped hsv_jitter + flip. Apply them on the GPU batch here.
+      // Per-sample randomness — each batch slot draws its own gains
+      // from rng (used inside gpu_hsv_jitter_) and its own flip
+      // decision (drawn here so we can also flip bboxes).
+      if (device_.is_cuda() && train_.aug_for_gpu().gpu_aug) {
+        const auto& a = train_.aug_for_gpu();
+        gpu_hsv_jitter_(imgs, a.hsv_h, a.hsv_s, a.hsv_v, rng);
+        // Per-sample flip decision.
+        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        std::vector<uint8_t> fm((std::size_t)cfg_.batch_size, 0);
+        for (int i = 0; i < cfg_.batch_size; ++i) {
+          fm[(std::size_t)i] = (u01(rng) < a.flip_p) ? 1 : 0;
+        }
+        gpu_hflip_(imgs, tgt, fm, cfg_.imgsz);
+      }
       if (prof && device_.is_cuda()) at::cuda::getCurrentCUDAStream().synchronize();
       auto _t2 = std::chrono::steady_clock::now();
       if (device_.is_cuda()) {

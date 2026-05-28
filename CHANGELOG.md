@@ -4,6 +4,52 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.5] — 2026-05-28
+
+### Added
+- **`AugConfig::gpu_aug`** field (default true when CUDA is
+  available, set in `cmd_train`). Moves `hsv_jitter` + horizontal
+  flip from CPU per-sample workers to a GPU per-batch tensor pass
+  after HtoD. Mosaic + RandomPerspective stay on CPU for now
+  (separate refactor).
+- **`gpu_hsv_jitter_(imgs, hg, sg, vg, rng)`** in `trainer.cpp`.
+  Per-sample random gains (matches the CPU LUT path semantics
+  exactly: additive hue + mod-180 wrap, multiplicative sat/val
+  with clamp, lut_sat[0]=0 pure-white guard via the `delta < 1e-6`
+  branch). BGR↔HSV conversion via tensor ops (no torch::cvtColor
+  exists); uses `torch::where`-stacks for the six-sector reverse
+  conversion.
+- **`gpu_hflip_(imgs, targets, flip_mask, imgsz)`** — per-sample
+  flip on a GPU batch with bbox-coord transform (`cx_new = imgsz
+  - cx_old`, matches the CPU path's 0.99.0 bbox-flip fix).
+- **`YoloDataset::aug_for_gpu()`** read-only accessor — the
+  trainer needs the `(hsv_h, hsv_s, hsv_v, flip_p, gpu_aug)`
+  fields to apply GPU aug post-HtoD.
+
+### Why
+On the small models (yolo26n, yolo26s) the per-step bottleneck
+after FusedAdamW was the worker CPU augmentation pipeline.
+Moving HSV + flip to GPU drops ~5 ms/batch of worker CPU work;
+the profile now shows `prefetch wait = 0 ms` throughout (was
+30-90 ms with `--workers 4` after FusedAdamW). Workers finally
+keep up with the GPU.
+
+### Benchmark — 5-epoch sweep all v26 variants
+
+| variant | 0.99.4 wall | **0.99.5 wall** | Ultralytics | speedup |
+|---|---|---|---|---|
+| n | 109 s | 102 s (-6%) | 65 s | 0.63× |
+| s | 100 s | 90 s (-10%) | 66 s | 0.73× |
+| m | 98 s | **87 s** (-11%) | 89 s | **1.02× FASTER ✓** |
+| l | 100 s | **89 s** (-11%) | 98 s | **1.10× FASTER ✓** |
+| x | 122 s | **123 s** | 165 s | **1.34× FASTER ✓** |
+
+**yolocpp now beats Ultralytics on 3 out of 5 variants** (m, l, x).
+Per-epoch wall on yolo26n dropped from ~22 s → ~20 s. Only n and
+s are still slower — the remaining gap is the mosaic stitching
++ perspective warp CPU work in the dataset workers. Moving those
+to GPU is the next + final intervention.
+
 ## [0.99.4] — 2026-05-28
 
 ### Added
