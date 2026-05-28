@@ -4,6 +4,59 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.3] — 2026-05-28
+
+### Added
+- **AVX2-vectorized NMS inner IoU loop**
+  (`src/inference/nms.cpp::inner_suppress`). The per-survivor
+  scalar loop that computed IoU(i, j) for every unsuppressed j
+  was the dominant validate_with_records cost on poorly-trained
+  small models (yolo26n at 5-ep val: 24-26 s per pass with 92 k
+  detections post-NMS, scalar O(N²)). AVX2 intrinsics process 8
+  candidates per iteration:
+  ```cpp
+  __m256 xx1 = _mm256_max_ps(vxi1, xj1);  // [...]
+  __m256 iou = _mm256_div_ps(inter, denom);
+  int mbits = _mm256_movemask_ps(_mm256_cmp_ps(iou, vth, _CMP_GT_OQ));
+  ```
+  Boxes are pre-sorted by descending confidence and packed into a
+  contiguous `[N, 4]` float array (SoA-friendly layout), then a
+  gather pulls one component per box across 8 lanes. Whole-block
+  skip when all 8 candidates already suppressed (uint64 compare).
+  Scalar tail handles the remainder + non-AVX2 builds.
+- **`-mavx2 -mfma` compile flags** for `x86_64`. Modern Intel
+  (Haswell+) / AMD (Excavator+) have AVX2; we don't target pre-
+  2013 hardware. `-ffast-math` intentionally NOT set — keeps FP
+  semantics strict for losses and mAP math.
+- **`YOLOCPP_PROFILE_VAL=1` env var** prints per-epoch
+  `validate_with_records` + `compute_curves` wall + detection
+  count. Used to identify the NMS bottleneck.
+
+### Benchmark — 5-epoch sweep all v26 variants, screen-dataset-yolo, seed=42
+
+| variant | 0.99.2 wall | **0.99.3 wall** | Ultralytics | speedup |
+|---|---|---|---|---|
+| n | 154 s | **110 s** (-29%) | 65 s | 0.59× |
+| s | 114 s | **96 s** (-16%) | 66 s | 0.69× |
+| m | 97 s | 98 s | 89 s | 0.91× |
+| l | 100 s | 101 s | 98 s | 0.97× |
+| x | 125 s | 125 s | 165 s | **1.32× FASTER** ✓ |
+
+Per-epoch val time on yolo26n: **80 s → 25 s** across the 5
+epochs. Quality unchanged (mAP within noise band).
+
+x didn't benefit because at convergence its detections are
+already conf-filtered tightly — few low-conf candidates reach
+the SIMD inner loop. Bigger wins for the small models where the
+cls predictions are still noisy.
+
+### Why SIMD here, not via torch tensor ops
+Torch's `argsort + index + boolean mask` would build many
+intermediate tensors and trigger several allocator passes. The
+scalar inner loop is simple enough that a tight AVX2 kernel
+with no allocations beats it. (Torch ops *are* still used for
+the outer pipeline: argsort by conf, gather kept indices.)
+
 ## [0.99.2] — 2026-05-28
 
 ### Fixed

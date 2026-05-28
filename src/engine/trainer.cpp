@@ -1236,13 +1236,25 @@ void TrainerT<M>::run() {
         (epoch + 1) % cfg_.val_every == 0) {
       // validate_with_records returns the full det+gt rows so we can
       // run compute_curves and extract scalar P/R/F1 at best-F1.
+      auto _vt0 = std::chrono::steady_clock::now();
       last_vo = std::make_unique<ValidationOutput>(
           validate_with_records(ema_, *cfg_.val_dataset, device_));
+      auto _vt1 = std::chrono::steady_clock::now();
       auto& res = last_vo->map;
       cur_map_50    = res.map_50;
       cur_map_50_95 = res.map_50_95;
       const int nc_ = cfg_.val_dataset->num_classes();
       auto cd = metrics::compute_curves(last_vo->dets, last_vo->gts, nc_);
+      auto _vt2 = std::chrono::steady_clock::now();
+      if (std::getenv("YOLOCPP_PROFILE_VAL")) {
+        auto ms = [](auto a, auto b) {
+          return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        std::cerr << "[prof-val] validate_with_records=" << ms(_vt0, _vt1)
+                  << "ms compute_curves=" << ms(_vt1, _vt2)
+                  << "ms dets=" << last_vo->dets.size()
+                  << " gts=" << last_vo->gts.size() << "\n";
+      }
       // Mean F1 across classes (weighted by GT count) at each
       // confidence threshold; argmax gives the best operating point.
       const int L = (int)cd.px.size();

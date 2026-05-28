@@ -27,6 +27,15 @@ project(yolocpp
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Enable AVX2/FMA + AES (x86_64): inner-loop SIMD in NMS + future
+# hot paths uses intrinsics that require -mavx2 -mfma. Modern Intel
+# (Haswell+) and AMD (Excavator+) have AVX2; we don't target pre-2013
+# hardware. -ffast-math is intentionally NOT set — keeps FP semantics
+# strict (NaN handling for losses, exact mAP math).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  add_compile_options(-mavx2 -mfma)
+endif()
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
