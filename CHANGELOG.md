@@ -4,6 +4,58 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.2] — 2026-05-28
+
+### Fixed
+- **End-of-training redundant `validate_with_records` call removed.**
+  The per-epoch val loop already calls `validate_with_records` (since
+  0.91.0 added P/R/F1 to results.csv); end-of-training was calling
+  it AGAIN to feed the confusion-matrix + 4 curve renders. For
+  poorly-trained models (yolo26n at 1-epoch fine-tune) the duplicate
+  val + `compute_curves` cost ~23 s of wasted wall. Now caches the
+  last per-epoch `ValidationOutput` in a `std::unique_ptr<ValidationOutput>`
+  and reuses it at end-of-training. Falls back to a fresh val pass
+  only when `val_every=0` or the loop exited before any val.
+
+### Documented
+- **Why yolocpp is slower per-epoch on small models** (root-cause
+  analysis from per-step profiling on yolo26n):
+  - GPU forward+backward is only ~50 ms per step at batch=16, so
+    per-step main-thread overhead dominates wall time.
+  - `prefetch wait = 0 ms` confirms workers keep the GPU fed.
+  - `post` block (clip_grad + optim.step + EMA on optim steps,
+    accumulator += elsewhere) is ~33 ms during warmup (where
+    `accumulate=1-2` causes optim.step every batch); drops in
+    steady-state where `accumulate=4` amortizes.
+  - End-of-training val pass on a poorly-trained model with many
+    low-conf detections dominates the "non-train wall" overhead.
+    Fixed by caching the last per-epoch val output.
+- **CLAUDE.md: versioning past 0.99 stays in `0.MINOR.PATCH`** —
+  no 1.0 cap on MINOR. Maintainer's instruction: 0.99 → 0.100 →
+  0.101 → ..., not 1.0.0 (which is reserved for the maintainer's
+  explicit "ready" call).
+
+### Benchmark — 5-epoch sweep all v26 variants, screen-dataset-yolo, seed=42
+
+| variant | yolocpp 0.99.2 wall | Ultralytics 8.4.56 wall | speedup | yolocpp mAP@0.5:0.95 | Ultralytics mAP@0.5:0.95 |
+|---|---|---|---|---|---|
+| n | 154 s | 65 s | 0.42× (slower) | 0.642 | 0.737 |
+| s | 114 s | 66 s | 0.58× (slower) | 0.641 | 0.806 |
+| m | 97 s | 89 s | 0.91× (slower) | 0.619 | 0.767 |
+| l | 100 s | 98 s | 0.98× (essentially tied) | 0.632 | 0.797 |
+| x | **125 s** | 165 s | **1.32× FASTER** ✓ | 0.591 | 0.777 |
+
+yolocpp is faster than Ultralytics on yolo26x (1.32× wall) and
+roughly tied on l. For m/s/n we're still slower — the remaining
+gap is dominated by per-epoch `compute_curves` cost (slow on
+small models because they produce many low-conf detections
+post-NMS). Future work to close the small-model gap:
+1. Vectorise `compute_curves` (currently CPU loops over
+   confidence thresholds × classes × detections).
+2. Move mosaic + perspective + HSV aug to GPU (CPU pipeline
+   parallelism caps at 2 workers on small models).
+3. CUDA streams to overlap HtoD with the previous step's GPU work.
+
 ## [0.99.1] — 2026-05-28
 
 ### Investigated (and reported back honestly)

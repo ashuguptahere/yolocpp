@@ -218,7 +218,10 @@ previously-unsupported model is MINOR; a parity bug fix or regression
 test is PATCH; a behavior-preserving refactor is PATCH.
 
 Going to `1.0.0` happens **only** when the user says so — never
-preemptively bump.
+preemptively bump. **When 0.99 fills up, go to 0.100, 0.101, …
+not 1.0.0.** The maintainer's explicit instruction: keep the
+0.MINOR scheme rolling past 0.99 — there's no 1.0 cap on MINOR.
+PATCH still resets per MINOR.
 
 ## Commit + push policy
 

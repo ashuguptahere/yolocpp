@@ -1017,6 +1017,12 @@ void TrainerT<M>::run() {
   double best_map = -1.0;
   int    best_epoch = -1;
   int    epochs_since_best = 0;
+  // Cache the last per-epoch validate_with_records output so the
+  // end-of-training curve render can reuse it instead of running
+  // an extra full val pass + compute_curves call. For yolo26n at
+  // 1-epoch fine-tune, this saves the ~30 s of "non-train wall"
+  // overhead that was puzzling.
+  std::unique_ptr<ValidationOutput> last_vo;
 
   // Gradient-accumulation bookkeeping: optimizer is stepped every
   // `accumulate` batches (with accumulate ramping 1 → nbs/batch
@@ -1230,12 +1236,13 @@ void TrainerT<M>::run() {
         (epoch + 1) % cfg_.val_every == 0) {
       // validate_with_records returns the full det+gt rows so we can
       // run compute_curves and extract scalar P/R/F1 at best-F1.
-      auto vo = validate_with_records(ema_, *cfg_.val_dataset, device_);
-      auto& res = vo.map;
+      last_vo = std::make_unique<ValidationOutput>(
+          validate_with_records(ema_, *cfg_.val_dataset, device_));
+      auto& res = last_vo->map;
       cur_map_50    = res.map_50;
       cur_map_50_95 = res.map_50_95;
       const int nc_ = cfg_.val_dataset->num_classes();
-      auto cd = metrics::compute_curves(vo.dets, vo.gts, nc_);
+      auto cd = metrics::compute_curves(last_vo->dets, last_vo->gts, nc_);
       // Mean F1 across classes (weighted by GT count) at each
       // confidence threshold; argmax gives the best operating point.
       const int L = (int)cd.px.size();
@@ -1311,7 +1318,18 @@ void TrainerT<M>::run() {
       std::cout << "[trainer] no val dataset → best.pt not saved (only last.pt)\n";
     }
     if (cfg_.val_dataset) {
-      auto vo = validate_with_records(ema_, *cfg_.val_dataset, device_);
+      // Reuse the last per-epoch validate_with_records output if we
+      // have one (saved into `last_vo` during the per-epoch val loop).
+      // Falls back to a fresh val pass only if val_every=0 or the
+      // training loop exited before the first val.
+      std::unique_ptr<ValidationOutput> fresh_vo;
+      ValidationOutput* vop = last_vo.get();
+      if (!vop) {
+        fresh_vo = std::make_unique<ValidationOutput>(
+            validate_with_records(ema_, *cfg_.val_dataset, device_));
+        vop = fresh_vo.get();
+      }
+      const auto& vo = *vop;
       const auto& names = cfg_.val_dataset->names();
       int nc = cfg_.val_dataset->num_classes();
 
