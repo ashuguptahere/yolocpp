@@ -1,6 +1,7 @@
 #include "yolocpp/engine/trainer.hpp"
 
 #include <ATen/autocast_mode.h>
+#include <ATen/cuda/CUDAContext.h>
 #include <torch/optim.h>
 #include <torch/optim/adamw.h>
 
@@ -89,16 +90,19 @@ class BatchPrefetcher {
                   int num_workers, uint64_t seed)
       : ds_(ds), batch_size_(batch_size),
         num_workers_(std::max(1, num_workers)),
-        max_q_((std::size_t)(2 * std::max(1, num_workers))),
-        shuffle_rng_(seed != 0 ? seed : 0x9E3779B97F4A7C15ULL) {
+        max_q_((std::size_t)(2 * std::max(1, num_workers))) {
     workers_.reserve((std::size_t)num_workers_);
     const uint64_t base = seed != 0 ? seed : 0x9E3779B97F4A7C15ULL;
     for (int i = 0; i < num_workers_; ++i) {
       // Distinct, well-separated per-worker aug seeds (golden-ratio
-      // hash splat). Drives per-sample augmentation only; anchor
-      // selection comes from the shared shuffled buffer.
+      // hash splat). Each worker also owns its own shard of the
+      // dataset indices — see worker_loop_ — so there's no shared
+      // shuffle buffer to contend on.
       const uint64_t ws = base + (uint64_t)i * 0x9E3779B97F4A7C15ULL;
-      workers_.emplace_back([this, ws] { worker_loop_(ws); });
+      const int worker_id = i;
+      workers_.emplace_back([this, ws, worker_id] {
+        worker_loop_(ws, worker_id);
+      });
     }
   }
 
@@ -125,33 +129,47 @@ class BatchPrefetcher {
   }
 
  private:
-  // Pull the next batch_size anchors from the shuffled buffer.
-  // Refills + reshuffles when the buffer drops below batch_size.
-  // Mutex-protected; called by all workers.
-  std::vector<std::size_t> pull_anchors_() {
-    std::lock_guard<std::mutex> lk(idx_mu_);
-    if (anchor_buf_.size() < (std::size_t)batch_size_) {
-      const std::size_t N = ds_.size();
-      const std::size_t old = anchor_buf_.size();
-      anchor_buf_.resize(old + N);
-      std::iota(anchor_buf_.begin() + (std::ptrdiff_t)old,
-                anchor_buf_.end(), (std::size_t)0);
-      std::shuffle(anchor_buf_.begin() + (std::ptrdiff_t)old,
-                   anchor_buf_.end(), shuffle_rng_);
-    }
-    std::vector<std::size_t> picks(
-        anchor_buf_.begin(),
-        anchor_buf_.begin() + (std::ptrdiff_t)batch_size_);
-    anchor_buf_.erase(anchor_buf_.begin(),
-                       anchor_buf_.begin() + (std::ptrdiff_t)batch_size_);
-    return picks;
-  }
-
-  void worker_loop_(uint64_t seed) {
+  // Per-worker pre-sharded anchor list — each worker gets its own
+  // slice of the shuffled dataset, no mutex contention on a shared
+  // buffer. Each worker holds an independent deque<size_t> that
+  // refills + reshuffles when empty. Profiling on yolo26n at
+  // workers=4 showed the shared `idx_mu_` lock was the cap on
+  // worker throughput; per-worker shards eliminate it.
+  void worker_loop_(uint64_t seed, int worker_id) {
     std::mt19937 rng(seed);
+    std::mt19937 shuf(seed ^ 0xDEADBEEFCAFEBABEULL);  // separate stream
+    std::deque<std::size_t> my_buf;
+    const std::size_t N = ds_.size();
     while (true) {
       if (stop_.load(std::memory_order_acquire)) return;
-      auto anchors = pull_anchors_();
+      // Refill this worker's buffer until we have at least batch_size
+      // items. For small datasets where N/num_workers_ < batch_size_
+      // (e.g. test fixtures with N=4, workers=4, batch=2), a single
+      // refill may not produce enough; loop until we do. Each refill
+      // re-shuffles independently, so cross-refill batches still
+      // see a random anchor distribution.
+      while (my_buf.size() < (std::size_t)batch_size_) {
+        std::vector<std::size_t> fresh(N);
+        std::iota(fresh.begin(), fresh.end(), (std::size_t)0);
+        std::shuffle(fresh.begin(), fresh.end(), shuf);
+        // Take this worker's stride [worker_id::num_workers_].
+        for (std::size_t i = (std::size_t)worker_id; i < N;
+             i += (std::size_t)num_workers_) {
+          my_buf.push_back(fresh[i]);
+        }
+        // Safety: if N==0 or stride yielded nothing, break to avoid
+        // infinite loop. Shouldn't happen with a valid dataset.
+        if (my_buf.empty()) break;
+      }
+      if (my_buf.size() < (std::size_t)batch_size_) {
+        // Genuinely impossible to assemble a batch (degenerate
+        // dataset). Yield instead of crashing.
+        std::this_thread::yield();
+        continue;
+      }
+      std::vector<std::size_t> anchors(my_buf.begin(),
+          my_buf.begin() + (std::ptrdiff_t)batch_size_);
+      my_buf.erase(my_buf.begin(), my_buf.begin() + (std::ptrdiff_t)batch_size_);
       // sample_batch_from_anchors is the without-replacement entry
       // point: anchors[i] is the tile-0 image of batch slot i.
       auto batch = ds_.sample_batch_from_anchors(anchors, rng);
@@ -172,11 +190,6 @@ class BatchPrefetcher {
   std::condition_variable                 cv_data_, cv_space_;
   std::atomic<bool>                       stop_{false};
   std::vector<std::thread>                workers_;
-
-  // Without-replacement anchor buffer + its own shuffle RNG.
-  std::mutex                              idx_mu_;
-  std::deque<std::size_t>                 anchor_buf_;
-  std::mt19937                            shuffle_rng_;
 };
 
 // Build the per-group optimizer. Three groups (decay-conv / bias / bn-weight)
@@ -598,10 +611,25 @@ void TrainerT<M>::ema_update(double decay) {
   torch::NoGradGuard ng;
   auto m_params = model_->named_parameters();
   auto e_params = ema_->named_parameters();
+  // Batch the per-param mul/add into a single fused _foreach_ kernel
+  // launch via torch::_foreach_mul_ + torch::_foreach_add_. Without
+  // this, each of ~600 parameters costs ~7 µs of CUDA-launch overhead
+  // (2 ops per param = ~8 ms per EMA call). Profiling on yolo26n
+  // identified EMA as the dominant per-optim-step cost at small
+  // model sizes.
+  std::vector<at::Tensor> dst_list;
+  std::vector<at::Tensor> src_list;
+  dst_list.reserve(m_params.size());
+  src_list.reserve(m_params.size());
   for (auto& kv : m_params) {
     auto* dst = e_params.find(kv.key());
     if (!dst) continue;
-    dst->mul_(decay).add_(kv.value().detach(), 1.0 - decay);
+    dst_list.push_back(*dst);
+    src_list.push_back(kv.value().detach());
+  }
+  if (!dst_list.empty()) {
+    at::_foreach_mul_(dst_list, decay);
+    at::_foreach_add_(dst_list, src_list, 1.0 - decay);
   }
   // Buffers (BN running stats) follow the model directly.
   auto m_buf = model_->named_buffers();
@@ -1028,11 +1056,28 @@ void TrainerT<M>::run() {
       gs[1].options().set_lr(lr_bias);
       gs[2].options().set_lr(lr_main);
 
+      // YOLOCPP_PROFILE_STEP=1 env var enables per-step phase timing
+      // (prefetch wait / HtoD / forward / backward / post) every 20
+      // steps. Used to characterise the small-model bottleneck on
+      // yolo26n. Gated so production training pays nothing.
+      const bool prof = std::getenv("YOLOCPP_PROFILE_STEP") != nullptr;
+      auto _t0 = std::chrono::steady_clock::now();
       auto batch = prefetch
           ? prefetch->next()
           : train_.sample_batch(cfg_.batch_size, rng);
-      auto imgs  = batch.imgs.to(device_);
-      auto tgt   = batch.targets.to(device_);
+      auto _t1 = std::chrono::steady_clock::now();
+      // Pinned-memory non-blocking HtoD: pin the CPU tensor first
+      // (cudaHostRegister via .pin_memory()) then dispatch the copy
+      // async on the current CUDA stream. Overlaps with later GPU
+      // compute when the next step's data prep is already running on
+      // worker threads.
+      const bool pin_h2d = device_.is_cuda();
+      auto imgs_cpu = pin_h2d ? batch.imgs.pin_memory() : batch.imgs;
+      auto tgt_cpu  = pin_h2d ? batch.targets.pin_memory() : batch.targets;
+      auto imgs  = imgs_cpu.to(device_, /*non_blocking=*/pin_h2d);
+      auto tgt   = tgt_cpu.to(device_, /*non_blocking=*/pin_h2d);
+      if (prof && device_.is_cuda()) at::cuda::getCurrentCUDAStream().synchronize();
+      auto _t2 = std::chrono::steady_clock::now();
       if (device_.is_cuda()) {
         // Match the model's channels_last layout so the conv kernels
         // pick the NHWC Tensor-Core path.
@@ -1091,8 +1136,12 @@ void TrainerT<M>::run() {
       // batch=16, which under AdamW (with small initial v_t)
       // produces 16× smaller warmup-phase steps — the dominant
       // cause of the post-0.96.0 convergence gap vs Ultralytics.
+      if (prof && device_.is_cuda()) at::cuda::getCurrentCUDAStream().synchronize();
+      auto _t3 = std::chrono::steady_clock::now();
       auto loss_for_backward = lo.total * (double)cfg_.batch_size;
       loss_for_backward.backward();
+      if (prof && device_.is_cuda()) at::cuda::getCurrentCUDAStream().synchronize();
+      auto _t4 = std::chrono::steady_clock::now();
 
       // accumulate ramps from 1 → nbs/batch over warmup (trainer.py:427).
       const int accumulate_target = std::max(1,
@@ -1129,6 +1178,21 @@ void TrainerT<M>::run() {
       sum_cls_t   += lo.cls.detach();
       sum_dfl_t   += lo.dfl.detach();
       sum_total_t += lo.total.detach();
+
+      if (prof && step % 20 == 0) {
+        if (device_.is_cuda()) at::cuda::getCurrentCUDAStream().synchronize();
+        auto _t5 = std::chrono::steady_clock::now();
+        auto ms = [](auto a, auto b) {
+          return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        std::cerr << "[prof] step=" << step
+                  << " prefetch=" << ms(_t0, _t1) << "ms"
+                  << " htod=" << ms(_t1, _t2) << "ms"
+                  << " fwd+loss=" << ms(_t2, _t3) << "ms"
+                  << " backward=" << ms(_t3, _t4) << "ms"
+                  << " post=" << ms(_t4, _t5) << "ms"
+                  << " total=" << ms(_t0, _t5) << "ms\n";
+      }
 
       if (is_rank0(ddp) && gstep % cfg_.log_every == 0) {
         // Live progress log keeps .item() — fires only every

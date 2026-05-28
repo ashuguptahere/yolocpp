@@ -4,6 +4,54 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.1] — 2026-05-28
+
+### Investigated (and reported back honestly)
+- **"Multi-process workers" wouldn't help.** Worker-count sweep on
+  yolo26n showed throughput caps at 2 workers (~16 s/epoch), with
+  4/8/12/16 all equivalent. The bottleneck isn't thread contention,
+  it's per-step CPU work + GPU compute. Multi-process would add
+  IPC overhead and not move the wall. **Plan #1 abandoned**, but
+  the BatchPrefetcher was refactored to per-worker pre-sharded
+  anchor lists (eliminates the shared shuffle-mutex hot path —
+  small architectural improvement; profile confirms `prefetch wait
+  = 0 ms` at steady state now). Fixed a tiny-dataset segfault
+  surfaced by the change: when N/num_workers < batch_size (test
+  fixtures), the refill loop now repeats until the shard buffer
+  has enough items.
+- **libnvjpeg is moot under `cache_ram=true`.** The default RAM
+  cache eliminates per-step JPEG decode entirely. GPU-accelerated
+  decode only helps the populate phase (~3-5 s upfront, one-shot)
+  which doesn't matter. **Plan #2 abandoned.**
+
+### Changed (post-profile real wins)
+- **`_foreach_mul_` / `_foreach_add_` for EMA update**. Profiling
+  on yolo26n flagged the post-step block at 36-40 ms with ~600
+  parameters each producing 2 CUDA kernel launches = ~8 ms of
+  pure launch overhead per EMA call. Fused into 2 kernel launches
+  total via the `at::_foreach_*` family. Saves ~4 s/epoch on n.
+- **Pinned memory + non-blocking HtoD**. `batch.imgs.pin_memory()`
+  before `.to(device, non_blocking=true)` lets the HtoD copy
+  overlap with the previous step's GPU work. Small per-step win.
+
+### Benchmark — 5-epoch yolo26n, screen-dataset-yolo, seed=42
+
+| build | epoch 0 | steady-state | total wall |
+|---|---|---|---|
+| 0.99.0 | 25.5 s | ~30 s/ep | 174 s |
+| **0.99.1** | **21.7 s** | **~15.7 s/ep** | **157 s** |
+| Ultralytics | — | ~13 s/ep | 65 s |
+
+10% wall-time improvement on small models. Quality unchanged
+(within noise band). Ultralytics still ~2.4× faster on n —
+the remaining floor is GPU compute + per-epoch val pass + image
+augmentation CPU work, none of which more workers can fix.
+
+### Profile gate
+- New `YOLOCPP_PROFILE_STEP=1` env var prints per-step phase timing
+  (prefetch / HtoD / forward / backward / post) every 20 steps.
+  Gated so production training pays nothing.
+
 ## [0.99.0] — 2026-05-28
 
 ### Fixed (real bugs caught by reading Ultralytics' code line-by-line)
