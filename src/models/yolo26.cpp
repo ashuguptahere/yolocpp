@@ -495,6 +495,10 @@ int Yolo26DetectImpl::load_from_state_dict(
       // will re-initialize cls bias with the detection prior via
       // `Detect26Impl::init_biases()` post-load. Logging only the count
       // so it doesn't drown the training log.
+      if (std::getenv("YOLOCPP_V26_LOAD_DEBUG")) {
+        std::cerr << "[yolo26 load] mismatch " << k
+                  << " want " << dst.sizes() << " got " << t.sizes() << "\n";
+      }
       ++skipped_shape;
       continue;
     }
