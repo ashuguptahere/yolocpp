@@ -4,6 +4,49 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.0] — 2026-05-28
+
+### Changed
+- **v26 `lrf=1.0` override is now SGD-only** (mirrors the existing
+  SGD-only `lr0` override). The constant-LR rule was tuned for SGD
+  — the comment said it "lets v26 keep climbing" on a 30-epoch
+  SGD run because cosine-to-1% of lr0=1e-4 drove the cls-bias
+  update to a useless ~1e-6/step. AdamW's per-parameter `v_t`
+  normaliser already prevents the bias-overshoot the SGD path
+  was working around, so cosine decay to 1% (Ultralytics' default)
+  converges faster under AdamW. The override now reads
+  `engine::resolve_optimizer(tc.optimizer, tc.batch_size)` first
+  and only fires for SGD.
+
+### Why this was the gap
+0.95.0 closed the data-coverage gap (without-replacement sampling)
+but yolocpp's final mAP was still ~46% behind Ultralytics. The
+v26 adapter was forcing constant LR throughout training — which
+was the SGD-specific recipe leaking into the AdamW path. With
+constant LR, AdamW kept taking too-large steps near the converged
+point, oscillating instead of fine-tuning. Cosine-to-1% is the
+right curve for AdamW.
+
+### Benchmark (5-epoch, yolo26x, screen-dataset-yolo, seed=42, RTX 5090)
+
+mAP@0.5:0.95 trajectory:
+
+| epoch | 0.95.0 (constant LR) | **0.96.0 (cosine LR)** | Ultralytics | Δ vs ultra |
+|---|---|---|---|---|
+| 0 | 0.087 | 0.043 | 0.330 | -87% |
+| 1 | 0.300 | 0.305 | 0.483 | -37% |
+| 2 | 0.280 | **0.469** | 0.615 | -24% |
+| 3 | 0.360 | **0.545** | 0.663 | -18% |
+| 4 | 0.415 | **0.581** | 0.775 | -25% |
+
+Final mAP@0.5:0.95: 0.415 → 0.581 (+40%). Gap to Ultralytics
+0.46× → 0.25×. Recall closes to within 4% of Ultralytics
+(0.824 vs 0.854). Wall unchanged at 24.7 s/epoch.
+
+The remaining 25% gap is most likely EMA decay timing (yolocpp
+uses `(1-exp(-step/2000))` ramp to 0.9999; Ultralytics differs)
+plus possibly v26 loss-weight specifics. Tracked separately.
+
 ## [0.95.0] — 2026-05-28
 
 ### Added

@@ -1073,16 +1073,23 @@ VersionAdapter make_v26() {
     if (std::abs(tc.warmup_bias_lr - 0.1) < 1e-9) {
       tc.warmup_bias_lr = tc.lr0;
     }
-    // YOLO default `lrf=0.01` decays cosine-LR to 1% of lr0; combined
-    // with our v26 lr0=1e-4 override, the late-stage effective LR is
-    // ~1e-6 — too small for the cls bias to keep drifting toward its
-    // converged value. On the screen-detection sweep this caused v26
-    // to plateau at the 10-epoch peak (mAP 0.93) and stop improving.
-    // Constant LR (`lrf=1.0`) lets v26 keep climbing — verified to
-    // hit mAP@0.5=0.99 at 30 epochs. Pass `--lrf` to override.
-    if (std::abs(tc.lrf - 0.01) < 1e-9) {
-      std::cerr << "[info] yolo26 train: lrf=0.01 (YOLO default) → 1.0 "
-                   "(constant LR — v26's STAL needs full LR throughout "
+    // YOLO default `lrf=0.01` decays cosine-LR to 1% of lr0. Under
+    // SGD with the v26 lr0=1e-4 override above, the late-stage
+    // effective LR is ~1e-6 — too small for the cls bias to keep
+    // drifting toward its converged value. On the screen-detection
+    // sweep this caused v26 (SGD) to plateau at the 10-epoch peak
+    // (mAP 0.93) and stop improving. Constant LR (`lrf=1.0`) lets
+    // v26+SGD keep climbing — verified to hit mAP@0.5=0.99 at 30
+    // epochs.
+    //
+    // Under AdamW the dynamics differ: the per-parameter v_t
+    // normaliser already prevents the bias-overshoot the SGD path
+    // was working around, and standard cosine decay converges
+    // faster. So this override is SGD-only too (mirrors the lr0
+    // override above). Pass `--lrf` to force a value either way.
+    if (eff_opt == "sgd" && std::abs(tc.lrf - 0.01) < 1e-9) {
+      std::cerr << "[info] yolo26 train (sgd): lrf=0.01 (YOLO default) → 1.0 "
+                   "(constant LR — v26+SGD's STAL needs full LR throughout "
                    "training). Pass --lrf to override.\n";
       tc.lrf = 1.0;
     }
