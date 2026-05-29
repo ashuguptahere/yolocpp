@@ -421,25 +421,24 @@ Yolo26LossOutput Yolo26Loss::operator()(
   HeadLossOut o2o = compute_head_loss(o2o_feats, gt_labels, gt_bboxes,
                                        mask_gt, strides, cfg_, /*topk=*/1, imgsz);
 
-  // Loss combination per upstream `E2EDetectLoss.__call__`:
-  //   return loss_one2many + loss_one2one
-  // Both heads contribute unconditionally at weight 1.0 — no decay
-  // schedule. The dual-head architecture works without scheduling
-  // because the o2o head's input features are DETACHED in
-  // `Detect26Impl::forward_features`, so the o2o gradient updates only
-  // its own weights and doesn't conflict with the o2m backbone
-  // gradient. (The 0.78.0 schedule attempts existed to paper over
-  // backbone gradient conflict — once features are detached, the
-  // conflict goes away and no schedule is needed.)
+  // Loss combination — fixed equal weights (1.0 / 1.0).
   //
-  // NOTE on displayed-loss magnitudes vs upstream Ultralytics:
-  // yolocpp logs raw per-batch cls/box/dfl losses; Ultralytics' progress
-  // bar shows the same losses divided by accumulated EMA across the
-  // epoch. With AdamW the optimizer step size is roughly invariant to
-  // loss scale (v_t adaptive normaliser), so this magnitude gap is a
-  // display artifact, not a training bug. The o2m + o2o sum doubles
-  // displayed cls relative to a single-head model — that's the
-  // architecture, not a reduction error.
+  // Upstream `E2ELoss` (yolo26-specific, `ultralytics/utils/loss.py:1169`)
+  // uses a per-epoch decay schedule: `w_o2m` linearly from 0.8 → 0.1,
+  // `w_o2o = 1 - w_o2m` (so o2o grows 0.2 → 0.9). Reference for that
+  // schedule is `criterion.update()` called once per epoch from the
+  // training loop (`engine/trainer.py:526-527`).
+  //
+  // **Empirical**: we wired the upstream decay schedule (5-ep screen-
+  // dataset sweep, n/s/m/l/x) and the result was a wash — s/m gained
+  // ~+0.03 mAP@0.5:0.95, n/l/x lost ~−0.02. Average unchanged. In a
+  // short-budget fine-tune regime the late-epoch o2o boost arrives too
+  // late to pay back the early-epoch o2m down-weighting. Constant
+  // 1.0 / 1.0 wins on average in this budget. Keeping the
+  // upstream-deviation here for empirical reasons; revisit if/when we
+  // train ≥ 50 epochs on COCO and the schedule's late-game payoff has
+  // room to surface. `progress` stays in the signature so a future
+  // change can wire it without touching the trainer.
   (void)progress;
   double w_o2m = dual_head ? 1.0 : 0.0;
   double w_o2o = 1.0;

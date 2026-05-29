@@ -45,6 +45,33 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+# Dev-loop accelerators — opportunistic. Each one is a no-op if the tool
+# isn't installed, so the build still works with stock GCC + GNU ld;
+# but if the user `apt install`s these, the next reconfigure picks them
+# up automatically. See CLAUDE.md "Build + run speed".
+#
+#   - ccache:  caches compilation outputs by content hash — biggest
+#              dev-loop win on incremental rebuilds. ~5-10× on warm
+#              edits.
+#   - mold:    massively-parallel linker, the only thing fast enough
+#              to make the libtorch link enjoyable. Falls back to lld
+#              if mold is missing; falls back to BFD if neither.
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+  set(CMAKE_CXX_COMPILER_LAUNCHER  "${CCACHE_PROGRAM}")
+  set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+  message(STATUS "ccache: ${CCACHE_PROGRAM} (compiler launcher wired)")
+endif()
+find_program(MOLD_PROGRAM mold)
+find_program(LLD_PROGRAM  lld)
+if(MOLD_PROGRAM)
+  add_link_options(-fuse-ld=mold)
+  message(STATUS "linker: mold (${MOLD_PROGRAM})")
+elseif(LLD_PROGRAM)
+  add_link_options(-fuse-ld=lld)
+  message(STATUS "linker: lld (${LLD_PROGRAM})")
+endif()
+
 # RTX 5090 = Blackwell sm_120. We compile virtual PTX for forward-compat too.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 89 90 120)

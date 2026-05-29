@@ -4,6 +4,31 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.10] — 2026-05-29
+
+### Added
+- **`CMakeLists.txt`** — opportunistic dev-loop accelerator detection.
+  `find_program(CCACHE_PROGRAM ccache)` wires
+  `CMAKE_CXX_COMPILER_LAUNCHER` + `CMAKE_CUDA_COMPILER_LAUNCHER` when
+  ccache is installed. `find_program(MOLD_PROGRAM mold)` /
+  `find_program(LLD_PROGRAM lld)` adds `-fuse-ld=mold` (preferred) or
+  `-fuse-ld=lld` when available. Each is a no-op when the tool is
+  missing, so the build still works on stock GCC + GNU ld. The biggest
+  dev-loop wins on this codebase per CLAUDE.md ("Build + run speed").
+
+### Documented
+- **`src/losses/yolo26_loss.cpp::Yolo26Loss::operator()`** — comment
+  updated with the empirical finding from the o2m/o2o decay-schedule
+  audit. Upstream `E2ELoss` (`ultralytics/utils/loss.py:1169-1201`) uses
+  a per-epoch decay `w_o2m: 0.8 → 0.1, w_o2o = 1 − w_o2m`. We tested it
+  against the constant 1.0/1.0 weighting on a 5-ep screen-dataset
+  sweep across n/s/m/l/x: s/m gained ≈ +0.03 mAP@0.5:0.95, n/l/x lost
+  ≈ −0.02, average unchanged. The schedule's late-epoch o2o emphasis
+  doesn't pay back the early-epoch o2m down-weighting in short fine-
+  tunes. Kept constant weights; revisit when running ≥ 50-epoch COCO
+  training. `progress` parameter stays plumbed so a future revisit
+  doesn't touch the trainer.
+
 ## [0.99.9] — 2026-05-29
 
 ### Fixed
