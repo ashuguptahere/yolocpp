@@ -261,6 +261,62 @@ std::vector<torch::Tensor> DetectImpl::forward_features(std::vector<torch::Tenso
   return out;
 }
 
+void init_detect_biases(torch::nn::Module* root) {
+  if (!root) return;
+  for (const auto& m : root->modules(/*include_self=*/false)) {
+    if (auto* det = m->as<DetectImpl>()) {
+      det->init_biases();
+    }
+  }
+}
+
+void DetectImpl::init_biases() {
+  // Upstream Detect.bias_init (ultralytics/nn/modules/head.py):
+  //   reg.bias = 2.0
+  //   cls.bias[:nc] = log(5 / nc / (640 / stride[i])^2)   per-level
+  // The cls formula encodes "5 objects per 640px image, uniform over
+  // nc classes and (640/stride)^2 anchors" — i.e. the calibrated
+  // anchor-density-aware sigmoid prior. Using a universal value like
+  // log(0.01/0.99) ≈ −4.6 produces a 1 % prior across all strides,
+  // which is ~60× too high for stride-8 anchors (6400 of them per
+  // image → ~1.5e-4 prior). The mismatched prior makes the BCE on
+  // background anchors balloon at epoch 0 and the cosine LR runs
+  // out before the head can dig out — exactly the 0.0001 mAP / 0.32
+  // mAP failure modes we hit before. We honour the upstream formula
+  // verbatim. `stride` is populated by the parent on first forward;
+  // at load_from_state_dict time it's still empty, so default to
+  // [8, 16, 32] for nl=3 (the v3/v5/v8/v9/v11/v12/v13 detect form).
+  torch::NoGradGuard ng;
+  std::vector<double> s = stride;
+  if ((int)s.size() != nl) {
+    s.clear();
+    if (nl == 3)      s = {8.0, 16.0, 32.0};
+    else if (nl == 4) s = {4.0, 8.0, 16.0, 32.0};   // P2–P5 head
+    else if (nl == 2) s = {8.0, 16.0};
+    else for (int i = 0; i < nl; ++i) s.push_back(8.0 * (1 << i));
+  }
+  const float kImgsz = 640.0f;
+  for (int i = 0; i < nl; ++i) {
+    auto* reg = cv2[i]->as<torch::nn::SequentialImpl>();
+    auto* cls = cv3[i]->as<torch::nn::SequentialImpl>();
+    if (reg && reg->size() >= 3) {
+      if (auto* last = (*reg)[reg->size() - 1]->as<torch::nn::Conv2dImpl>()) {
+        if (last->bias.defined()) last->bias.fill_(2.0f);
+      }
+    }
+    if (cls && cls->size() >= 3) {
+      if (auto* last = (*cls)[cls->size() - 1]->as<torch::nn::Conv2dImpl>()) {
+        if (last->bias.defined() && nc > 0) {
+          const float anc_per_lvl = (kImgsz / (float)s[(std::size_t)i]);
+          const float cls_bias_i =
+              std::log(5.0f / (float)nc / (anc_per_lvl * anc_per_lvl));
+          last->bias.slice(0, 0, nc).fill_(cls_bias_i);
+        }
+      }
+    }
+  }
+}
+
 torch::Tensor DetectImpl::decode(const std::vector<torch::Tensor>& feats) {
   // feats[i]: [N, no, h_i, w_i]
   TORCH_CHECK((int)stride.size() == nl, "Detect.stride not set");
@@ -554,9 +610,12 @@ int Yolo8DetectImpl::load_from_state_dict(
   }
   if (copied == 0)
     throw std::runtime_error("load_from_state_dict: copied 0 tensors");
-  if (skipped_shape > 0)
+  if (skipped_shape > 0) {
     std::cerr << "[yolo8 load] skipped " << skipped_shape
-              << " tensors with shape mismatch (cls head re-purposed for custom nc)\n";
+              << " tensors with shape mismatch (cls head re-purposed for custom nc); "
+                 "re-initialising detect biases to the 1% sigmoid prior\n";
+    init_detect_biases(this);
+  }
   return copied;
 }
 

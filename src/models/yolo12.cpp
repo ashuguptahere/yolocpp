@@ -412,9 +412,12 @@ int Yolo12DetectImpl::load_from_state_dict(
     ++copied;
   }
   if (copied == 0) throw std::runtime_error("yolo12 load: copied 0 tensors");
-  if (skipped_shape > 0)
+  if (skipped_shape > 0) {
     std::cerr << "[yolo12 load] skipped " << skipped_shape
-              << " tensors with shape mismatch (cls head re-purposed for custom nc)\n";
+              << " tensors with shape mismatch (cls head re-purposed for custom nc); "
+                 "re-initialising detect biases to the 1% sigmoid prior\n";
+    init_detect_biases(this);
+  }
   return copied;
 }
 

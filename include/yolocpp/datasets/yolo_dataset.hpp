@@ -128,6 +128,21 @@ class YoloDataset {
   // Get a single example. Thread-safe (uses a per-call RNG seed).
   YoloExample get(std::size_t idx, uint64_t aug_seed = 0) const;
 
+  // Raw letterboxed BGR uint8 image + pixel-coord targets for an
+  // index — no tensor conversion, no flip, no HSV (the gpu_aug path
+  // does all of those on device). Used by build_mosaic4 under
+  // gpu_aug to avoid the float→uint8 round-trip the tensor path
+  // would force (each tile would otherwise be converted to float32
+  // CHW, then back to uint8 BGR cv::Mat before stitching into the
+  // 2s canvas — 4 tiles × batch_size wasted conversions per step).
+  struct LetterboxedU8 {
+    cv::Mat            img;       // [H, W, 3] uint8 BGR letterboxed to imgsz
+    std::vector<float> targets;   // flat (cls, cx, cy, w, h) × N in pixel coords
+    int                orig_w = 0, orig_h = 0;
+    double             gain = 1.0, pad_x = 0.0, pad_y = 0.0;
+  };
+  LetterboxedU8 get_letterboxed_u8(std::size_t idx) const;
+
   // Build a batch of `bsz` examples by uniformly sampling indices.
   // Returns a tuple (imgs [B, 3, H, W], targets [M, 6] with batch index).
   // Targets format: (batch_idx, cls, cx, cy, w, h) — pixel coords.

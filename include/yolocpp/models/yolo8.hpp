@@ -143,8 +143,27 @@ struct DetectImpl : torch::nn::Module {
   std::vector<torch::Tensor> forward_features(std::vector<torch::Tensor> x);
   // Returns concat-form decoded prediction. Caller passes per-level strides.
   torch::Tensor decode(const std::vector<torch::Tensor>& feats);
+  // Initialise reg + cls biases per the upstream `Detect.bias_init`
+  // convention but with the universal-fine-tune prior. Reg bias = 2.0
+  // (matches upstream). Cls bias = log(0.01/0.99) ≈ −4.595 so the
+  // sigmoid prior is ~1 % — the right starting point when most
+  // anchors are negative samples. Without this, a zero-init cls
+  // bias gives sigmoid(0) = 0.5 → enormous BCE on the negative
+  // majority → cls loss in the thousands and the model fails to
+  // converge in the 5-10 epoch fine-tuning regime. Used after
+  // load_from_state_dict skips the cls head (nc ≠ 80 re-purposing).
+  // Shared across v3/v5/v8/v9/v11/v12/v13 which all use this Detect.
+  void init_biases();
 };
 TORCH_MODULE(Detect);
+
+// Walk `root` (typically a Yolo*Impl whose `model` ModuleList contains the
+// detect head) and call init_biases() on every nested DetectImpl. No-op for
+// model trees that don't contain one (v4/v7/v10/v26 use a different head
+// type). Call from each load_from_state_dict after shape-mismatch skips so
+// the cls bias picks up the 1 % sigmoid prior instead of staying at the
+// torch-default zero — see DetectImpl::init_biases.
+void init_detect_biases(torch::nn::Module* root);
 
 // Depthwise conv (= Conv with groups = gcd(c_in, c_out); typically c_in==c_out).
 // Used by v11's Detect cv3 branch and other newer YOLO heads.

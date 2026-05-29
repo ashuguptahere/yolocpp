@@ -1017,9 +1017,12 @@ int Yolo13DetectImpl::load_from_state_dict(
   };
   for (auto& p : this->named_parameters()) try_load(p.key(), p.value());
   for (auto& p : this->named_buffers())    try_load(p.key(), p.value());
-  if (skipped_shape > 0)
+  if (skipped_shape > 0) {
     std::cerr << "[yolo13 load] skipped " << skipped_shape
-              << " tensors with shape mismatch (cls head re-purposed for custom nc)\n";
+              << " tensors with shape mismatch (cls head re-purposed for custom nc); "
+                 "re-initialising detect biases to the 1% sigmoid prior\n";
+    init_detect_biases(this);
+  }
   return copied;
 }
 

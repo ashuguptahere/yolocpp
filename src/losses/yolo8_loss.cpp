@@ -217,9 +217,20 @@ TalOutput tal_assign(const torch::Tensor& pd_scores,
   align_metric = align_metric * in_gts.to(align_metric.dtype()) *
                  mask_gt.to(align_metric.dtype());
 
-  // 3) Top-k anchors per gt
+  // 3) Top-k anchors per gt. The threshold for "in top-K" is the
+  // K-th LARGEST metric, which is the SMALLEST of the top-K returned
+  // by topk(). Using amax(-1) instead of amin(-1) here was a long-
+  // standing bug: it picked `align_metric.max()` per GT, which made
+  // the mask select only ONE positive per GT (the absolute max) —
+  // effectively topk=1 regardless of the configured value. That's
+  // why detect heads that share this loss (v3/v5/v8/v9/v11/v12/v13)
+  // trained ~10× weaker positive signal than upstream and never
+  // caught up in short fine-tune budgets, while v26's separate
+  // scatter-based TAL did not have this bug. clamp_min keeps the
+  // threshold above zero so anchors with metric=0 (no IoU overlap)
+  // are excluded even when the K-th-largest happens to be 0.
   auto topk_metrics = std::get<0>(align_metric.topk(topk, /*dim=*/-1));
-  auto topk_thresh  = topk_metrics.amax(-1, /*keepdim=*/true).clamp_min(1e-9);
+  auto topk_thresh  = topk_metrics.amin(-1, /*keepdim=*/true).clamp_min(1e-9);
   auto mask_topk    = align_metric >= topk_thresh.expand_as(align_metric) - 1e-9;
   auto mask_pos     = mask_topk * in_gts * mask_gt.gt(0);  // [B, M, A] bool
 

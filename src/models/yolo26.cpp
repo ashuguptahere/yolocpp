@@ -157,18 +157,25 @@ Detect26Impl::Detect26Impl(int nc_, std::vector<int> ch_)
 }
 
 void Detect26Impl::init_biases() {
-  // Upstream `Detect.bias_init` formula is
-  //   reg bias = 2.0
-  //   cls bias[i] = log(5 / nc / (640 / stride[i])²)   (≈ −9 at stride 8 / nc=5)
-  // which is calibrated for upstream's MuSGD optimizer with effective
-  // lr ~0.01. With plain SGD + lr0=1e-4 (what we use for stability on
-  // short fine-tuning), the strongly-negative cls bias can't be moved
-  // by enough in 3–5 epochs and the model stays in the
-  // "predict-nothing" regime. Falling back to the universal detection
-  // prior log(0.01/0.99) ≈ −4.6 (σ≈1%) which is reachable in the
-  // fine-tuning budgets we actually run. Applied to BOTH heads.
+  // Upstream `Detect.bias_init`:
+  //   reg.bias = 2.0
+  //   cls.bias[:nc] = log(5 / nc / (640 / stride[i])²)   per-level
+  // Earlier this code used log(0.01/0.99) on the theory that the
+  // strongly-negative prior was unreachable in short fine-tunes;
+  // empirically the OPPOSITE held — the universal 1 % prior makes
+  // stride-8 background BCE ~60× too large at epoch 0 and the cls
+  // loss never drains. Reverted to the upstream formula verbatim.
+  // Default stride to [8, 16, 32] when not yet populated (load time).
   torch::NoGradGuard ng;
-  const float cls_bias_init = std::log(0.01f / (1.0f - 0.01f));  // ≈ −4.595
+  std::vector<double> s = stride;
+  if ((int)s.size() != nl) {
+    s.clear();
+    if (nl == 3)      s = {8.0, 16.0, 32.0};
+    else if (nl == 4) s = {4.0, 8.0, 16.0, 32.0};
+    else if (nl == 2) s = {8.0, 16.0};
+    else for (int i = 0; i < nl; ++i) s.push_back(8.0 * (1 << i));
+  }
+  const float kImgsz = 640.0f;
   auto init_branch = [&](torch::nn::ModuleList& reg_ml,
                           torch::nn::ModuleList& cls_ml) {
     for (int i = 0; i < nl; ++i) {
@@ -176,13 +183,16 @@ void Detect26Impl::init_biases() {
       auto* cls = cls_ml[i]->as<torch::nn::SequentialImpl>();
       if (reg && reg->size() >= 3) {
         if (auto* last = (*reg)[reg->size() - 1]->as<torch::nn::Conv2dImpl>()) {
-          if (last->bias.defined()) last->bias.fill_(2.0f);  // upstream
+          if (last->bias.defined()) last->bias.fill_(2.0f);
         }
       }
       if (cls && cls->size() >= 3) {
         if (auto* last = (*cls)[cls->size() - 1]->as<torch::nn::Conv2dImpl>()) {
           if (last->bias.defined() && nc > 0) {
-            last->bias.slice(0, 0, nc).fill_(cls_bias_init);
+            const float anc_per_lvl = (kImgsz / (float)s[(std::size_t)i]);
+            const float cls_bias_i =
+                std::log(5.0f / (float)nc / (anc_per_lvl * anc_per_lvl));
+            last->bias.slice(0, 0, nc).fill_(cls_bias_i);
           }
         }
       }

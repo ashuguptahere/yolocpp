@@ -288,58 +288,77 @@ gpu_mosaic_perspective_(torch::Tensor imgs_u8, torch::Tensor targets,
         .align_corners(true));
   warped = warped.add(kGrey);  // restore so dead pixels = 114/255 grey
 
-  // Bbox transform — per-bbox lookup of the warping affine via
-  // batch_idx (column 0 of targets). With per-sample affine each
-  // bbox gets the affine of ITS sample, not a shared per-batch one.
+  // Bbox transform — pure GPU. Per-bbox lookup of the warping affine
+  // via batch_idx, with corner-warp + clamp + keep-mask all on device.
+  // Previously this path did `targets.cpu()` + a Python-style float
+  // loop, costing one host sync + serial work per bbox per batch.
+  // Now: ONE sync (the nonzero kernel still needs to publish its
+  // output count to the host before we can index_select) and zero
+  // host-side bbox arithmetic.
   torch::Tensor new_targets;
   if (targets.defined() && targets.size(0) > 0) {
-    auto t_cpu = targets.cpu();
-    auto a = t_cpu.accessor<float, 2>();
-    std::vector<float> kept;
-    kept.reserve((std::size_t)t_cpu.size(0) * 6);
-    for (int k = 0; k < (int)t_cpu.size(0); ++k) {
-      const int bidx_i = (int)a[k][0];
-      if (bidx_i < 0 || bidx_i >= B) continue;
-      const auto& M = Mpix_per[(std::size_t)bidx_i];
-      const float bidx = a[k][0], cls = a[k][1];
-      const float cx = a[k][2], cy = a[k][3], w = a[k][4], h = a[k][5];
-      const float x1 = cx - w * 0.5f, y1 = cy - h * 0.5f;
-      const float x2 = cx + w * 0.5f, y2 = cy + h * 0.5f;
-      auto warp_pt = [&](float x, float y) {
-        return std::pair<float, float>{
-            M[0][0] * x + M[0][1] * y + M[0][2],
-            M[1][0] * x + M[1][1] * y + M[1][2]};
-      };
-      auto [a1, b1] = warp_pt(x1, y1);
-      auto [a2, b2] = warp_pt(x2, y1);
-      auto [a3, b3] = warp_pt(x2, y2);
-      auto [a4, b4] = warp_pt(x1, y2);
-      float nx1 = std::min({a1, a2, a3, a4});
-      float ny1 = std::min({b1, b2, b3, b4});
-      float nx2 = std::max({a1, a2, a3, a4});
-      float ny2 = std::max({b1, b2, b3, b4});
-      nx1 = std::clamp(nx1, 0.f, (float)W_out);
-      ny1 = std::clamp(ny1, 0.f, (float)H_out);
-      nx2 = std::clamp(nx2, 0.f, (float)W_out);
-      ny2 = std::clamp(ny2, 0.f, (float)H_out);
-      const float nw = nx2 - nx1, nh = ny2 - ny1;
-      if (nw < 2.f || nh < 2.f) continue;
-      const float orig_area = w * h;
-      if (orig_area > 0.f && (nw * nh) / orig_area < 0.10f) continue;
-      kept.push_back(bidx);
-      kept.push_back(cls);
-      kept.push_back((nx1 + nx2) * 0.5f);
-      kept.push_back((ny1 + ny2) * 0.5f);
-      kept.push_back(nw);
-      kept.push_back(nh);
+    // Upload the per-sample affine matrices as a single [B, 6] tensor.
+    std::vector<float> Mpix_flat((std::size_t)B * 6);
+    for (int i = 0; i < B; ++i) {
+      const auto& M = Mpix_per[(std::size_t)i];
+      Mpix_flat[(std::size_t)(i * 6 + 0)] = M[0][0];
+      Mpix_flat[(std::size_t)(i * 6 + 1)] = M[0][1];
+      Mpix_flat[(std::size_t)(i * 6 + 2)] = M[0][2];
+      Mpix_flat[(std::size_t)(i * 6 + 3)] = M[1][0];
+      Mpix_flat[(std::size_t)(i * 6 + 4)] = M[1][1];
+      Mpix_flat[(std::size_t)(i * 6 + 5)] = M[1][2];
     }
-    if (kept.empty()) {
-      new_targets = torch::zeros({0, 6}, torch::kFloat32).to(targets.device());
+    auto Mpix_t = torch::from_blob(Mpix_flat.data(), {B, 6},
+                                    torch::kFloat32).clone()
+                      .to(targets.device());
+
+    auto bidx_long = targets.select(1, 0).to(torch::kLong);   // [N]
+    auto M_per    = Mpix_t.index_select(0, bidx_long);        // [N, 6]
+    auto m00 = M_per.select(1, 0).unsqueeze(1);  // [N, 1]
+    auto m01 = M_per.select(1, 1).unsqueeze(1);
+    auto m02 = M_per.select(1, 2).unsqueeze(1);
+    auto m10 = M_per.select(1, 3).unsqueeze(1);
+    auto m11 = M_per.select(1, 4).unsqueeze(1);
+    auto m12 = M_per.select(1, 5).unsqueeze(1);
+
+    auto cx_t = targets.select(1, 2);
+    auto cy_t = targets.select(1, 3);
+    auto w_t  = targets.select(1, 4);
+    auto h_t  = targets.select(1, 5);
+    auto hx1 = cx_t - w_t * 0.5f, hy1 = cy_t - h_t * 0.5f;
+    auto hx2 = cx_t + w_t * 0.5f, hy2 = cy_t + h_t * 0.5f;
+
+    // Stack 4 corners → [N, 4]
+    auto xs = torch::stack({hx1, hx2, hx2, hx1}, /*dim=*/1);
+    auto ys = torch::stack({hy1, hy1, hy2, hy2}, /*dim=*/1);
+    auto wx = m00 * xs + m01 * ys + m02;
+    auto wy = m10 * xs + m11 * ys + m12;
+
+    auto nx1 = std::get<0>(wx.min(/*dim=*/1)).clamp(0.f, (float)W_out);
+    auto ny1 = std::get<0>(wy.min(/*dim=*/1)).clamp(0.f, (float)H_out);
+    auto nx2 = std::get<0>(wx.max(/*dim=*/1)).clamp(0.f, (float)W_out);
+    auto ny2 = std::get<0>(wy.max(/*dim=*/1)).clamp(0.f, (float)H_out);
+    auto nw  = nx2 - nx1;
+    auto nh  = ny2 - ny1;
+    auto orig_area = (w_t * h_t).clamp_min(1e-6f);
+    auto area_ratio = (nw * nh) / orig_area;
+    // bidx in-range check matches the old `if (bidx_i < 0 || bidx_i >= B) continue;`
+    auto bidx_ok = (bidx_long >= 0) & (bidx_long < (int64_t)B);
+    auto keep = bidx_ok & (nw >= 2.f) & (nh >= 2.f) & (area_ratio >= 0.10f);
+
+    auto idx_keep = torch::nonzero(keep).squeeze(1);  // one sync (nonzero)
+    if (idx_keep.numel() == 0) {
+      new_targets = torch::zeros({0, 6},
+          torch::TensorOptions().dtype(torch::kFloat32).device(targets.device()));
     } else {
-      const int M = (int)(kept.size() / 6);
-      new_targets = torch::from_blob(kept.data(), {M, 6}, torch::kFloat32)
-                        .clone()
-                        .to(targets.device());
+      auto new_bidx = targets.select(1, 0).index_select(0, idx_keep);
+      auto new_cls  = targets.select(1, 1).index_select(0, idx_keep);
+      auto new_cx   = ((nx1 + nx2) * 0.5f).index_select(0, idx_keep);
+      auto new_cy   = ((ny1 + ny2) * 0.5f).index_select(0, idx_keep);
+      auto new_w    = nw.index_select(0, idx_keep);
+      auto new_h    = nh.index_select(0, idx_keep);
+      new_targets = torch::stack({new_bidx, new_cls, new_cx, new_cy,
+                                    new_w, new_h}, /*dim=*/1);
     }
   } else {
     new_targets = torch::zeros({0, 6},
@@ -453,27 +472,26 @@ static void gpu_hflip_(torch::Tensor& imgs, torch::Tensor& targets,
   if (!imgs.is_cuda()) return;
   const int B = (int)imgs.size(0);
   if ((int)flip_mask.size() != B) return;
-  // Build a CUDA bool mask once.
-  std::vector<bool> mask_bool(flip_mask.begin(), flip_mask.end());
+  // Branchless: no `mask.any().item()` early-out (that was a host
+  // sync per step). Compute `flipped` unconditionally and blend via
+  // `torch::where`. When the mask is all-false the where collapses
+  // to imgs and the flip kernel is wasted bandwidth — for flip_p=0.5
+  // that's only half the time and ~1 ms on a 5090, worth the sync
+  // removal which costs ~100 µs per step but stalls the entire CUDA
+  // stream.
   std::vector<uint8_t> mask_u8(flip_mask);
   auto cpu_mask = torch::from_blob(mask_u8.data(), {B},
                                     torch::kUInt8).clone();
-  auto mask = cpu_mask.to(imgs.device()).to(torch::kBool);
-  // Flip selected images: imgs[mask] = flip(imgs[mask], -1)
-  if (mask.any().item<bool>()) {
-    auto idx = torch::nonzero(mask).squeeze(1);
-    auto flipped = imgs.index_select(0, idx).flip({-1});
-    imgs.index_copy_(0, idx, flipped);
-    // Flip bboxes whose batch_idx (column 0) is in `idx`.
-    // Targets are [N, 6]: (b_idx, cls, cx, cy, w, h) pixel coords.
-    if (targets.defined() && targets.size(0) > 0) {
-      auto bcol = targets.select(1, 0).to(torch::kLong);
-      auto mask_cols = mask.index_select(0, bcol);  // [N]
-      auto cx = targets.select(1, 2);  // [N]
-      // cx_new = imgsz - cx_old for rows in mask, else unchanged.
-      cx = torch::where(mask_cols, (float)imgsz - cx, cx);
-      targets.select(1, 2).copy_(cx);
-    }
+  auto mask = cpu_mask.to(imgs.device()).to(torch::kBool);   // [B]
+  auto mask_img = mask.view({B, 1, 1, 1});                     // [B,1,1,1]
+  auto flipped = imgs.flip({-1});
+  imgs = torch::where(mask_img, flipped, imgs);
+  if (targets.defined() && targets.size(0) > 0) {
+    auto bcol = targets.select(1, 0).to(torch::kLong);
+    auto mask_cols = mask.index_select(0, bcol);  // [N]
+    auto cx = targets.select(1, 2);
+    cx = torch::where(mask_cols, (float)imgsz - cx, cx);
+    targets.select(1, 2).copy_(cx);
   }
 }
 

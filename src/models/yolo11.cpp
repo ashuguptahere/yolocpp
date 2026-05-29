@@ -428,9 +428,15 @@ int Yolo11DetectImpl::load_from_state_dict(
   }
   if (copied == 0)
     throw std::runtime_error("yolo11 load: copied 0 tensors");
-  if (skipped_shape > 0)
+  if (skipped_shape > 0) {
     std::cerr << "[yolo11 load] skipped " << skipped_shape
-              << " tensors with shape mismatch (cls head re-purposed for custom nc)\n";
+              << " tensors with shape mismatch (cls head re-purposed for custom nc); "
+                 "re-initialising detect biases to the 1% sigmoid prior\n";
+    // Critical: a torch-default zero-init on the cls bias makes
+    // sigmoid(0) = 0.5, so every background anchor incurs ~0.69 BCE
+    // → epoch-0 cls loss in the thousands. Mirror upstream bias_init.
+    init_detect_biases(this);
+  }
   return copied;
 }
 

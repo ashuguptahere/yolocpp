@@ -3,6 +3,7 @@
 // is just the entry-point shell: --version short-circuit, top-level
 // help, and the dispatch call.
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -282,6 +283,17 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
 
 
 int main(int argc, char** argv) {
+  // libtorch's intra-op OMP threadpool uses ACTIVE wait by default
+  // (KMP_BLOCKTIME=200ms on Intel OpenMP) which keeps worker threads
+  // *spinning* on the CPU between micro-ops. For training where each
+  // step launches hundreds of small CUDA kernels, those threads
+  // barely sleep — and we observed ~12 cores busy on yolo11n with
+  // only 4 prefetcher threads + 4 intra-op threads + main = 9 logical
+  // threads, the rest of the CPU usage being spin-wait. setenv with
+  // overwrite=0 respects user-supplied values; must run BEFORE the
+  // first libtorch call so OMP picks the policy up at init time.
+  setenv("OMP_WAIT_POLICY", "PASSIVE", /*overwrite=*/0);
+  setenv("KMP_BLOCKTIME",   "0",       /*overwrite=*/0);
   using namespace yolocpp::cli;
   // --version / -v / -V short-circuit. Reads YOLOCPP_VERSION_STRING
   // from the CMake-stamped config.hpp (which CMake derives from the

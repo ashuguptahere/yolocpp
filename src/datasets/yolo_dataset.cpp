@@ -208,6 +208,54 @@ YoloDataset::YoloDataset(std::vector<std::string> img_paths,
   if (aug_.cache_ram) populate_image_cache(img_paths_, cache_imgs_);
 }
 
+YoloDataset::LetterboxedU8 YoloDataset::get_letterboxed_u8(std::size_t idx) const {
+  // RAM cache hit: clone the cached cv::Mat. Miss: decode from disk.
+  cv::Mat bgr;
+  if (!cache_imgs_.empty()) {
+    bgr = cache_imgs_[idx].clone();
+  } else {
+    bgr = cv::imread(img_paths_[idx], cv::IMREAD_COLOR);
+  }
+  if (bgr.empty())
+    throw std::runtime_error("failed to load image: " + img_paths_[idx]);
+
+  LetterboxedU8 out;
+  out.orig_w = bgr.cols; out.orig_h = bgr.rows;
+
+  auto lb = inference::letterbox(bgr, imgsz_,
+                                  /*pad_color=*/cv::Scalar(114, 114, 114),
+                                  /*scale_up=*/false,
+                                  /*auto_minrec=*/aug_.rect);
+  out.img   = lb.img;  // uint8 BGR HWC — no conversion to float
+  out.gain  = lb.gain;
+  out.pad_x = lb.pad_x;
+  out.pad_y = lb.pad_y;
+
+  auto labels = !pre_labels_.empty()
+                  ? pre_labels_[idx]
+                  : load_targets(lbl_paths_[idx]);
+  if (labels.size(0) > 0) {
+    auto a = labels.accessor<float, 2>();
+    out.targets.reserve((std::size_t)labels.size(0) * 5);
+    for (int i = 0; i < (int)labels.size(0); ++i) {
+      float cx = a[i][1] * (float)out.orig_w;
+      float cy = a[i][2] * (float)out.orig_h;
+      float w  = a[i][3] * (float)out.orig_w;
+      float h  = a[i][4] * (float)out.orig_h;
+      cx = (float)(cx * lb.gain + lb.pad_x);
+      cy = (float)(cy * lb.gain + lb.pad_y);
+      w  = (float)(w  * lb.gain);
+      h  = (float)(h  * lb.gain);
+      out.targets.push_back(a[i][0]);
+      out.targets.push_back(cx);
+      out.targets.push_back(cy);
+      out.targets.push_back(w);
+      out.targets.push_back(h);
+    }
+  }
+  return out;
+}
+
 YoloExample YoloDataset::get(std::size_t idx, uint64_t aug_seed) const {
   YoloExample ex;
   ex.img_path = img_paths_[idx];
@@ -323,36 +371,46 @@ static YoloExample build_mosaic4(const YoloDataset& ds, std::size_t imgsz,
                                   std::mt19937& rng,
                                   std::int64_t anchor = -1) {
   std::uniform_int_distribution<std::size_t> u_idx(0, ds.size() - 1);
-  std::array<YoloExample, 4> tiles;
-  for (int t = 0; t < 4; ++t) {
-    if (t == 0 && anchor >= 0) {
-      tiles[t] = ds.get((std::size_t)anchor);
-    } else {
-      tiles[t] = ds.get(u_idx(rng));
-    }
-  }
-
   int s = (int)imgsz;
   // Random mosaic center in [imgsz*0.5, imgsz*1.5] of the 2s canvas.
   std::uniform_int_distribution<int> u_center(s / 2, 3 * s / 2);
   int xc = u_center(rng);
   int yc = u_center(rng);
-
-  // Build 2s × 2s canvas, fill with pad colour 114.
   cv::Mat canvas(2 * s, 2 * s, CV_8UC3, cv::Scalar(114, 114, 114));
   std::vector<float> all_labels;  // (cls, cx, cy, w, h) in mosaic-px coords
 
-  for (int i = 0; i < 4; ++i) {
-    // Convert tile.img tensor [3,H,W] back to BGR cv::Mat. Tiles
-    // come from get() already letterboxed to imgsz×imgsz; we just
-    // need raw pixels.
-    auto t   = tiles[i].img.permute({1, 2, 0}).contiguous();
-    cv::Mat tile_bgr(t.size(0), t.size(1), CV_32FC3, t.data_ptr());
-    cv::Mat tile_u8;
-    tile_bgr.convertTo(tile_u8, CV_8UC3, 255.0);
-    cv::cvtColor(tile_u8, tile_u8, cv::COLOR_RGB2BGR);
+  // Fast path under gpu_aug: pull uint8 tiles directly — no float
+  // conversion in get() that we'd have to undo here. The CPU path
+  // below still uses the float-tensor `get()` because the downstream
+  // random_perspective_mat operates on cv::Mat too; either way we
+  // skip the wasted round-trip.
+  const bool use_u8 = aug.gpu_aug;
+  std::array<YoloDataset::LetterboxedU8, 4> tiles_u8;
+  std::array<YoloExample, 4> tiles;
+  for (int t = 0; t < 4; ++t) {
+    std::size_t idx = (t == 0 && anchor >= 0) ? (std::size_t)anchor : u_idx(rng);
+    if (use_u8) {
+      tiles_u8[(std::size_t)t] = ds.get_letterboxed_u8(idx);
+    } else {
+      tiles[(std::size_t)t] = ds.get(idx);
+    }
+  }
 
-    int tw = tile_u8.cols, th = tile_u8.rows;
+  for (int i = 0; i < 4; ++i) {
+    cv::Mat tile_u8;
+    int tw = 0, th = 0;
+    if (use_u8) {
+      tile_u8 = tiles_u8[(std::size_t)i].img;
+      tw = tile_u8.cols; th = tile_u8.rows;
+    } else {
+      // Slow path (CPU aug): tiles come from get() as float32 CHW tensors.
+      // Convert back to uint8 BGR cv::Mat for canvas blit + perspective.
+      auto t   = tiles[(std::size_t)i].img.permute({1, 2, 0}).contiguous();
+      cv::Mat tile_bgr(t.size(0), t.size(1), CV_32FC3, t.data_ptr());
+      tile_bgr.convertTo(tile_u8, CV_8UC3, 255.0);
+      cv::cvtColor(tile_u8, tile_u8, cv::COLOR_RGB2BGR);
+      tw = tile_u8.cols; th = tile_u8.rows;
+    }
     int x1a, y1a, x2a, y2a;  // mosaic-canvas ROI
     int x1b, y1b, x2b, y2b;  // tile ROI
     if (i == 0) {  // top-left
@@ -384,11 +442,23 @@ static YoloExample build_mosaic4(const YoloDataset& ds, std::size_t imgsz,
     tile_u8(roi_b).copyTo(canvas(roi_a));
 
     // Translate this tile's bboxes (which are in tile-pixel coords
-    // because YoloDataset::get returns pixel coords inside the
-    // letterboxed image) by (dx, dy) into mosaic-canvas coords.
-    if (tiles[i].targets.size(0) > 0) {
-      auto a = tiles[i].targets.accessor<float, 2>();
-      for (int k = 0; k < (int)tiles[i].targets.size(0); ++k) {
+    // because get*() returns pixel coords inside the letterboxed
+    // image) by (dx, dy) into mosaic-canvas coords. Source differs
+    // by tile path: u8 carries a flat vector, the tensor path
+    // carries a [N,5] float32 tensor.
+    if (use_u8) {
+      const auto& tt = tiles_u8[(std::size_t)i].targets;
+      const std::size_t n = tt.size() / 5;
+      for (std::size_t k = 0; k < n; ++k) {
+        all_labels.push_back(tt[k * 5 + 0]);
+        all_labels.push_back(tt[k * 5 + 1] + dx);
+        all_labels.push_back(tt[k * 5 + 2] + dy);
+        all_labels.push_back(tt[k * 5 + 3]);
+        all_labels.push_back(tt[k * 5 + 4]);
+      }
+    } else if (tiles[(std::size_t)i].targets.size(0) > 0) {
+      auto a = tiles[(std::size_t)i].targets.accessor<float, 2>();
+      for (int k = 0; k < (int)tiles[(std::size_t)i].targets.size(0); ++k) {
         all_labels.push_back(a[k][0]);
         all_labels.push_back(a[k][1] + dx);
         all_labels.push_back(a[k][2] + dy);

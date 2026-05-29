@@ -598,19 +598,25 @@ int Yolo9Impl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
   auto params  = this->named_parameters(true);
   auto buffers = this->named_buffers(true);
-  int n = 0;
+  int n = 0, skipped_shape = 0;
   for (const auto& e : entries) {
     if (auto* p = params.find(e.first)) {
-      if (p->sizes() != e.second.sizes()) continue;
+      if (p->sizes() != e.second.sizes()) { ++skipped_shape; continue; }
       torch::NoGradGuard ng;
       p->copy_(e.second.to(p->device(), p->dtype()));
       ++n;
     } else if (auto* b = buffers.find(e.first)) {
-      if (b->sizes() != e.second.sizes()) continue;
+      if (b->sizes() != e.second.sizes()) { ++skipped_shape; continue; }
       torch::NoGradGuard ng;
       b->copy_(e.second.to(b->device(), b->dtype()));
       ++n;
     }
+  }
+  if (skipped_shape > 0) {
+    std::cerr << "[yolo9 load] skipped " << skipped_shape
+              << " tensors with shape mismatch (cls head re-purposed for custom nc); "
+                 "re-initialising detect biases to the 1% sigmoid prior\n";
+    init_detect_biases(this);
   }
   return n;
 }

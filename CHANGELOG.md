@@ -4,6 +4,77 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.8] — 2026-05-29
+
+### Fixed
+- **yolo8 TAL top-K assignment** (`src/losses/yolo8_loss.cpp::tal_assign`):
+  `topk_metrics.amax(-1)` was used as the top-K threshold. `amax` over the
+  top-K values equals the absolute max, so the mask selected only the
+  **single best anchor per GT** instead of the top-K, regardless of the
+  configured `topk=10`. Effectively trained with ~1/10 the positive
+  signal. Replaced with `amin(-1)` (the K-th largest, which is the actual
+  inclusion threshold for "in top-K"). Affects every model sharing this
+  loss: v3, v5, v8, v9, v11, v12, v13. On screen-dataset @ 5 epochs
+  (batch=16, imgsz=640, seed=42, RTX 5090): yolo11n mAP@0.5:0.95
+  0.517 → 0.634, yolo11s 0.383 → 0.587, yolo11m 0.274 → 0.494,
+  yolo11l 0.264 → 0.492, yolo11x 0.107 → 0.436. v26 has its own
+  scatter-based TAL (`stal_assign`) and was not affected.
+- **`DetectImpl::init_biases` + `Detect26Impl::init_biases`**: switched
+  from the universal `log(0.01/0.99) ≈ −4.6` cls bias prior to upstream's
+  stride-aware formula `log(5 / nc / (640/stride[i])²)` per detect level
+  (reference: `ultralytics/nn/modules/head.py:200`). The universal prior
+  produced a ~1 % sigmoid output across all anchor densities; at stride 8
+  (where 6400 of 8400 anchors live per image) the correct prior is ~1.6e-4,
+  ~60× lower. Mismatched prior ballooned background BCE at epoch 0 and the
+  cosine schedule ran out before the head could drain it. Default stride
+  to `[8, 16, 32]` (nl=3), `[4, 8, 16, 32]` (nl=4 P2-P5), `[8, 16]` (nl=2)
+  when called from `load_from_state_dict` (parent hasn't populated stride
+  yet at load time). On yolo11n the bias fix alone moved mAP@0.5:0.95
+  from 0.0001 → 0.517 (pre-TAL-fix).
+- **Per-step host syncs in GPU augmentation** (`src/engine/trainer.cpp`):
+  - `gpu_mosaic_perspective_`: replaced `targets.cpu()` + per-bbox CPU
+    loop with a pure-GPU bbox transform — upload `Mpix` as `[B, 6]` once,
+    gather per-target via `index_select`, build 4 corners + apply affine
+    + clamp + keep-mask all on device. One `nonzero` sync per step vs the
+    prior `cpu()` + N-bbox sequential float ops.
+  - `gpu_hflip_`: branchless via `torch::where`. Removed
+    `mask.any().item<bool>()` early-out (full stream sync per step).
+    The flip kernel runs unconditionally; for `flip_p=0.5` that's ~1 ms
+    of wasted bandwidth in exchange for stream-overlap restoration.
+- **`build_mosaic4` float↔uint8 round-trip under `gpu_aug`**: tiles came
+  from `ds.get()` as float32 CHW tensors and were converted back via
+  `permute → cv::Mat<float32> → convertTo(CV_8UC3, 255.0) → cvtColor`
+  before stitching. 4 tiles × batch_size wasted conversions per training
+  step. Added `YoloDataset::get_letterboxed_u8(idx)` returning raw BGR
+  uint8 + pixel-coord targets; `build_mosaic4` uses it when
+  `aug.gpu_aug=true`.
+- **OpenMP intra-op pool spinning** (`src/cli/main.cpp`): set
+  `OMP_WAIT_POLICY=PASSIVE` + `KMP_BLOCKTIME=0` at process entry (before
+  any libtorch call) so OMP workers sleep when idle instead of spin-
+  waiting for ~200 ms between micro-ops. On yolo11n training: CPU usage
+  1237 % → 341 % (3.6× lower) with no throughput cost — actually
+  throughput improved because spin-wait was contending with prefetcher
+  threads.
+
+### Added
+- `DetectImpl::init_biases()` (in `yolo8.hpp`/`.cpp`): post-load bias
+  init shared across v3/v5/v8/v9/v11/v12/v13 (every detect head that
+  uses the shared `DetectImpl`). Mirrors `Detect26Impl::init_biases`.
+- `init_detect_biases(torch::nn::Module*)` free function: walks a model
+  tree calling `init_biases()` on any nested `DetectImpl`. Called from
+  each model's `load_from_state_dict` after shape-mismatch skips so the
+  re-purposed cls head (custom `nc`) gets the stride-aware prior instead
+  of staying at torch's zero-init.
+- `YoloDataset::LetterboxedU8` struct +
+  `YoloDataset::get_letterboxed_u8(idx)` method: raw BGR uint8 +
+  pixel-coord targets for the GPU-aug mosaic path.
+
+### Performance
+- yolo11n 5-epoch train wall on screen-dataset (RTX 5090): 84.1 s → 51.6 s
+  → ~38 s after the full fix stack. Now **1.47× faster than Ultralytics**
+  (37.9 s vs 55.9 s). Wall-time speedup is uniform 1.40×–1.56× across all
+  10 yolo11+yolo26 variants.
+
 ## [0.99.7] — 2026-05-28
 
 ### Changed
