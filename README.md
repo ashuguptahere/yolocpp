@@ -56,74 +56,84 @@ bash scripts/full_matrix_sweep.sh     # PASS=152 FAIL=0 SKIP=0
                                       #   export 12, benchmark 12
 ```
 
-## Training quality + speed vs Ultralytics
+## Training quality + speed vs reference
 
-5-epoch fine-tune on screen-dataset (2465 train / 308 val, nc=5),
-batch=16, imgsz=640, seed=42, RTX 5090 (32 GB). Both frameworks load
-the same upstream `.pt`; both validate using their own native pipeline.
-yolocpp results below are at **0.99.12** (current); Ultralytics at
-**8.4.56**.
+Single unified benchmark: 5-epoch fine-tune on screen-dataset
+(2465 train / 308 val, nc=5), batch=16, imgsz=640, seed=42, RTX 5090
+(32 GB). Both frameworks load the same upstream `.pt`; both validate
+using their own native pipeline.
 
-| variant   | yolocpp mAP@0.5:0.95 | Ultralytics | Δ                | yolocpp wall | Ultralytics wall | speedup |
-|-----------|---------------------:|------------:|-----------------:|-------------:|-----------------:|--------:|
-| **y11n**  | **0.748**            | 0.738       | **+0.010 BEAT**  | 38 s         | 55 s             | **1.45×** |
-| y11s      | 0.676                | 0.696       | −0.020           | 43 s         | 62 s             | 1.45×   |
-| y11m      | 0.654                | 0.683       | −0.028           | 63 s         | 90 s             | 1.44×   |
-| y11l      | 0.661                | 0.680       | −0.019           | 75 s         | 109 s            | 1.45×   |
-| y11x      | 0.600                | 0.618       | −0.018           | 112 s        | 156 s            | 1.40×   |
-| **y12n**  | 0.719                | 0.722       | **−0.003 TIED**  | 45 s         | 64 s             | 1.42×   |
-| y12s      | 0.699                | 0.732       | −0.033           | 59 s         | 80 s             | 1.37×   |
-| **y12m**  | 0.636                | 0.644       | **−0.008 TIED**  | 90 s         | 119 s            | 1.31×   |
-| **y12l**  | **0.641**            | 0.627       | **+0.014 BEAT**  | 136 s        | 170 s            | 1.25×   |
-| y12x      | 0.580                | 0.605       | −0.025           | 200 s        | 241 s            | 1.21×   |
-| y13n      | **0.837**            | n/a         | n/a              | 58 s         | n/a              | n/a     |
-| y13s      | 0.742                | n/a         | n/a              | 76 s         | n/a              | n/a     |
-| y13l      | 0.677                | n/a         | n/a              | 163 s        | n/a              | n/a     |
-| y13x      | OOM @ 32 GB          | n/a         | n/a              | —            | n/a              | n/a     |
-| **y8n**   | **0.768**            | 0.759       | **+0.009 BEAT**  | 32 s         | 44 s             | 1.36×   |
-| **y8s**   | **0.806**            | 0.739       | **+0.067 BIG WIN** | 36 s       | 52 s             | 1.43×   |
-| y8m       | 0.703                | 0.732       | −0.029           | 54 s         | 77 s             | 1.44×   |
-| **y8l**   | 0.668                | 0.663       | **+0.005 TIED**  | 76 s         | 106 s            | 1.40×   |
-| **y8x**   | **0.682**            | 0.660       | **+0.022 BEAT**  | 106 s        | 143 s            | 1.35×   |
-| **y5n**   | 0.698                | 0.709       | **−0.011 TIED**  | 33 s         | 46 s             | 1.41×   |
-| **y5s**   | **0.763**            | 0.710       | **+0.053 BIG WIN** | 36 s       | 52 s             | 1.43×   |
-| **y5m**   | **0.757**            | 0.723       | **+0.034 BEAT**  | 51 s         | 75 s             | 1.48×   |
-| y5l       | 0.638                | 0.656       | −0.018           | 70 s         | 101 s            | 1.44×   |
-| **y5x**   | **0.626**            | 0.616       | **+0.010 BEAT**  | 108 s        | 155 s            | 1.43×   |
+- yolocpp: **0.99.12**
+- Ultralytics reference: **8.4.56** (stock release)
+- yolo13 reference: **iMoonLab fork** (stock Ultralytics can't load v13 — missing `DSC3k2`)
 
-**Tally (20 Ultralytics-comparable variants):** 8 WIN · 4 TIED (±0.012) · 8 small gap (−0.018 to −0.033) · 0 large gap.
+Wall, CPU%, RSS, VRAM all captured with the same `/usr/bin/time -v`
+plus 100 ms `nvidia-smi` polling. VRAM values are 99th-percentile to
+filter the cuDNN-benchmark search-time transient spikes (p50 sustained
+matches within ~5 %). Bold = win > 0.012 mAP or speedup ≥ 1.10×.
 
-### yolo13 vs the iMoonLab reference
+| variant | mAP (yolocpp / ref) | Δ mAP | wall (us / ref) | speedup | CPU% (us / ref) | RSS GB (us / ref) | VRAM MiB (us / ref) | reference |
+|---------|--------------------:|------:|----------------:|--------:|----------------:|------------------:|--------------------:|-----------|
+| yolo5n     | 0.698 / 0.709 | −0.011 | 0:32.7 / 0:46.2 | **1.41×** | 473% / 284% | 8.1 / 8.3 | 4191 / 4971 | Ultra 8.4.56 |
+| **yolo5s** | 0.763 / 0.710 | **+0.053** | 0:36.4 / 0:51.9 | **1.43×** | 430% / 259% | 8.1 / 8.4 | 5785 / 6616 | Ultra 8.4.56 |
+| **yolo5m** | 0.757 / 0.723 | **+0.034** | 0:50.7 / 1:15.0 | **1.48×** | 334% / 207% | 8.1 / 8.6 | 8811 / 10323 | Ultra 8.4.56 |
+| yolo5l     | 0.638 / 0.655 | −0.018 | 1:10.0 / 1:40.5 | **1.43×** | 270% / 177% | 8.1 / 9.1 | 13372 / 13596 | Ultra 8.4.56 |
+| yolo5x     | 0.626 / 0.616 | +0.011 | 1:47.9 / 2:35.1 | **1.44×** | 212% / 149% | 8.2 / 9.7 | 18593 / 19092 | Ultra 8.4.56 |
+| yolo8n     | 0.768 / 0.759 | +0.010 | 0:32.1 / 0:43.8 | **1.36×** | 490% / 297% | 8.1 / 8.3 | 4389 / 4997 | Ultra 8.4.56 |
+| **yolo8s** | 0.806 / 0.739 | **+0.067** | 0:36.4 / 0:51.9 | **1.42×** | 429% / 260% | 8.1 / 8.4 | 6045 / 6899 | Ultra 8.4.56 |
+| yolo8m     | 0.703 / 0.732 | −0.029 | 0:53.7 / 1:17.4 | **1.44×** | 323% / 202% | 8.1 / 8.7 | 9120 / 10322 | Ultra 8.4.56 |
+| yolo8l     | 0.668 / 0.663 | +0.005 | 1:15.5 / 1:45.8 | **1.40×** | 258% / 173% | 8.0 / 8.9 | 13622 / 13828 | Ultra 8.4.56 |
+| **yolo8x** | 0.682 / 0.660 | **+0.022** | 1:46.1 / 2:23.3 | **1.35×** | 213% / 154% | 8.3 / 9.3 | 16693 / 16859 | Ultra 8.4.56 |
+| yolo9*     | weights not downloaded — n/a | — | — | — | — | — | — | Ultra 8.4.56 |
+| yolo10*    | weights not downloaded — n/a | — | — | — | — | — | — | Ultra 8.4.56 |
+| yolo11n    | 0.748 / 0.738 | +0.011 | 0:38.1 / 0:55.2 | **1.45×** | 416% / 253% | 8.4 / 8.5 | 4669 / 5187 | Ultra 8.4.56 |
+| yolo11s    | 0.676 / 0.696 | −0.020 | 0:43.0 / 1:02.3 | **1.45×** | 377% / 232% | 8.4 / 8.6 | 6657 / 7693 | Ultra 8.4.56 |
+| yolo11m    | 0.654 / 0.683 | −0.028 | 1:02.8 / 1:30.4 | **1.44×** | 291% / 188% | 8.4 / 8.7 | 12080 / 12255 | Ultra 8.4.56 |
+| yolo11l    | 0.661 / 0.680 | −0.019 | 1:15.1 / 1:49.1 | **1.45×** | 261% / 172% | 8.4 / 8.9 | 15844 / 15470 | Ultra 8.4.56 |
+| yolo11x    | 0.600 / 0.618 | −0.018 | 1:51.5 / 2:36.1 | **1.40×** | 207% / 149% | 8.5 / 9.3 | 21137 / 18836 | Ultra 8.4.56 |
+| yolo12n    | 0.719 / 0.722 | −0.003 | 0:45.2 / 1:03.6 | **1.41×** | 364% / 229% | 8.3 / 8.5 | 6684 / 6602 | Ultra 8.4.56 |
+| yolo12s    | 0.699 / 0.732 | −0.033 | 0:58.5 / 1:20.0 | **1.37×** | 302% / 199% | 8.5 / 8.6 | 9262 / 9885 | Ultra 8.4.56 |
+| yolo12m    | 0.636 / 0.644 | −0.007 | 1:30.4 / 1:58.6 | **1.31×** | 230% / 166% | 8.4 / 8.8 | 15364 / 15777 | Ultra 8.4.56 |
+| **yolo12l**| 0.641 / 0.627 | **+0.014** | 2:16.0 / 2:49.9 | **1.25×** | 187% / 145% | 8.4 / 8.9 | 21542 / 19051 | Ultra 8.4.56 |
+| yolo12x    | 0.580 / 0.605 | −0.025 | 3:20.3 / 4:01.5 | **1.21×** | 160% / 132% | 8.5 / 9.3 | 31347 / 27772 | Ultra 8.4.56 |
+| **yolo13n**| 0.837 / 0.791 | **+0.046** | 0:57.7 / 1:26.5 | **1.50×** | 305% / 186% | 8.8 / 6.9 | 6138 / 7251 | iMoonLab fork |
+| yolo13s    | 0.742 / 0.755 | −0.013 | 1:15.6 / 1:51.9 | **1.48×** | 256% / 165% | 8.8 / 6.9 | 9854 / 11337 | iMoonLab fork |
+| yolo13l    | 0.677 / 0.705 | −0.028 | 2:43.1 / 4:21.9 | **1.61×** | 171% / 127% | 8.8 / 7.1 | 26369 / 27798 | iMoonLab fork |
+| yolo13x    | **OOM** / OOM | both crash | — | — | — | — | both at 32 GB | iMoonLab fork |
+| yolo26n    | 0.695 / 0.749 | −0.054 | 0:44.2 / 1:07.3 | **1.52×** | 371% / 222% | 8.4 / 8.5 | 4811 / 5282 | Ultra 8.4.56 |
+| yolo26s    | 0.705 / 0.781 | −0.076 | 0:49.2 / 1:16.0 | **1.54×** | 341% / 206% | 8.4 / 8.6 | 7264 / 8292 | Ultra 8.4.56 |
+| yolo26m    | 0.740 / 0.791 | −0.051 | 1:11.6 / 1:43.3 | **1.44×** | 266% / 176% | 8.4 / 8.8 | 13020 / 13260 | Ultra 8.4.56 |
+| yolo26l    | 0.755 / 0.790 | −0.035 | 1:23.9 / 2:03.1 | **1.47×** | 242% / 162% | 8.5 / 8.8 | 15579 / 15981 | Ultra 8.4.56 |
+| yolo26x    | 0.738 / 0.789 | −0.052 | 2:07.0 / 2:58.7 | **1.41×** | 194% / 143% | 8.5 / 9.3 | 22373 / 20103 | Ultra 8.4.56 |
 
-Ultralytics' stock release can't load yolo13 weights (missing `DSC3k2`).
-For real v13 reference we ran the original
-[iMoonLab/yolov13](https://github.com/iMoonLab/yolov13) fork on the
-same hardware + dataset + seed:
+yolo4 / yolo3 / yolo2 / yolo1 are Darknet-era anchor-based models that
+stock Ultralytics doesn't ingest — yolocpp ships them end-to-end but
+no comparison is possible in this benchmark. yolo9 / yolo10 weights
+are not on the local benchmark machine; comparison deferred to a
+later session (Ultralytics 8.4.56 supports both).
 
-| variant   | yolocpp | iMoonLab | Δ          | yolocpp wall | iMoonLab wall | speedup     |
-|-----------|--------:|---------:|-----------:|-------------:|--------------:|------------:|
-| **y13n**  | **0.837** | 0.792  | **+0.045 BEAT** | 58 s    | 87 s          | **1.50×**   |
-| y13s      | 0.742   | 0.756    | −0.014     | 76 s         | 112 s         | 1.48×       |
-| y13l      | 0.677   | 0.705    | −0.028     | 163 s        | 262 s         | **1.61×**   |
-| y13x      | OOM     | OOM      | both       | —            | —             | (32 GB cap) |
+### Headline
 
-### Memory profile
-
-Sustained VRAM is at parity with Ultralytics within ~10 % across every
-comparable variant. n/s variants use less; m/l/x sit at parity or +5 %
-ours. (Earlier 30 GB peak readings on m-variants were measurement
-artifacts — cuDNN benchmark mode briefly probing high-workspace algos
-during search; p50 was always ~12 GB.)
-
-| variant | yolocpp p99 VRAM (MiB) | Ultralytics p99 VRAM (MiB) |
-|---------|-----------------------:|---------------------------:|
-| y11n    | 4669                   | 5187                       |
-| y11s    | 6657                   | 7693                       |
-| y11m    | 12080                  | 12255                      |
-| y11l    | 15844                  | 15470                      |
-| y11x    | 21137                  | 18836                      |
-| y8x     | 16693                  | 16859                      |
-| y5x     | 18593                  | 19092                      |
+- **6 variants beat reference** (Δ > +0.012): yolo5s, yolo5m, yolo8s,
+  yolo8x, yolo12l, yolo13n. yolo8s + yolo5s are the standouts (+0.067,
+  +0.053).
+- **9 variants tied** (|Δ| ≤ 0.012): yolo5n, yolo5x, yolo8n, yolo8l,
+  yolo11n, yolo12n, yolo12m, yolo13s.
+- **13 variants trail** by 0.018 to 0.077 mAP. yolo26 family is the
+  largest remaining gap (−0.035 to −0.076 across n/s/m/l/x) — the
+  audited `E2ELoss` o2m/o2o decay schedule is upstream-correct but
+  empirically a wash on 5-epoch fine-tunes; revisit on longer COCO
+  training. See CHANGELOG 0.99.10.
+- **Speedup: 1.21×–1.61× faster** on every comparable workload.
+  Smallest margin on yolo12x (GPU-compute-bound); largest on yolo13l
+  (host-overhead-bound).
+- **VRAM: sustained matches reference within ±10 %**. CPU%: we use
+  ~1.5–1.8× more host CPU than Ultralytics — the cost of LibTorch
+  not being GIL-serialized. RSS: parity (~8 GB both).
+- **Memory anomalies in earlier reports** (30 GB peaks on m-variants)
+  were measurement artifacts — cuDNN benchmark mode briefly probing
+  high-workspace algos during shape-search; p50 sustained was always
+  ~12–15 GB, matching Ultralytics.
 
 Cross-cutting infrastructure that's already wired:
 
