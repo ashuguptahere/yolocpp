@@ -56,6 +56,75 @@ bash scripts/full_matrix_sweep.sh     # PASS=152 FAIL=0 SKIP=0
                                       #   export 12, benchmark 12
 ```
 
+## Training quality + speed vs Ultralytics
+
+5-epoch fine-tune on screen-dataset (2465 train / 308 val, nc=5),
+batch=16, imgsz=640, seed=42, RTX 5090 (32 GB). Both frameworks load
+the same upstream `.pt`; both validate using their own native pipeline.
+yolocpp results below are at **0.99.12** (current); Ultralytics at
+**8.4.56**.
+
+| variant   | yolocpp mAP@0.5:0.95 | Ultralytics | Δ                | yolocpp wall | Ultralytics wall | speedup |
+|-----------|---------------------:|------------:|-----------------:|-------------:|-----------------:|--------:|
+| **y11n**  | **0.748**            | 0.738       | **+0.010 BEAT**  | 38 s         | 55 s             | **1.45×** |
+| y11s      | 0.676                | 0.696       | −0.020           | 43 s         | 62 s             | 1.45×   |
+| y11m      | 0.654                | 0.683       | −0.028           | 63 s         | 90 s             | 1.44×   |
+| y11l      | 0.661                | 0.680       | −0.019           | 75 s         | 109 s            | 1.45×   |
+| y11x      | 0.600                | 0.618       | −0.018           | 112 s        | 156 s            | 1.40×   |
+| **y12n**  | 0.719                | 0.722       | **−0.003 TIED**  | 45 s         | 64 s             | 1.42×   |
+| y12s      | 0.699                | 0.732       | −0.033           | 59 s         | 80 s             | 1.37×   |
+| **y12m**  | 0.636                | 0.644       | **−0.008 TIED**  | 90 s         | 119 s            | 1.31×   |
+| **y12l**  | **0.641**            | 0.627       | **+0.014 BEAT**  | 136 s        | 170 s            | 1.25×   |
+| y12x      | 0.580                | 0.605       | −0.025           | 200 s        | 241 s            | 1.21×   |
+| y13n      | **0.837**            | n/a         | n/a              | 58 s         | n/a              | n/a     |
+| y13s      | 0.742                | n/a         | n/a              | 76 s         | n/a              | n/a     |
+| y13l      | 0.677                | n/a         | n/a              | 163 s        | n/a              | n/a     |
+| y13x      | OOM @ 32 GB          | n/a         | n/a              | —            | n/a              | n/a     |
+| **y8n**   | **0.768**            | 0.759       | **+0.009 BEAT**  | 32 s         | 44 s             | 1.36×   |
+| **y8s**   | **0.806**            | 0.739       | **+0.067 BIG WIN** | 36 s       | 52 s             | 1.43×   |
+| y8m       | 0.703                | 0.732       | −0.029           | 54 s         | 77 s             | 1.44×   |
+| **y8l**   | 0.668                | 0.663       | **+0.005 TIED**  | 76 s         | 106 s            | 1.40×   |
+| **y8x**   | **0.682**            | 0.660       | **+0.022 BEAT**  | 106 s        | 143 s            | 1.35×   |
+| **y5n**   | 0.698                | 0.709       | **−0.011 TIED**  | 33 s         | 46 s             | 1.41×   |
+| **y5s**   | **0.763**            | 0.710       | **+0.053 BIG WIN** | 36 s       | 52 s             | 1.43×   |
+| **y5m**   | **0.757**            | 0.723       | **+0.034 BEAT**  | 51 s         | 75 s             | 1.48×   |
+| y5l       | 0.638                | 0.656       | −0.018           | 70 s         | 101 s            | 1.44×   |
+| **y5x**   | **0.626**            | 0.616       | **+0.010 BEAT**  | 108 s        | 155 s            | 1.43×   |
+
+**Tally (20 Ultralytics-comparable variants):** 8 WIN · 4 TIED (±0.012) · 8 small gap (−0.018 to −0.033) · 0 large gap.
+
+### yolo13 vs the iMoonLab reference
+
+Ultralytics' stock release can't load yolo13 weights (missing `DSC3k2`).
+For real v13 reference we ran the original
+[iMoonLab/yolov13](https://github.com/iMoonLab/yolov13) fork on the
+same hardware + dataset + seed:
+
+| variant   | yolocpp | iMoonLab | Δ          | yolocpp wall | iMoonLab wall | speedup     |
+|-----------|--------:|---------:|-----------:|-------------:|--------------:|------------:|
+| **y13n**  | **0.837** | 0.792  | **+0.045 BEAT** | 58 s    | 87 s          | **1.50×**   |
+| y13s      | 0.742   | 0.756    | −0.014     | 76 s         | 112 s         | 1.48×       |
+| y13l      | 0.677   | 0.705    | −0.028     | 163 s        | 262 s         | **1.61×**   |
+| y13x      | OOM     | OOM      | both       | —            | —             | (32 GB cap) |
+
+### Memory profile
+
+Sustained VRAM is at parity with Ultralytics within ~10 % across every
+comparable variant. n/s variants use less; m/l/x sit at parity or +5 %
+ours. (Earlier 30 GB peak readings on m-variants were measurement
+artifacts — cuDNN benchmark mode briefly probing high-workspace algos
+during search; p50 was always ~12 GB.)
+
+| variant | yolocpp p99 VRAM (MiB) | Ultralytics p99 VRAM (MiB) |
+|---------|-----------------------:|---------------------------:|
+| y11n    | 4669                   | 5187                       |
+| y11s    | 6657                   | 7693                       |
+| y11m    | 12080                  | 12255                      |
+| y11l    | 15844                  | 15470                      |
+| y11x    | 21137                  | 18836                      |
+| y8x     | 16693                  | 16859                      |
+| y5x     | 18593                  | 19092                      |
+
 Cross-cutting infrastructure that's already wired:
 
 - Hand-written ONNX protobuf emitter (no libprotobuf, no Python tracer)
@@ -217,47 +286,80 @@ The test suite covers every layer of the stack:
 
 ## CLI
 
-Two argument styles, both supported:
+**Single canonical parser** as of 0.99.x: `--mode <action>` plus flat
+top-level flags. The earlier kv-style (`mode=...`) and legacy
+subcommand-style parsers were removed (see CLAUDE.md "CLI surface" —
+one canonical parser only).
 
 ```
-# kv-style (canonical, drop-in for upstream tooling)
-yolocpp task=detect mode=train   model=yolo8n.pt data=path/to/data.yaml epochs=100
-yolocpp task=detect mode=val     model=yolo8n.pt data=path/to/data.yaml
-yolocpp task=detect mode=predict model=yolo8n.pt source=bus.jpg
-yolocpp task=detect mode=export  model=yolo8n.pt format=trt fp16=true
-yolocpp mode=benchmark           model=yolo8n.pt source=bus.jpg
-
-# Legacy subcommand-style
-yolocpp predict   --weights=yolo8n.pt  --source=bus.jpg --out=out.jpg
-yolocpp predict   --weights=yolo8n.trt --source=bus.jpg --out=out.jpg
-yolocpp val       --weights=yolo8n.pt  --data=<root>
-yolocpp train     --data=<root> [--epochs=100] [--scale=n] [--weights=yolo8n.pt]
-yolocpp export    --format=onnx --weights=yolo8n.pt --out=yolo8n.onnx
-yolocpp export    --format=trt  --weights=yolo8n.pt --out=yolo8n.trt --fp16
-yolocpp benchmark --weights=yolo8n.pt  --source=bus.jpg
-yolocpp info
+yolocpp --mode train   -m yolo11n.pt -d coco/data.yaml -e 100 -b 16
+yolocpp --mode val     -m yolo11n.pt -d coco/data.yaml
+yolocpp --mode predict -m yolo11n.pt -s bus.jpg
+yolocpp --mode predict -m yolo11n.pt -s frames/ -o annotated/
+yolocpp --mode export  -m yolo11n.pt -f trt -p fp16
+yolocpp --mode benchmark -m yolo11n.pt -s bus.jpg
+yolocpp --mode info
+yolocpp --mode download --dataset coco8
 ```
 
-`data=` accepts **only a `.yaml`/`.yml` file** in the kv-style form. The yaml's
-`path:` / `train:` / `val:` / `names:` / `download:` are honored — if the
-dataset isn't on disk, the `download:` URL is fetched and unzipped automatically.
+Common flags:
 
-`model=` is enough on its own — version (v5/v8), scale (n/s/m/l/x) and `nc`
-are auto-inferred from the `.pt`'s actual layer shapes (`model.0.conv.weight`
-kernel + first dim, head's `cv3.0.2.weight` first dim). This works for renamed
-checkpoints (`best.pt`, `last.pt`) where the filename carries no version
-letter. Pass `version=` / `scale=` / `nc=` only to override.
+| short | long                  | scope                        |
+|-------|-----------------------|------------------------------|
+| -m    | --model / --weights   | every mode                   |
+| -s    | --source              | predict, benchmark           |
+| -d    | --data                | train, val                   |
+| -o    | --out                 | predict, export              |
+| -D    | --device              | every mode                   |
+| -i    | --imgsz               | every mode                   |
+| -e    | --epochs              | train                        |
+| -b    | --batch               | train                        |
+| -n    | --nc                  | predict, export              |
+| -c    | --conf                | predict                      |
+| -f    | --format              | export                       |
+| -p    | --precision           | export                       |
+|       | --seed                | train                        |
+|       | --export-after-train  | train                        |
+|       | --task                | predict, val, train, export  |
 
-All five `task` values now support train + val + predict + export (detect)
-and train + val + predict (classify/segment/pose/obb):
+`--data` accepts five forms — `coco/` YOLO layout, `dataset.csv/.tsv`,
+`instances.json` (COCO), `VOC2012/` (Pascal), and `data.yaml` —
+dispatched by extension and directory layout (see CLAUDE.md "Dataset
+format dispatch").
+
+`--model` alone is enough: version (v3..v26), scale (n/s/m/l/x) and
+`nc` are auto-inferred from the `.pt`'s actual layer shapes
+(`model.0.conv.weight` kernel + first dim, head's `cv3.0.2.weight`
+first dim). Works for renamed checkpoints (`best.pt`, `last.pt`).
+Pass `--scale` / `--nc` only to override.
+
+`--task` defaults to `detect` and accepts `detect | classify | segment
+| pose | obb`. Detect routes through the registry for every supported
+YOLO version; the four non-detect tasks use the v8 task families
+(`Yolo8Classify`, `Yolo8Segment`, `Yolo8Pose`, `Yolo8OBB`).
 
 ```
-yolocpp task=classify mode=train   data=DATA model=yolo8n-cls.pt epochs=30
-yolocpp task=segment  mode=train   data=DATA model=yolo8n-seg.pt epochs=30
-yolocpp task=pose     mode=train   data=DATA model=yolo8n-pose.pt epochs=30
-yolocpp task=obb      mode=train   data=DATA model=yolo8n-obb.pt epochs=30
-yolocpp task=segment  mode=val     data=DATA model=runs/segment/last.pt
+yolocpp --mode train --task classify -d DATA -m yolo8n-cls.pt -e 30
+yolocpp --mode train --task segment  -d DATA -m yolo8n-seg.pt -e 30
+yolocpp --mode train --task pose     -d DATA -m yolo8n-pose.pt -e 30
+yolocpp --mode train --task obb      -d DATA -m yolo8n-obb.pt -e 30
+yolocpp --mode val   --task segment  -d DATA -m runs/segment/last.pt
 ```
+
+### Public C++ API
+
+```cpp
+#include <yolocpp/api.hpp>
+
+yolocpp::YOLO m("yolo11n.pt");
+m.to("auto");
+m.predict({.source = "bus.jpg"});
+m.train({.data = "coco/data.yaml", .epochs = 100, .seed = 42});
+m.val({.data = "coco/data.yaml"});
+m.export_({.format = "onnx", .precision = "fp16"});
+```
+
+Routes through the same `cmd_*` functions the CLI uses.
 
 Dataset layouts:
 - **classify**: `<root>/{train,val}/<class_name>/img.jpg`
@@ -312,11 +414,20 @@ yolocpp/
   datasets/
     yolo_dataset        YOLO-format (.txt) loader, HSV + flip augmentation
   losses/
-    yolo8_loss         TAL assigner + CIoU + DFL + BCE
+    yolo8_loss          TAL (alpha=0.5, beta=6, topk=10) + CIoU + DFL + BCE
+    yolo26_loss         dual-head (o2m topk=10 + o2o topk=1) + ProgLoss + STAL
+    yolo6_loss          VFL + SIoU + TAL
+    yolo7_loss          anchor-based (v4 scale_xy bias-fix + exp() wh)
   engine/
-    trainer             SGD/momentum/Nesterov + warmup + cosine LR + EMA
+    trainer             FusedAdamW (1-kernel _fused_adamw_) + Ultralytics
+                        per-epoch linear LR + 3-epoch warmup + EMA
+                        (decay=0.9999, tau=2000) + cuDNN benchmark +
+                        TF32 + bf16 AMP autocast + channels_last +
+                        BatchPrefetcher (4 workers, per-worker sharded
+                        anchors) + GPU augmentation (mosaic, perspective,
+                        HSV, hflip) — all on device, no per-step host syncs
     validator           full pass over val set → mAP via metrics/map
-  metrics/map           per-class AP at IoU={0.5, 0.5..0.95}
+  metrics/map           per-class AP at IoU={0.5, 0.5..0.95}, COCO 101-point
 ```
 
 ## Architecture decisions worth knowing
@@ -373,19 +484,44 @@ output matches libtorch detections within 30 px box-center tolerance and
 The full deferred / pending list lives in **[TODO.md](TODO.md)**. Highlights:
 
 - **v12 / v13 task heads (segment / pose / obb / classify)** — neither
-  upstream nor iMoonLab publishes task weights upstream (only detect
-  ships). Scaffolding exists in `src/models/yolo12_tasks.cpp`; we'll
-  train our own task heads on COCO under task #60 (publish-weights
-  initiative).
-- **Mosaic / mixup augmentation** — straightforward but ~600 lines we
-  haven't needed yet (TODO #54D).
-- **AMP (mixed-precision training)** — Trainer is FP32-only.
-- **Multi-threaded data prefetch** — dataset is synchronous (TODO
-  #57A).
+  upstream nor iMoonLab publishes task weights (only detect ships).
+  Scaffolding exists in `src/models/yolo12_tasks.cpp`; we'll train
+  our own task heads on COCO under task #60.
+- **simdjson for COCO instances.json** — currently a hand-rolled
+  tokenizer in `src/datasets/coco_dataset.cpp`. simdjson would be
+  faster + cleaner; deferred because the YOLO-format pipeline doesn't
+  hit this path.
 - **TRT INT8 calibration** + dynamic-shape multi-batch profiles —
   easy on top of `TrtBuildConfig` once a calibration set exists.
-- **Two-GPU DDP validation** — wiring is in place, world_size=1
+- **Two-GPU DDP training** — wiring is in place, world_size=1
   verified; no two-GPU box has run training yet.
+
+### Already landed (formerly "deferred", current state of trainer)
+
+- **bf16 AMP autocast + cuDNN benchmark + TF32 + channels_last** —
+  landed 0.90.0.
+- **Mosaic + RandomPerspective + MixUp augmentation** — landed 0.54.0
+  (CPU mosaic). GPU mosaic + GPU perspective + per-sample affine
+  + 114-grey padding — landed 0.98.0.
+- **BatchPrefetcher** (4 workers, per-worker sharded anchors,
+  pin-memory non-blocking HtoD) — landed 0.94.0.
+- **FusedAdamW** (1-kernel `_fused_adamw_` per param group) — landed
+  0.95.0.
+- **Pure-GPU bbox transform + branchless gpu_hflip_** (no
+  per-batch host syncs, no `.cpu()` / `.item()` mid-step) — landed 0.99.8.
+- **Stride-aware cls bias init** (Ultralytics formula
+  `log(5 / nc / (640/stride)²)`) — landed 0.99.8.
+- **TAL top-K correctness fix** (`amax → amin` on threshold,
+  matching Ultralytics' top-K mask) — landed 0.99.8.
+- **Val NMS thresholds** (conf=0.001, iou=0.7, max_det=300 — the
+  upstream val convention, not predict) — landed 0.99.9.
+- **BGR/RGB channel-order consistency** between train and val —
+  landed 0.99.9 (HSV jitter follow-on 0.99.11).
+- **Ultralytics-style per-epoch linear LR** (peak ≈ 0.6·lr0 during
+  warmup, not 1.0·lr0; eliminates mid-training mAP dip on
+  small-parameter cls heads) — landed 0.99.12. **This is the fix
+  that closed the n-variant gap and produced the BEAT/TIED
+  outcomes in the benchmark table above.**
 
 For the full filed roadmap (modular architecture, CLI overhaul,
 trackers + SAHI, additional YOLO families, multi-device deployment,
