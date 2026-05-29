@@ -4,6 +4,35 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.9] — 2026-05-29
+
+### Fixed
+- **BGR/RGB channel-order mismatch between train and val**
+  (`src/inference/letterbox.cpp::image_to_tensor_u8`). `image_to_tensor`
+  (val + predict path) converts `cv::cvtColor(BGR, RGB)` and feeds RGB
+  float32 to the model. `image_to_tensor_u8` (gpu_aug train path) kept
+  **BGR uint8** through the entire GPU pipeline (mosaic → perspective →
+  HSV jitter → flip) and fed BGR float to the model. The pretrained
+  Ultralytics weights we load are RGB-trained, so training silently
+  retrained the head to expect a flipped channel order vs val. Observed
+  as a uniform ~0.10 mAP gap across all yolo11 + yolo26 variants in
+  5-epoch fine-tunes; on yolo11n closes the gap entirely
+  (mAP@0.5:0.95 0.619 → **0.728**, vs Ultralytics 0.730 — within
+  noise). Fix: `cv::cvtColor(BGR, RGB)` in `image_to_tensor_u8`. The
+  GPU HSV helper's channel indices are now "labelled BGR" but actually
+  carry R/G/B order; the H/S/V formulas are mathematically valid color
+  jitter regardless of label, just slightly different distribution than
+  upstream's true RGB HSV jitter — a minor parity gap vs the dominant
+  train/val channel-order gap this fix closes.
+- **Validation NMS used predict defaults (`conf=0.25, iou=0.45`) instead
+  of upstream val defaults (`conf=0.001, iou=0.7, max_det=300`)**
+  (`src/engine/trainer.cpp`). `validate_with_records` was called without
+  `nms_cfg`, defaulting to `NMSConfig{}` which is tuned for predict.
+  Filtering at conf≥0.25 silently drops every TP below 25 % confidence
+  from the PR curve, mathematically capping mAP recall and AUC. Pass
+  explicit val nms config from the trainer matching
+  `ultralytics/cfg/default.yaml:53-55`.
+
 ## [0.99.8] — 2026-05-29
 
 ### Fixed

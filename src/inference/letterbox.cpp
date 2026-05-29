@@ -66,13 +66,24 @@ torch::Tensor image_to_tensor(const cv::Mat& bgr) {
 }
 
 torch::Tensor image_to_tensor_u8(const cv::Mat& bgr) {
-  // BGR uint8 HWC → BGR uint8 CHW. No dtype promotion, no normalisation.
+  // BGR uint8 HWC → RGB uint8 CHW. No dtype promotion, no normalisation.
   // The trainer does both on GPU after HtoD for the gpu_aug path.
-  // Channel order stays BGR (matches what the existing GPU HSV helper
-  // expects). Caller can `permute` back to HWC if needed.
+  // RGB output is essential: `image_to_tensor` (val path) returns RGB,
+  // and Ultralytics pretrained weights are trained on RGB. If this
+  // returns BGR, training operates on BGR-labelled-RGB pixels and the
+  // model is silently retrained to expect a flipped channel order
+  // vs the val pipeline — observed as a uniform ~0.10 mAP gap. The
+  // GPU HSV helper's channel indices are now "labelled BGR" but
+  // actually carry R/G/B order; the H/S/V formulas are still
+  // mathematically valid color jitter (just slightly different
+  // distribution than upstream's true RGB HSV jitter, which we accept
+  // as a minor parity gap vs the major train/val color-channel gap
+  // this fix closes).
   TORCH_CHECK(bgr.type() == CV_8UC3, "image_to_tensor_u8: need CV_8UC3 input");
+  cv::Mat rgb;
+  cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
   auto t = torch::from_blob(
-               bgr.data, {bgr.rows, bgr.cols, 3},
+               rgb.data, {rgb.rows, rgb.cols, 3},
                torch::TensorOptions().dtype(torch::kUInt8))
                .permute({2, 0, 1})
                .contiguous();

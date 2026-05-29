@@ -1676,8 +1676,19 @@ void TrainerT<M>::run() {
       // validate_with_records returns the full det+gt rows so we can
       // run compute_curves and extract scalar P/R/F1 at best-F1.
       auto _vt0 = std::chrono::steady_clock::now();
+      // Validation NMS config MUST match upstream val (not predict):
+      // conf=0.001, iou=0.7, max_det=300. The default NMSConfig{} is
+      // tuned for predict (conf=0.25, iou=0.45) which silently drops
+      // every TP below 25 % confidence — that loses recall at every
+      // IoU threshold and mathematically caps mAP@0.5:0.95 ~0.15 below
+      // what upstream sees on the SAME weights. Reference:
+      // `ultralytics/cfg/default.yaml:53-55`.
+      inference::NMSConfig val_nms;
+      val_nms.conf_thresh = 0.001f;
+      val_nms.iou_thresh  = 0.7f;
+      val_nms.max_det     = 300;
       last_vo = std::make_unique<ValidationOutput>(
-          validate_with_records(ema_, *cfg_.val_dataset, device_));
+          validate_with_records(ema_, *cfg_.val_dataset, device_, val_nms));
       auto _vt1 = std::chrono::steady_clock::now();
       auto& res = last_vo->map;
       cur_map_50    = res.map_50;
