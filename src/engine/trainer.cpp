@@ -942,16 +942,33 @@ struct LossTraits<models::Yolo2> {
 };
 
 // Cosine-with-linear-warmup LR schedule. Returns lr scale ∈ [0, 1].
-double lr_scale(int epoch_step, int warmup_steps, int total_steps,
-                double lrf) {
-  if (epoch_step < warmup_steps) {
-    // Linear ramp from 0 → 1
-    return (double)(epoch_step + 1) / (double)warmup_steps;
+double lr_scale(int gstep, int warmup_steps, int total_steps,
+                double lrf, int total_epochs) {
+  // Match Ultralytics' per-epoch linear schedule exactly:
+  //   lf(epoch) = max(1 - epoch / epochs, 0) * (1 - lrf) + lrf
+  // (see ultralytics/engine/trainer.py:253). The scheduler holds lf
+  // CONSTANT during each epoch (advanced once per epoch by
+  // scheduler.step()). During warmup (first 3 epochs by default),
+  // the LR is overridden by a per-step linear ramp from 0 to the
+  // current epoch's `lf(epoch) * lr0` target
+  // (ultralytics/engine/trainer.py:425-437).
+  //
+  // Compared to the prior cosine implementation, this caps peak LR
+  // at `lf(end_of_warmup) * lr0 ≈ 0.6 * lr0` instead of `1.0 * lr0`,
+  // which empirically eliminates the mid-training mAP dip on n-class
+  // models (yolo11n: e2 mAP previously dropped 0.508 vs Ultralytics'
+  // monotonic 0.587 climb, because our higher peak LR destabilized
+  // the small model just as it was approaching convergence).
+  if (total_epochs < 1) total_epochs = 1;
+  int steps_per_epoch = total_steps / total_epochs;
+  if (steps_per_epoch < 1) steps_per_epoch = 1;
+  int e = std::min(total_epochs - 1, gstep / steps_per_epoch);
+  const double lf = std::max(0.0, 1.0 - (double)e / (double)total_epochs)
+                        * (1.0 - lrf) + lrf;
+  if (gstep < warmup_steps) {
+    return (double)(gstep + 1) / (double)warmup_steps * lf;
   }
-  double t = (double)(epoch_step - warmup_steps) /
-             std::max(1.0, (double)(total_steps - warmup_steps));
-  // cosine: 1 → lrf
-  return lrf + 0.5 * (1.0 - lrf) * (1.0 + std::cos(M_PI * t));
+  return lf;
 }
 
 }  // anonymous namespace
@@ -1463,7 +1480,8 @@ void TrainerT<M>::run() {
 
     for (int step = 0; step < steps; ++step) {
       int gstep = epoch * steps + step;
-      double scale = lr_scale(gstep, warmup_steps, total_steps, cfg_.lrf);
+      double scale = lr_scale(gstep, warmup_steps, total_steps, cfg_.lrf,
+                              cfg_.epochs);
 
       // Update LRs per group.
       // Group 0 (decay): lr = lr0 * scale

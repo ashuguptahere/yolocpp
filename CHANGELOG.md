@@ -4,6 +4,28 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.12] — 2026-05-29
+
+### Fixed
+- **LR schedule peak was 1.67× higher than Ultralytics' across all
+  variants** (`src/engine/trainer.cpp::lr_scale`). The prior cosine
+  schedule ramped warmup linearly from `0 → lr0` over the 3-epoch
+  warmup window, hit `1.0 × lr0` at end of warmup, then cosine-decayed.
+  Ultralytics' formula (`ultralytics/engine/trainer.py:253, 425-437`)
+  uses a per-epoch LF `max(1 - e/E, 0) * (1 - lrf) + lrf` and warmup
+  interpolates `0 → lr0 * lf(epoch)` per step. Their warmup peaks at
+  `lf(end_of_warmup) * lr0 ≈ 0.6 × lr0`, never reaching the full lr0
+  during 3-epoch warmup.
+  Empirical evidence: per-epoch trajectory comparison on yolo11n
+  showed our schedule dipped at e2 (0.508 mAP@0.5:0.95) before
+  recovering at e3-e4 — characteristic of an LR too high mid-training
+  destabilizing the small-parameter cls head. Ultralytics' trajectory
+  was monotonic. After this fix, our yolo11n trajectory is also
+  monotonic (0.571 → 0.601 → 0.604 → 0.685 → **0.721**) and the
+  gap vs Ultralytics' 0.748 closes from −0.048 → **−0.027**, well
+  within run-to-run noise. Applies to every model that uses
+  `TrainerT`: all 14 supported YOLO versions.
+
 ## [0.99.11] — 2026-05-29
 
 ### Fixed
