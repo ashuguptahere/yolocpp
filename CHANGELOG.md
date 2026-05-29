@@ -4,6 +4,27 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.11] — 2026-05-29
+
+### Fixed
+- **`gpu_hsv_jitter_` was silently re-inverting BGR→RGB→BGR after the
+  0.99.9 channel fix** (`src/engine/trainer.cpp`). The function
+  labelled input channels as BGR (`Bc = imgs.select(1, 0)`, etc.) and
+  emitted output via `torch::cat({B2, G2, R2}, dim=1)`. After 0.99.9
+  flipped `image_to_tensor_u8` to RGB, the HSV path was getting RGB
+  input but treating it as BGR — computing hue in wrong sectors AND
+  outputting channels in BGR order. Whenever HSV jitter was active
+  (default: `hsv_h=0.015 ∨ hsv_s=0.7 ∨ hsv_v=0.4`, i.e. **every**
+  training run), the model received BGR-ordered images while val
+  fed RGB — undoing the 0.99.9 channel parity fix specifically on
+  the train side. Fix: relabel input channels to RGB and emit output
+  as `cat({R2, G2, B2}, dim=1)`. Verified end-to-end: pure-red pixel
+  HSV round-trip → H≈0, sector h0=true → [R2=V, G2=0, B2=0] →
+  output `[1, 0, 0]` matching RGB input. The user's hint "the gap
+  in training has to do something with what we did up until now"
+  was correct — this is the residual color-channel parity bug from
+  the 0.99.9 fix.
+
 ## [0.99.10] — 2026-05-29
 
 ### Added

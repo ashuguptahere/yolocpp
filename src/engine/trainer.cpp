@@ -397,11 +397,20 @@ static void gpu_hsv_jitter_(torch::Tensor& imgs,
   auto t_s = torch::from_blob(r_s_p1.data(), {B, 1, 1, 1}, torch::kFloat32).clone().to(opts);
   auto t_v = torch::from_blob(r_v_p1.data(), {B, 1, 1, 1}, torch::kFloat32).clone().to(opts);
 
-  // BGR → HSV via tensor ops. No torch::cvtColor exists; build it.
-  // Channels: index 0 = B, 1 = G, 2 = R (BGR order from cv pipeline).
-  auto Bc = imgs.select(1, 0).unsqueeze(1);   // [B, 1, H, W]
+  // RGB → HSV via tensor ops. No torch::cvtColor exists; build it.
+  // Channels: index 0 = R, 1 = G, 2 = B (RGB order after the 0.99.9
+  // `image_to_tensor_u8` BGR→RGB fix). Earlier this code labelled
+  // channels as BGR — the SAME pipeline that flipped channels via
+  // `cat({B2, G2, R2})` at the output, silently re-inverting the
+  // channel order back to BGR after augmentation. Net effect: train
+  // pipeline fed BGR to the model while val fed RGB, undoing the
+  // 0.99.9 channel fix specifically when HSV jitter was active
+  // (`hsv_h≠0 ∨ hsv_s≠0 ∨ hsv_v≠0`, which is the default training
+  // config). Fixed by labelling input channels in their actual RGB
+  // order AND emitting output as `cat({R2, G2, B2})` to preserve it.
+  auto Rc = imgs.select(1, 0).unsqueeze(1);   // [B, 1, H, W]
   auto Gc = imgs.select(1, 1).unsqueeze(1);
-  auto Rc = imgs.select(1, 2).unsqueeze(1);
+  auto Bc = imgs.select(1, 2).unsqueeze(1);
   auto Vmax  = torch::max(torch::max(Rc, Gc), Bc);
   auto Vmin  = torch::min(torch::min(Rc, Gc), Bc);
   auto delta = Vmax - Vmin;
@@ -423,7 +432,7 @@ static void gpu_hsv_jitter_(torch::Tensor& imgs,
   S = (S * t_s).clamp(0.f, 1.f);
   auto V = (Vmax * t_v).clamp(0.f, 1.f);
 
-  // HSV → BGR — standard formula with hue sector h_i = floor(H / 60).
+  // HSV → RGB — standard formula with hue sector h_i = floor(H / 60).
   auto Hp = H / 60.f;
   auto h_i = torch::floor(Hp).to(torch::kInt64);
   auto f = Hp - torch::floor(Hp);
@@ -457,8 +466,8 @@ static void gpu_hsv_jitter_(torch::Tensor& imgs,
             torch::where(h3, V,
             torch::where(h4, V,
             torch::where(h5, q, z))))));
-  // Repack in BGR order to match input layout.
-  imgs = torch::cat({B2, G2, R2}, /*dim=*/1);
+  // Repack in RGB order to match input layout (RGB after 0.99.9 fix).
+  imgs = torch::cat({R2, G2, B2}, /*dim=*/1);
 }
 
 // GPU horizontal flip — per-sample with prob `flip_p`. Image flip is
