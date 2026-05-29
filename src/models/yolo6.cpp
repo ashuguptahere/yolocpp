@@ -921,18 +921,50 @@ int Yolo6Impl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
   auto params  = this->named_parameters(true);
   auto buffers = this->named_buffers(true);
-  int n = 0;
+  int n = 0, skipped_shape = 0;
   for (const auto& e : entries) {
     if (auto* p = params.find(e.first)) {
-      if (p->sizes() != e.second.sizes()) continue;
+      if (p->sizes() != e.second.sizes()) { ++skipped_shape; continue; }
       torch::NoGradGuard ng;
       p->copy_(e.second.to(p->device(), p->dtype()));
       ++n;
     } else if (auto* b = buffers.find(e.first)) {
-      if (b->sizes() != e.second.sizes()) continue;
+      if (b->sizes() != e.second.sizes()) { ++skipped_shape; continue; }
       torch::NoGradGuard ng;
       b->copy_(e.second.to(b->device(), b->dtype()));
       ++n;
+    }
+  }
+  if (skipped_shape > 0) {
+    std::cerr << "[yolo6 load] skipped " << skipped_shape
+              << " tensors with shape mismatch (cls head re-purposed for custom nc); "
+                 "re-initialising EffiDeHead cls bias to upstream's stride-aware prior\n";
+    // v6's head is EffiDeHead (cls_preds = ModuleList<Conv2d>, one per
+    // level). The shared init_detect_biases helper walks for DetectImpl
+    // (v8 base class) and wouldn't find this head, so init the cls bias
+    // here directly. Same formula as DetectImpl::init_biases — upstream
+    // log(5 / nc / (640/stride)²) per level. v6 stride layout follows
+    // num_layers: 3 levels → [8,16,32], 4 levels (P6) → [8,16,32,64].
+    // Without this, yolo6n cls loss epoch 0 = 754, val mAP stays at 0.
+    torch::NoGradGuard ng;
+    // Walk modules looking for EffiDeHeadImpl. There's typically one.
+    for (const auto& m : this->modules(/*include_self=*/false)) {
+      auto* head = m->as<EffiDeHeadImpl>();
+      if (!head) continue;
+      const int nl = head->num_layers;
+      std::vector<double> s;
+      if (nl == 4) s = {8.0, 16.0, 32.0, 64.0};
+      else         s = {8.0, 16.0, 32.0};
+      const float kImgsz = 640.0f;
+      for (int i = 0; i < (int)head->cls_preds->size() && i < nl; ++i) {
+        auto* c = head->cls_preds[i]->as<torch::nn::Conv2dImpl>();
+        if (!c || !c->bias.defined()) continue;
+        const float anc = kImgsz / (float)s[i];
+        const float b = std::log(5.0f / (float)head->nc / (anc * anc));
+        c->bias.slice(0, 0, head->nc).fill_(b);
+      }
+      // reg_preds bias = 0 (default) is fine for v6's DFL/dist form.
+      break;
     }
   }
   return n;

@@ -4,6 +4,40 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.13] — 2026-05-30
+
+### Fixed
+- **`Yolo10Impl::load_from_state_dict` was missing the `init_detect_biases`
+  call** (`src/models/yolo10.cpp`). Same pattern bug as the v3/v5/v8/v9/v11/
+  v12/v13 fixes in 0.99.8 — when the upstream pretrained nc=80 cls head
+  is re-purposed for a custom `nc`, the shape mismatch leaves the new
+  cls bias at torch's zero-init (sigmoid(0)=0.5 background prior).
+  Effect on yolo10n with screen-dataset (nc=5): epoch-0 cls loss
+  **1239**, val mAP after 5 epochs **0.000026** — the model never
+  recovered. After fix: epoch-0 cls loss **2.7**, val mAP after 2
+  epochs **0.488**. Wired by adding `init_detect_biases(this)` after
+  shape-mismatch skip; v10 uses the shared `DetectImpl` base so the
+  helper finds the head on its module walk.
+- **`Yolo6Impl::load_from_state_dict` was missing cls-bias init**
+  (`src/models/yolo6.cpp`). v6 uses its own `EffiDeHeadImpl` (separate
+  `cls_preds` / `reg_preds` ModuleLists), not `DetectImpl` — so the
+  shared `init_detect_biases` helper couldn't find it. Added a v6-
+  specific path: walks `this->modules()` for `EffiDeHeadImpl`, applies
+  the same stride-aware `log(5 / nc / (640/stride)²)` formula per
+  level. v6 stride layout follows `num_layers`: 3 levels → `[8, 16, 32]`,
+  4 levels (P6 variants) → `[8, 16, 32, 64]`. Without this, yolo6n
+  cls loss epoch 0 = **754**, val mAP stays at **0** for the whole
+  run. After fix: cls loss epoch 0 = **1.87**, val mAP starts climbing.
+
+### Build
+- **Ultralytics 8.4.56 + yolov9 + Blackwell hangs on default `workers=8`**
+  (not a yolocpp bug — discovered during the v9 comparison sweep).
+  Mid-training the DataLoader worker pipeline deadlocks at 0 % CPU
+  for v9m/v9c/v9e. Pinned `workers=0` in our benchmark runner script
+  (`/tmp/bench_all_versions/run_one_per_epoch.sh`) — yolocpp doesn't
+  hit this because it has its own `BatchPrefetcher`. Documented for
+  future benchmark runs.
+
 ## [0.99.12] — 2026-05-29
 
 ### Fixed
