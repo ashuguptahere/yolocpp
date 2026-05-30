@@ -4,6 +4,39 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.16] — 2026-05-30
+
+### Added
+- **v6 MBLA training rows** (yolocpp-only, 4 rows: s_mbla / m_mbla /
+  l_mbla / x_mbla in the comparison table). yolocpp trains cleanly
+  in 50 s – 1 m 58 s for 5 epochs on screen-dataset; mAP@0.5:0.95
+  lands at 0.43 / 0.43 / 0.39 / 0.45 — comparable to the y6m/l P5
+  rows. Marked `[MBLA]` in the table.
+
+### Fixed
+- **README "Not yet benchmarked"** section updated — v6 MBLA marked
+  landed, v7 P6 marked partial.
+
+### Deferred
+- **Meituan v6 MBLA reference comparison** (`[MBLA]` footnote). The
+  runner script `/tmp/bench_all_versions/run_v6_meituan.sh` doesn't
+  `cd /tmp/YOLOv6_meituan` before invoking `tools/train.py`, so
+  `Config.fromfile('configs/yolov6{*}_mbla.py')` fails with
+  `FileNotFoundError`. Reference column blank in the four MBLA rows
+  until the runner is fixed. Tracked as **#87B**.
+- **v7 P6 yolocpp training collapse** (`[w=0-cpp]` footnote). All
+  four P6 variants (`w6/e6/d6/e6e`) produce mAP=0 across 5 epochs
+  despite cleanly-loading weights, healthy losses on epoch 0, and
+  predict + export both working. Base yolo7 (P5) trains to 0.298 at
+  the same budget, so the bug is P6-specific — extra P6/64 anchor
+  grid + 4-level head assigner. Tracked as **#87C**; related to the
+  open y6l6 channels_last P6 crash (task #6).
+
+### Notes
+- INT8 backfill for v10/v11/v12/v13 still running in background
+  (`/tmp/bench_int8/backfill.log`); rows will land in a follow-up
+  patch.
+
 ## [0.99.15] — 2026-05-30
 
 ### Added
