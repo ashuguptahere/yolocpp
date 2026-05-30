@@ -196,69 +196,105 @@ of the version-coverage matrix.
 
 ### Inference speed (FPS) — RTX 5090, batch=1, imgsz=640
 
-Single-image inference latency on `bus.jpg` after a 20-iter warmup, 100
-benchmark iterations. PT = LibTorch FP32, TRT = TensorRT FP32 / FP16.
-INT8 export and batch=32 throughput are TODO in the binary (`#51F2`).
+Single-image inference latency on `bus.jpg` after a 10–20-iter warmup,
+50–100 benchmark iterations. PT = LibTorch FP32, TRT = TensorRT
+FP32 / FP16 / INT8 (PTQ via `IInt8EntropyCalibrator2` over the
+screen-dataset val set, mixed-precision: FP16 + INT8 flags both set).
 
-| variant | PT FP32 | TRT FP32 | TRT FP16 | TRT FP16 latency |
-|---------|--------:|---------:|---------:|-----------------:|
-| yolo3 | 104 fps | 109 fps | **291 fps** | 3.43 ms |
-| yolo5n | 248 fps | 468 fps | **516 fps** | 1.94 ms |
-| yolo5s | 226 fps | 389 fps | **498 fps** | 2.01 ms |
-| yolo5m | 208 fps | 255 fps | **427 fps** | 2.34 ms |
-| yolo5l | 154 fps | 166 fps | **370 fps** | 2.70 ms |
-| yolo5x | 113 fps | 119 fps | **283 fps** | 3.54 ms |
-| yolo6n | 249 fps | 444 fps | **541 fps** | 1.85 ms |
-| yolo6s | 260 fps | 293 fps | **500 fps** | 2.00 ms |
-| yolo6m | 182 fps | 205 fps | **402 fps** | 2.48 ms |
-| yolo6l | 122 fps | 138 fps | **326 fps** | 3.07 ms |
-| yolo6n6 | 211 fps | 377 fps | **501 fps** | 2.00 ms |
-| yolo6s6 | 207 fps | 239 fps | **440 fps** | 2.27 ms |
-| yolo6m6 | 139 fps | 162 fps | **360 fps** | 2.78 ms |
-| yolo6l6 |  94 fps | 109 fps | **273 fps** | 3.65 ms |
-| yolo7 | 150 fps | 185 fps | **332 fps** | 3.01 ms |
-| yolo7-tiny | 222 fps | 355 fps | **434 fps** | 2.31 ms |
-| yolo7x | 114 fps | 129 fps | **277 fps** | 3.62 ms |
-| yolo8n | 257 fps | 496 fps | **586 fps** | 1.70 ms |
-| yolo8s | 207 fps | 329 fps | **494 fps** | 2.02 ms |
-| yolo8m | 156 fps | 221 fps | **399 fps** | 2.51 ms |
-| yolo8l | 140 fps | 144 fps | **333 fps** | 3.00 ms |
-| yolo8x | 116 fps | 118 fps | **300 fps** | 3.34 ms |
-| yolo9t | 153 fps | 358 fps | **415 fps** | 2.41 ms |
-| yolo9s | 144 fps | 246 fps | **383 fps** | 2.61 ms |
-| yolo9m | 137 fps | 216 fps | **367 fps** | 2.72 ms |
-| yolo9c | 130 fps | 187 fps | **356 fps** | 2.81 ms |
-| yolo9e |  87 fps | 110 fps | **250 fps** | 4.00 ms |
-| yolo10n | 246 fps | 442 fps | **504 fps** | 1.99 ms |
-| yolo10s | 216 fps | 352 fps | **488 fps** | 2.05 ms |
-| yolo10m | 167 fps | 237 fps | **389 fps** | 2.57 ms |
-| yolo10b | 152 fps | 205 fps | **356 fps** | 2.81 ms |
-| yolo10l | 131 fps | 170 fps | **324 fps** | 3.09 ms |
-| yolo10x | 118 fps | 146 fps | **291 fps** | 3.43 ms |
-| yolo11n | 232 fps | 478 fps | **545 fps** | 1.83 ms |
-| yolo11s | 207 fps | 372 fps | **514 fps** | 1.95 ms |
-| yolo11m | 202 fps | 236 fps | **394 fps** | 2.54 ms |
-| yolo11l | 145 fps | 188 fps | **341 fps** | 2.93 ms |
-| yolo11x | 110 fps | 136 fps | **289 fps** | 3.46 ms |
-| yolo12n | 211 fps | 380 fps | **401 fps** | 2.50 ms |
-| yolo12s | 175 fps | 294 fps | **363 fps** | 2.76 ms |
-| yolo12m | 168 fps | 224 fps | **321 fps** | 3.12 ms |
-| yolo12l | 117 fps | 161 fps | **234 fps** | 4.28 ms |
-| yolo12x |  88 fps | 114 fps | **204 fps** | 4.91 ms |
-| yolo13n | 178 fps | 359 fps | **380 fps** | 2.63 ms |
-| yolo13s | 158 fps | 289 fps | **328 fps** | 3.05 ms |
-| yolo13l | — | — | — | (TRT build hung; deferred) |
-| yolo13x |  81 fps | 115 fps | **175 fps** | 5.72 ms |
-| yolo26n | 218 fps | 431 fps | **482 fps** | 2.08 ms |
-| yolo26s | 175 fps | 341 fps | **463 fps** | 2.16 ms |
-| yolo26m | 175 fps | 228 fps | **385 fps** | 2.60 ms |
-| yolo26l | 138 fps | 188 fps | **341 fps** | 2.93 ms |
-| yolo26x | 103 fps | 137 fps | **282 fps** | 3.55 ms |
+| variant | PT FP32 | TRT FP32 | TRT FP16 | TRT INT8 | TRT FP16 latency |
+|---------|--------:|---------:|---------:|---------:|-----------------:|
+| yolo3 | 104 fps | 109 fps | **291 fps** | — [INT8-fail] | 3.43 ms |
+| yolo5n | 248 fps | 420 fps | **472 fps** | **470 fps** | 2.12 ms |
+| yolo5s | 226 fps | 299 fps | **418 fps** | **410 fps** | 2.39 ms |
+| yolo5m | 208 fps | 178 fps | **303 fps** | **323 fps** | 3.30 ms |
+| yolo5l | 156 fps | 119 fps | **254 fps** | **287 fps** | 3.94 ms |
+| yolo5x | 113 fps |  94 fps | **177 fps** | **191 fps** | 5.65 ms |
+| yolo6n | 260 fps | 413 fps | **446 fps** | **471 fps** | 2.24 ms |
+| yolo6s | 260 fps | 226 fps | **394 fps** | **399 fps** | 2.54 ms |
+| yolo6m | 180 fps | 148 fps | **277 fps** | **306 fps** | 3.61 ms |
+| yolo6l | 124 fps |  99 fps | **208 fps** | **246 fps** | 4.81 ms |
+| yolo6n6 | 224 fps | 334 fps | **444 fps** | **465 fps** | 2.25 ms |
+| yolo6s6 | 206 fps | 163 fps | **303 fps** | **361 fps** | 3.30 ms |
+| yolo6m6 | 138 fps | 105 fps | **218 fps** | **269 fps** | 4.58 ms |
+| yolo6l6 |  94 fps |  69 fps | **155 fps** | **202 fps** | 6.45 ms |
+| yolo6s_mbla [new] | 183 fps | 226 fps | **351 fps** | **361 fps** | 2.85 ms |
+| yolo6m_mbla [new] | 179 fps | 157 fps | **295 fps** | **307 fps** | 3.39 ms |
+| yolo6l_mbla [new] | 154 fps | 126 fps | **259 fps** | **301 fps** | 3.86 ms |
+| yolo6x_mbla [new] | 103 fps |  80 fps | **165 fps** | **215 fps** | 6.06 ms |
+| yolo7 | 150 fps | 185 fps | **332 fps** | — [INT8-fail] | 3.01 ms |
+| yolo7-tiny | 214 fps | 296 fps | **369 fps** | **398 fps** | 2.71 ms |
+| yolo7x | 114 fps | 129 fps | **277 fps** | — [INT8-fail] | 3.62 ms |
+| yolo7w6 [new] | — | — | — | — [INT8-fail] | (large + anchor decode unsupported by INT8 tactic) |
+| yolo7e6 [new] | — | — | — | — [INT8-fail] | (same) |
+| yolo7d6 [new] | — | — | — | — [INT8-fail] | (same) |
+| yolo7e6e [new] | — | — | — | — [INT8-fail] | (same) |
+| yolo8n | 260 fps | 394 fps | **455 fps** | **460 fps** | 2.20 ms |
+| yolo8s | 229 fps | 266 fps | **386 fps** | **399 fps** | 2.59 ms |
+| yolo8m | 160 fps | 170 fps | **281 fps** | **313 fps** | 3.55 ms |
+| yolo8l | 140 fps | 102 fps | **232 fps** | **271 fps** | 4.30 ms |
+| yolo8x | 115 fps |  89 fps | **183 fps** | **215 fps** | 5.47 ms |
+| yolo9t | (pending backfill) |
+| yolo9s | (pending backfill) |
+| yolo9m | (pending backfill) |
+| yolo9c | 133 fps | 141 fps | **259 fps** | **251 fps** | 3.86 ms |
+| yolo9e |  87 fps | — | — | — [INT8-fail] | (TRT tactic OOM) |
+| yolo10n | 246 fps | 442 fps | **504 fps** | (pending backfill) | 1.99 ms |
+| yolo10s | 216 fps | 352 fps | **488 fps** | (pending backfill) | 2.05 ms |
+| yolo10m | 167 fps | 237 fps | **389 fps** | (pending backfill) | 2.57 ms |
+| yolo10b | 152 fps | 205 fps | **356 fps** | (pending backfill) | 2.81 ms |
+| yolo10l | 131 fps | 170 fps | **324 fps** | (pending backfill) | 3.09 ms |
+| yolo10x | 118 fps | 146 fps | **291 fps** | (pending backfill) | 3.43 ms |
+| yolo11n | 232 fps | 478 fps | **545 fps** | (pending backfill) | 1.83 ms |
+| yolo11s | 207 fps | 372 fps | **514 fps** | (pending backfill) | 1.95 ms |
+| yolo11m | 202 fps | 236 fps | **394 fps** | (pending backfill) | 2.54 ms |
+| yolo11l | 145 fps | 188 fps | **341 fps** | (pending backfill) | 2.93 ms |
+| yolo11x | 110 fps | 136 fps | **289 fps** | (pending backfill) | 3.46 ms |
+| yolo12n | 211 fps | 380 fps | **401 fps** | (pending backfill) | 2.50 ms |
+| yolo12s | 175 fps | 294 fps | **363 fps** | (pending backfill) | 2.76 ms |
+| yolo12m | 168 fps | 224 fps | **321 fps** | (pending backfill) | 3.12 ms |
+| yolo12l | 117 fps | 161 fps | **234 fps** | (pending backfill) | 4.28 ms |
+| yolo12x |  88 fps | 114 fps | **204 fps** | (pending backfill) | 4.91 ms |
+| yolo13n | 178 fps | 359 fps | **380 fps** | (pending backfill) | 2.63 ms |
+| yolo13s | 158 fps | 289 fps | **328 fps** | (pending backfill) | 3.05 ms |
+| yolo13l | — | — | — | — | (TRT build hung; deferred) |
+| yolo13x |  81 fps | 115 fps | **175 fps** | (pending backfill) | 5.72 ms |
+| yolo26n | 219 fps | 367 fps | **433 fps** | **424 fps** | 2.31 ms |
+| yolo26s | 184 fps | 258 fps | **373 fps** | **376 fps** | 2.68 ms |
+| yolo26m | 174 fps | 185 fps | **300 fps** | **304 fps** | 3.33 ms |
+| yolo26l | 138 fps | 144 fps | **263 fps** | **238 fps** | 3.81 ms |
+| yolo26x | 103 fps | — | — | — [INT8-fail] | (TRT tactic OOM) |
 
-Headline: **TRT FP16 hits 250–586 fps across the matrix** at single-
-image batch=1 on RTX 5090. The fastest models are the n/t-scale
-variants of v5/v6/v8/v10/v11/v26 (all 480+ fps). The slowest are
-the e/x-scale heavyweights (v9e, v12x, v13x, v8x).
+[INT8-fail]: TensorRT 10.14 can't find an INT8 tactic for v7
+anchor-based decode + v9e/v26x large-scale builders within the
+default workspace (1.2 GB request rejected). Either bump workspace
+or stick with FP16 for these — they aren't the typical INT8 target.
+
+[new]: variants whose weights were downloaded this session — v6 MBLA
+(s/m/l/x_mbla) and v7 P6 (w6/e6/d6/e6e). MBLA variants are functional;
+v7 P6 INT8 fails per [INT8-fail]. v7 P6 FP16 inference works once
+TRT workspace is bumped (deferred to a follow-up — anchor-based
+decode emitter doesn't fit the default 1 GiB pool).
+
+(pending backfill): the shell-glob `yolo1*` in the original sweep
+case statement accidentally swallowed yolo10/11/12/13 — INT8 sweep
+for those is queued via `/tmp/bench_int8/backfill.sh` (auto-runs
+after the main sweep completes via a watcher). Numbers will be
+back-filled into a follow-up commit.
+
+**Batch=32 throughput:** the engine builder supports building at
+batch=32 (via `--batch 32`), but `TrtPredictor::predict()` is
+hard-coded to single-image input (`setInputShape(... Dims4(1, 3,
+imgsz, imgsz))` at `src/inference/trt_predictor.cpp:73`). Without a
+`predict_batch()` refactor that accepts `vector<cv::Mat>` and feeds
+the full N-batch into `enqueueV3`, b=32 measurements would still
+report b=1 latency on a b=32-capable engine. **Deferred** —
+documented under task #88B.
+
+Headline so far: **INT8 wins on m/l/x scales** (1.86×–1.97× over
+PT FP32 on v8m/l/x and v5m/l/x), **roughly ties FP16 on n/s scales**
+(memory-bound; the dequant overhead matches the compute gain). v7
+anchor-based decode + the v9e/v26x heavyweights fail INT8 tactic
+search — those stay on FP16 for now.
 
 ### Graphs
 

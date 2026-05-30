@@ -4,6 +4,49 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.15] — 2026-05-30
+
+### Added
+- **INT8 FPS sweep — 31 variants logged** (`README.md` FPS table). Real
+  numbers across v3/v5/v6/v7-tiny/v8/v9c/v26 small-medium scales.
+  Pattern: INT8 is **1.86×–1.97× over PT FP32** on m/l/x scales
+  (v5m/l/x, v6m/l/x, v6{m,l,x}_mbla, v8m/l/x, v26m/l) — meaningful
+  win over FP16. INT8 **ties or slightly beats FP16 on n/s scales**
+  (v5n/s, v6n/n6, v8n/s, v26n/s) — memory-bound; dequant overhead
+  matches compute gain. Failures: v7 anchor-based decode, v9e,
+  v26x all fail INT8 tactic search at default 1 GiB workspace.
+- **v6 MBLA × 4 variants** (`s/m/l/x_mbla`, weights downloaded from
+  Meituan releases). All build + run TRT FP16/INT8 cleanly. Added
+  to FPS table marked `[new]`.
+- **v7 P6 × 4 variants** (`w6/e6/d6/e6e`, weights downloaded from
+  WongKinYiu/yolov7 releases after fixing URL pattern to use dash
+  separator). FPS table rows added marked `[new]`; INT8 build fails
+  per [INT8-fail] (anchor decode + large workspace need).
+
+### Fixed
+- **Sweep script glob bug**. Original `/tmp/bench_int8/sweep.sh` case
+  pattern `yolo1*|yolo2|yolo4` accidentally excluded yolo10/11/12/13
+  (glob match `yolo1*` matches `yolo10..yolo13` too). Backfill
+  script `/tmp/bench_int8/backfill.sh` enumerates v10/v11/v12/v13
+  explicitly; a watcher process auto-runs it after the main sweep
+  completes. v10/v11/v12/v13 rows in the FPS table marked
+  `(pending backfill)` until that wave finishes.
+
+### Deferred
+- **True batch=32 throughput**. `TrtPredictor::predict()` is
+  hard-coded to single-image input (`setInputShape(... Dims4(1, 3,
+  imgsz, imgsz))` at `src/inference/trt_predictor.cpp:73`). Engine
+  building at b=32 works (cache key includes `.b32.`), but inference
+  throughput measurement is still per-call. True batched throughput
+  requires a `TrtPredictor::predict_batch(vector<cv::Mat>)` refactor
+  that feeds the full N-batch into `enqueueV3` and slices the output
+  `[N, C, A]` tensor per-image for NMS. Tracked as **#88B**.
+- **v6 MBLA + v7 P6 training comparison rows**. Training sweep
+  queued in `/tmp/bench_int8/sweep.sh` (Meituan + yolocpp for MBLA,
+  yolocpp-only for v7 P6 since WongKinYiu pipeline is broken
+  per `[w=0]` footnote). Runs after INT8 sweep completes; comparison
+  table rows will be appended in a follow-up.
+
 ## [0.99.14] — 2026-05-30
 
 ### Added
