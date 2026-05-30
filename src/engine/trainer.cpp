@@ -855,6 +855,15 @@ struct LossTraits<models::Yolo7> {
       c.strides  = {8, 16, 32, 64};
       c.scale_xy = {2.0f, 2.0f, 2.0f, 2.0f};
       c.balance  = {4.0f, 1.0f, 0.4f, 0.1f};
+      // The above anchors are calibrated at the upstream training
+      // resolution (imgsz=1280). At any other imgsz the GT distribution
+      // doesn't match — every anchor is too large by ~2× at 640 — so
+      // GT-to-anchor matching collapses and mAP saturates to 0.
+      // Upstream `check_anchors()` (autoanchor.py) reclusters when
+      // BPR<0.98; same effect achieved here by enabling autoanchor.
+      // Synced back into the model's `anchor_grid` buffer via
+      // `loss_after_init` so eval decodes with the same table.
+      c.autoanchor = true;
     } else {
       // v7-base/tiny/x anchors at imgsz=640 (yolov7.yaml).
       c.anchors = {

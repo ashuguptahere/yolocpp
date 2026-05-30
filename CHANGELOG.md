@@ -4,6 +4,41 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.17] — 2026-05-30
+
+### Fixed
+- **#87C v7 P6 train collapse (mAP=0)** — root cause was the
+  upstream-published P6 anchor table (yolov7-{w6,e6,d6,e6e}.yaml,
+  imgsz=1280 calibration) being used at imgsz=640 training. At
+  half the resolution every anchor is ~2× too large; GT-to-anchor
+  IoU matching collapses to 0 positives per GT, the loss converges
+  on degenerate predictions, and eval decodes 1000+ px boxes that
+  NMS filters out. Fix: enable `c.autoanchor = true` in the v7 P6
+  branch of `LossTraits<Yolo7>::make()` (one line) — `loss_after_init`
+  now reclusters via K-means from the training-set GT (w, h)
+  distribution and syncs the result back into the model's
+  `anchor_grid` buffer so eval decodes against the same anchors.
+  Verified on yolo7-w6 / 1-epoch / screen-dataset: mAP@0.5=0.20,
+  mAP@0.5:0.95=0.095 (vs 0 / 0 before). Matches WongKinYiu's
+  `check_anchors()` (autoanchor.py) behavior when BPR<0.98.
+- **v7 P6 weight files renamed to canonical** (`yolo7w6.pt` →
+  `yolo7-w6.pt`, same for e6 / d6 / e6e). The non-dashed names
+  bypassed `scale_from_filename`'s `-w6`/`-e6`/`-d6`/`-e6e` matcher
+  (`src/cli/resolve.cpp:649-652`), defaulting the scale to the v7
+  base 3-level P5 config — which is why the P6 branch wasn't even
+  entered before the anchor fix. The dashed form is what
+  `cli/resolve.cpp:187-190` and `test_v7_e2e.cpp` already use.
+- **#87B Meituan v6 MBLA runner** (`run_v6_meituan.sh`). MBLA configs
+  live under `configs/mbla/` in the upstream YOLOv6 repo, not under
+  `configs/` root. Added a case statement that picks
+  `configs/mbla/yolov6{*_mbla}.py` for `*_mbla` variants.
+
+### Notes
+- v7 P6 train re-sweep queued after the INT8 backfill +
+  Meituan MBLA rerun (`/tmp/bench_int8/rerun_v7p6.sh`). README
+  comparison-table rows will be updated in a follow-up commit
+  once the numbers land.
+
 ## [0.99.16] — 2026-05-30
 
 ### Added
