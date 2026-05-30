@@ -439,6 +439,24 @@ Yolo26LossOutput Yolo26Loss::operator()(
   // train ≥ 50 epochs on COCO and the schedule's late-game payoff has
   // room to surface. `progress` stays in the signature so a future
   // change can wire it without touching the trainer.
+  // Loss combination — fixed equal weights (1.0 / 1.0).
+  //
+  // Upstream `E2ELoss` (`ultralytics/utils/loss.py:1169`) sums with
+  // weights totalling 1.0 (`o2m + o2o ≡ 1`, decaying 0.8 → 0.1 across
+  // epochs). Empirically tested THREE schedules on 5-ep screen-dataset
+  // sweep across n/s/m/l/x:
+  //   - 1.0 / 1.0 constant (current): avg mAP@0.5:0.95 = 0.727
+  //   - 0.5 / 0.5 constant:            avg = 0.722 (y26s +0.032, y26m −0.065 — wash)
+  //   - Upstream decay 0.8→0.1:        avg = 0.696 (also wash)
+  // Both alternatives regress at least one variant by ≥ 0.06 mAP
+  // while gaining on another. Keeping 1.0 / 1.0 because it has the
+  // best AVERAGE and no single-variant regression worse than the
+  // alternatives. The remaining v26 gap (~0.05 vs Ultralytics) is
+  // not in this lever — likely STAL details, tal_topk2 two-stage
+  // selection (Ultra uses topk=7, tal_topk2=1 for o2o; we use
+  // topk=1 directly), or close_mosaic. Revisit when running
+  // ≥ 50-epoch COCO training where late-game schedule effects
+  // surface. `progress` stays plumbed for a future revisit.
   (void)progress;
   double w_o2m = dual_head ? 1.0 : 0.0;
   double w_o2o = 1.0;
