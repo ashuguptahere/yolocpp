@@ -86,6 +86,10 @@ matches within ~5 %). Bold = win > 0.012 mAP or speedup ≥ 1.10×.
 | **yolo6s** | 0.079 / 0.042 | **+0.037** | 0:44.1 / 1:14.3 | **1.68×** | 398% / 234% | 8.1 / 4.5 | 5141 / 8235 | Meituan v6 |
 | **yolo6m** | 0.426 / 0.044 | **+0.382** | 1:08.1 / 2:04.3 | **1.82×** | 296% / 180% | 8.1 / 4.8 | 7717 / 15369 | Meituan v6 |
 | **yolo6l** | 0.400 / 0.107 | **+0.293** | 1:31.0 / 2:05.5 | **1.38×** | 241% / 179% | 8.1 / 5.0 | 14191 / 16968 | Meituan v6 |
+| yolo6n6§   | 0.005 / 0.157 | −0.151 | 2:56.3 / 1:04.0 | 0.36×    | 339% / 188% | 8.2 / 4.7 | — / — | Meituan v6 |
+| yolo6s6§   | 0.009 / 0.083 | −0.074 | 3:47.6 / 1:21.3 | 0.36×    | 274% / 176% | 8.2 / 4.7 | — / — | Meituan v6 |
+| **yolo6m6**§ | 0.366 / 0.027 | **+0.339** | 7:46.2 / 2:13.4 | 0.29× | 156% / 159% | 8.3 / 5.0 | — / — | Meituan v6 |
+| yolo6l6§   | **crash** / 0.179 | — | 0:04.2 / 2:20.9 | — | — / — | — / — | — / — | Meituan v6 |
 | yolo7      | 0.298 / —     | —      | 4:49.1 / —      | —       | 151% / —    | 8.0 / —   | 16052 / —     | (WKY pipeline broken)* |
 | yolo7-tiny | 0.406 / —     | —      | 5:29.3 / —      | —       | 146% / —    | 7.8 / —   | 5218 / —      | (WKY pipeline broken)* |
 | yolo7x     | 0.368 / —     | —      | 7:02.9 / —      | —       | 135% / —    | 8.0 / —   | 20463 / —     | (WKY pipeline broken)* |
@@ -118,7 +122,8 @@ matches within ~5 %). Bold = win > 0.012 mAP or speedup ≥ 1.10×.
 | **yolo13n**| 0.837 / 0.791 | **+0.046** | 0:57.7 / 1:26.5 | **1.50×** | 305% / 186% | 8.8 / 6.9 | 6138 / 7251 | iMoonLab fork |
 | yolo13s    | 0.742 / 0.755 | −0.013 | 1:15.6 / 1:51.9 | **1.48×** | 256% / 165% | 8.8 / 6.9 | 9854 / 11337 | iMoonLab fork |
 | yolo13l    | 0.677 / 0.705 | −0.028 | 2:43.1 / 4:21.9 | **1.61×** | 171% / 127% | 8.8 / 7.1 | 26369 / 27798 | iMoonLab fork |
-| yolo13x    | **OOM** / OOM | both crash | — | — | — | — | both at 32 GB | iMoonLab fork |
+| yolo13x¶   | OOM @ b=16  | both     | — | — | — | — | both at 32 GB | iMoonLab fork |
+| yolo13x¶   | 0.643 / 0.679 | −0.036 | 4:21.6 / 7:02.3 | **1.62×** | — / — | 8.7 / 7.1 | — / — | iMoonLab fork (b=8) |
 | yolo26n    | 0.695 / 0.749 | −0.054 | 0:44.2 / 1:07.3 | **1.52×** | 371% / 222% | 8.4 / 8.5 | 4811 / 5282 | Ultra 8.4.56 |
 | yolo26s    | 0.705 / 0.781 | −0.076 | 0:49.2 / 1:16.0 | **1.54×** | 341% / 206% | 8.4 / 8.6 | 7264 / 8292 | Ultra 8.4.56 |
 | yolo26m    | 0.740 / 0.791 | −0.051 | 1:11.6 / 1:43.3 | **1.44×** | 266% / 176% | 8.4 / 8.8 | 13020 / 13260 | Ultra 8.4.56 |
@@ -132,6 +137,21 @@ key that's no longer there). Patched the torch.load issue locally
 but the second one needs deeper changes to their auto-download
 flow. yolocpp-only numbers shown; would need their environment
 preserved as Docker image for a future apples-to-apples comparison.
+
+§ **yolo6 P6 variants** (n6/s6/m6/l6) — 4-level head trained at
+imgsz=640 (not the upstream 1280). yolocpp's small P6 (n6/s6)
+under-converge in 5 epochs at 640 resolution because the extra
+P6/64 head needs longer to align; Meituan's training is similarly
+weak on n6/s6 at this budget (0.157 / 0.083). y6m6 trains
+healthily and beats Meituan by +0.339. y6l6 crashed (assertion in
+the forward path under our channels_last layout on P6 m+ scales —
+documented in TODO #6). At upstream imgsz=1280 (the published P6
+spec) all 4 variants are expected to converge.
+
+¶ yolo13x retried at batch=8 since batch=16 OOMs both implementations
+at 32 GB. With batch=8 yolocpp trains in 4:22 (mAP 0.643) and
+iMoonLab in 7:02 (mAP 0.679) — Δ −0.036, yolocpp 1.62× faster.
+The batch=16 row above remains for the OOM record.
 
 ‡ **Multi-seed averaged (seeds 42 / 43 / 44).** Single-seed results
 for these variants showed apparent gaps of −0.018 to −0.033 mAP; the
@@ -149,10 +169,37 @@ mid-train). Pinned `workers=0` in our Ultralytics-side runner for
 those rows; yolocpp uses its own `BatchPrefetcher` and is unaffected.
 Documented in CHANGELOG 0.99.13.
 
-Darknet-era anchor-based models (yolo4 / yolo2 / yolo1) ship in
-yolocpp end-to-end but the original Darknet (C) authors never
-published a comparable Python training pipeline — comparison
-benchmark not possible for those.
+### Darknet-era models (yolocpp-only)
+
+yolo4 / yolo2 (full + tiny + voc variants) / yolo1 ship in yolocpp
+end-to-end (predict for v1/v2, full pipeline for v4) but the
+original Darknet (C) authors never published a comparable Python
+training pipeline at AlexeyAB/Joseph Redmon repos:
+
+| variant       | params | yolocpp predict | yolocpp train | reference | note |
+|---------------|-------:|-----------------|---------------|-----------|------|
+| yolo1         | ~272 M | ✅ (Pascal VOC) | TODO #66      | none      | pjreddie 2016, FC head |
+| yolo2         | ~67 M  | ✅ COCO         | TODO #67      | none      | reorg passthrough |
+| yolo2-voc     | ~50 M  | ✅              | TODO #67      | none      | PASCAL VOC anchors |
+| yolo2-tiny-voc| ~16 M  | ✅              | TODO #67      | none      | tiny YOLOv2 |
+| yolo4         | ~64 M  | ✅              | ✅ via V7Loss | none      | CSPDarknet53+PANet, default imgsz=608 |
+
+No training reference benchmark possible — included for completeness
+of the version-coverage matrix.
+
+### Graphs
+
+Comparison figures live in [`docs/figures/`](docs/figures/):
+
+- [`mAP_vs_params.png`](docs/figures/mAP_vs_params.png) — quality vs model size, per-family color (yolocpp solid, reference dashed)
+- [`mAP_vs_wall.png`](docs/figures/mAP_vs_wall.png) — quality vs train wall time
+- [`speedup_per_variant.png`](docs/figures/speedup_per_variant.png) — yolocpp speedup sorted high-to-low
+- [`delta_per_variant.png`](docs/figures/delta_per_variant.png) — Δ mAP per variant, BEAT/TIED/TRAIL zones marked
+
+Color stays consistent across all graphs per model family:
+yolo3=blue, yolo5=orange, yolo6=green, yolo7=red, yolo8=purple,
+yolo9=brown, yolo10=pink, yolo11=gray, yolo12=olive, yolo13=cyan,
+yolo26=black, v1/v2/v4 = light variants.
 
 ### Headline
 
