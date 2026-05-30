@@ -40,6 +40,8 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   std::string export_precision, export_after_train, dl_target, cache_dir = "build/bench_cache";
   int    imgsz = 640, epochs = 100, batch_size = 16, nc = 80;
   int    patience = 0, warmup = 10, iters = 100;
+  std::string bench_precision = "fp32,fp16";  // CSV of fp32 | fp16 | int8
+  std::string int8_calib_dir, int8_calib_cache;
   double lr0   = 0.01;
   // -1 → use trainer default (0.01 = cosine to 1% of lr0). Set to
   // 1.0 for constant LR (no cosine decay). Threaded through cmd_train
@@ -106,6 +108,12 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   app.add_option("--warmup",     warmup,      "benchmark warmup iters");
   app.add_option("--iters",      iters,       "benchmark timed iters");
   app.add_option("--cache",      cache_dir,   "TRT engine cache directory");
+  app.add_option("--bench-precision", bench_precision,
+                 "benchmark precision list (csv: fp32,fp16,int8). int8 needs --int8-calib");
+  app.add_option("--int8-calib", int8_calib_dir,
+                 "INT8 calibration image directory (val split recommended)");
+  app.add_option("--int8-calib-cache", int8_calib_cache,
+                 "INT8 calibration cache file (default: <engine>.calib)");
   app.add_option("--dataset",    dl_target,
                   "download mode: dataset short-name (coco8, VOC, ...) or .zip URL");
 
@@ -260,7 +268,8 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   if (mode == "benchmark") {
     if (!need(mode, "model",  !weights.empty())) return 2;
     if (!need(mode, "source", !source.empty()))  return 2;
-    return cmd_benchmark(weights, source, imgsz, warmup, iters, cache_dir, device);
+    return cmd_benchmark(weights, source, imgsz, warmup, iters, cache_dir, device,
+                         batch_size, bench_precision, int8_calib_dir, int8_calib_cache);
   }
 
   if (mode == "download") {

@@ -4,6 +4,49 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.14] — 2026-05-30
+
+### Added
+- **INT8 TRT export + INT8 benchmark** (`src/serialization/trt_export.cpp`,
+  `src/engine/benchmark.cpp`). New `TrtBuildConfig::int8`,
+  `calib_image_dir`, `calib_cache` fields wire an
+  `IInt8EntropyCalibrator2` subclass that walks a directory of
+  JPG/PNG images, letterboxes each to `imgsz×imgsz` BGR→RGB float
+  [0, 1], uploads `batch_opt` images at a time. Cache file stores
+  the entropy histogram across builds. CLI: `--bench-precision
+  fp32,fp16,int8 --int8-calib <val/images/dir>` on `--mode benchmark`.
+  yolo11n INT8 at batch=1, RTX 5090: **437 fps** (vs FP16 517, FP32
+  432, PT 234) — INT8 has per-layer dequant overhead that doesn't
+  pay off on the n-scale conv stack; expected to win on m/l/x sizes.
+- **`--batch` on `--mode benchmark`** — TRT engines now build with
+  the requested optimisation-profile batch and the cache encodes
+  `.b{N}.{prec}.trt` so b=1 and b=32 engines coexist. Inference
+  throughput measurement is still per-call (b=1 equivalent) because
+  `TrtPredictor` takes one image at a time; the engine builds at
+  any batch but runtime per-image latency is what's reported.
+  TODO: extend `TrtPredictor` to accept a batched input for true
+  b=32 throughput measurement.
+
+### Fixed
+- **README footnote cruft**. Replaced obscure single-character
+  markers `§`, `‡`, `¶`, `†` (which rendered as garbled symbols
+  in some terminals) with explicit bracketed footnotes `[avg-3]`,
+  `[P6]`, `[w=0]`, and inline qualifiers like `yolo13x [b=8]` so
+  it's obvious from the row label what the special case is.
+- **Duplicate yolo13x row**. Previous README had two rows: one
+  marking `**OOM** / OOM @ b=16` and one with the b=8 numbers.
+  Merged into a single row with the b=8 results + an inline note
+  about the b=16 OOM.
+
+### Added — docs
+- **"Not yet benchmarked" section** in README listing variants
+  supported by yolocpp but missing from the comparison table
+  because the local weight cache doesn't have them yet: yolo1
+  (pjreddie's original), yolo6 MBLA variants (s/m/l/x_mbla),
+  yolo7 P6 variants (w6/e6/d6/e6e), yolo13m (doesn't exist
+  upstream), yolo13l TRT FP16 latency (TRT build hung on the
+  sweep, rerun pending).
+
 ## [0.99.13] — 2026-05-30
 
 ### Fixed

@@ -106,12 +106,18 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
 
   fs::create_directories(cfg.cache_dir);
   auto stem      = base_name(cfg.weights);
+  // Engine caches encode imgsz, batch, precision so the same model at
+  // different batch sizes coexists (b=1 single-image latency vs b=32
+  // throughput).
+  auto bs_tag    = "b" + std::to_string(cfg.batch_size);
   auto onnx_path = (fs::path(cfg.cache_dir) /
                     (stem + "." + std::to_string(cfg.imgsz) + ".onnx")).string();
   auto trt32     = (fs::path(cfg.cache_dir) /
-                    (stem + "." + std::to_string(cfg.imgsz) + ".fp32.trt")).string();
+                    (stem + "." + std::to_string(cfg.imgsz) + "." + bs_tag + ".fp32.trt")).string();
   auto trt16     = (fs::path(cfg.cache_dir) /
-                    (stem + "." + std::to_string(cfg.imgsz) + ".fp16.trt")).string();
+                    (stem + "." + std::to_string(cfg.imgsz) + "." + bs_tag + ".fp16.trt")).string();
+  auto trt8      = (fs::path(cfg.cache_dir) /
+                    (stem + "." + std::to_string(cfg.imgsz) + "." + bs_tag + ".int8.trt")).string();
 
   std::vector<BenchResult> results;
 
@@ -131,21 +137,27 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
   }
 
   // Build/cache ONNX once if any TRT path is requested.
-  bool need_onnx = cfg.run_trt_fp32 || cfg.run_trt_fp16;
+  bool need_onnx = cfg.run_trt_fp32 || cfg.run_trt_fp16 || cfg.run_trt_int8;
   if (need_onnx && !fs::exists(onnx_path)) {
     build_onnx_for(cfg, version, scale_s, onnx_path);
   }
+
+  // Helper that fills in the per-batch profile + v10 TF32 quirk.
+  auto with_batch_profile = [&](serialization::TrtBuildConfig& tcfg) {
+    tcfg.imgsz = cfg.imgsz;
+    tcfg.builder_opt_level = 1;
+    tcfg.batch_min = 1;
+    tcfg.batch_opt = cfg.batch_size;
+    tcfg.batch_max = cfg.batch_size;
+    if (version == "v10") tcfg.tf32 = false;
+  };
 
   // ── TRT FP32 ────────────────────────────────────────────────────────────
   if (cfg.run_trt_fp32) {
     if (!fs::exists(trt32)) {
       serialization::TrtBuildConfig tcfg;
-      tcfg.imgsz = cfg.imgsz;
-      tcfg.fp16  = false;
-      tcfg.builder_opt_level = 1;
-      // v10 saturates cls under TF32 — clear the kTF32 builder flag to
-      // force true FP32 math (mirrors `cmd_export`'s v10 override).
-      if (version == "v10") tcfg.tf32 = false;
+      with_batch_profile(tcfg);
+      tcfg.fp16 = false;
       serialization::build_trt_engine(onnx_path, trt32, tcfg);
     }
     inference::TrtPredictor p(trt32, cfg.imgsz);
@@ -157,15 +169,35 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
   if (cfg.run_trt_fp16) {
     if (!fs::exists(trt16)) {
       serialization::TrtBuildConfig tcfg;
-      tcfg.imgsz = cfg.imgsz;
-      tcfg.fp16  = true;
-      tcfg.builder_opt_level = 1;
-      if (version == "v10") tcfg.tf32 = false;
+      with_batch_profile(tcfg);
+      tcfg.fp16 = true;
       serialization::build_trt_engine(onnx_path, trt16, tcfg);
     }
     inference::TrtPredictor p(trt16, cfg.imgsz);
     results.push_back(bench_one("TRT FP16", img, p,
                                 cfg.warmup_iters, cfg.iters));
+  }
+
+  // ── TRT INT8 ────────────────────────────────────────────────────────────
+  if (cfg.run_trt_int8) {
+    if (cfg.int8_calib_dir.empty()) {
+      std::cerr << "[bench] INT8 requested but --int8-calib unset; skipping\n";
+    } else {
+      if (!fs::exists(trt8)) {
+        serialization::TrtBuildConfig tcfg;
+        with_batch_profile(tcfg);
+        tcfg.int8 = true;
+        tcfg.fp16 = true;  // mixed INT8/FP16: layers without INT8 fall back to FP16
+        tcfg.calib_image_dir = cfg.int8_calib_dir;
+        tcfg.calib_cache     = cfg.int8_calib_cache.empty()
+            ? trt8 + ".calib"
+            : cfg.int8_calib_cache;
+        serialization::build_trt_engine(onnx_path, trt8, tcfg);
+      }
+      inference::TrtPredictor p(trt8, cfg.imgsz);
+      results.push_back(bench_one("TRT INT8", img, p,
+                                  cfg.warmup_iters, cfg.iters));
+    }
   }
 
   return results;

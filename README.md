@@ -86,44 +86,43 @@ matches within ~5 %). Bold = win > 0.012 mAP or speedup ≥ 1.10×.
 | **yolo6s** | 0.079 / 0.042 | **+0.037** | 0:44.1 / 1:14.3 | **1.68×** | 398% / 234% | 8.1 / 4.5 | 5141 / 8235 | Meituan v6 |
 | **yolo6m** | 0.426 / 0.044 | **+0.382** | 1:08.1 / 2:04.3 | **1.82×** | 296% / 180% | 8.1 / 4.8 | 7717 / 15369 | Meituan v6 |
 | **yolo6l** | 0.400 / 0.107 | **+0.293** | 1:31.0 / 2:05.5 | **1.38×** | 241% / 179% | 8.1 / 5.0 | 14191 / 16968 | Meituan v6 |
-| yolo6n6§   | 0.005 / 0.157 | −0.151 | 2:56.3 / 1:04.0 | 0.36×    | 339% / 188% | 8.2 / 4.7 | — / — | Meituan v6 |
-| yolo6s6§   | 0.009 / 0.083 | −0.074 | 3:47.6 / 1:21.3 | 0.36×    | 274% / 176% | 8.2 / 4.7 | — / — | Meituan v6 |
-| **yolo6m6**§ | 0.366 / 0.027 | **+0.339** | 7:46.2 / 2:13.4 | 0.29× | 156% / 159% | 8.3 / 5.0 | — / — | Meituan v6 |
-| yolo6l6§   | **crash** / 0.179 | — | 0:04.2 / 2:20.9 | — | — / — | — / — | — / — | Meituan v6 |
+| yolo6n6[P6]   | 0.005 / 0.157 | −0.151 | 2:56.3 / 1:04.0 | 0.36×    | 339% / 188% | 8.2 / 4.7 | — / — | Meituan v6 |
+| yolo6s6[P6]   | 0.009 / 0.083 | −0.074 | 3:47.6 / 1:21.3 | 0.36×    | 274% / 176% | 8.2 / 4.7 | — / — | Meituan v6 |
+| **yolo6m6**[P6] | 0.366 / 0.027 | **+0.339** | 7:46.2 / 2:13.4 | 0.29× | 156% / 159% | 8.3 / 5.0 | — / — | Meituan v6 |
+| yolo6l6[P6]   | **crash** / 0.179 | — | 0:04.2 / 2:20.9 | — | — / — | — / — | — / — | Meituan v6 |
 | yolo7      | 0.298 / —     | —      | 4:49.1 / —      | —       | 151% / —    | 8.0 / —   | 16052 / —     | (WKY pipeline broken)* |
 | yolo7-tiny | 0.406 / —     | —      | 5:29.3 / —      | —       | 146% / —    | 7.8 / —   | 5218 / —      | (WKY pipeline broken)* |
 | yolo7x     | 0.368 / —     | —      | 7:02.9 / —      | —       | 135% / —    | 8.0 / —   | 20463 / —     | (WKY pipeline broken)* |
 | yolo8n     | 0.768 / 0.759 | +0.010 | 0:32.1 / 0:43.8 | **1.36×** | 490% / 297% | 8.1 / 8.3 | 4389 / 4997 | Ultra 8.4.56 |
 | **yolo8s** | 0.806 / 0.739 | **+0.067** | 0:36.4 / 0:51.9 | **1.42×** | 429% / 260% | 8.1 / 8.4 | 6045 / 6899 | Ultra 8.4.56 |
-| yolo8m‡    | 0.706 / 0.695 | **+0.011** | 0:53.7 / 1:17.4 | **1.44×** | 323% / 202% | 8.1 / 8.7 | 9120 / 10322 | Ultra 8.4.56 |
+| yolo8m[avg-3]    | 0.706 / 0.695 | **+0.011** | 0:53.7 / 1:17.4 | **1.44×** | 323% / 202% | 8.1 / 8.7 | 9120 / 10322 | Ultra 8.4.56 |
 | yolo8l     | 0.668 / 0.663 | +0.005 | 1:15.5 / 1:45.8 | **1.40×** | 258% / 173% | 8.0 / 8.9 | 13622 / 13828 | Ultra 8.4.56 |
 | **yolo8x** | 0.682 / 0.660 | **+0.022** | 1:46.1 / 2:23.3 | **1.35×** | 213% / 154% | 8.3 / 9.3 | 16693 / 16859 | Ultra 8.4.56 |
 | yolo9t     | 0.697 / 0.722 | −0.025 | 0:43.0 / 1:14.6 | **1.73×** | 382% / 207% | 8.1 / 8.3 | 5729 / 6101 | Ultra 8.4.56 |
 | yolo9s     | 0.704 / 0.718 | −0.015 | 0:47.1 / 1:19.5 | **1.69×** | 352% / 200% | 8.1 / 8.4 | 7158 / 8509 | Ultra 8.4.56 |
-| **yolo9m**‡ | 0.697 / 0.684 | **+0.013** | 1:07.0 / 2:31.4 | **2.26×** | 276% / 99% | 8.2 / 4.0 | 11269 / 11563 | Ultra 8.4.56† |
-| **yolo9c** | 0.694 / 0.654 | **+0.040** | 1:19.4 / 2:44.1 | **2.07×** | 249% / 99% | 8.1 / 4.1 | 13908 / 14571 | Ultra 8.4.56† |
-| **yolo9e** | 0.655 / 0.643 | **+0.012** | 2:28.6 / 4:34.6 | **1.85×** | 179% / 99% | 8.2 / 4.6 | 24078 / 23920 | Ultra 8.4.56† |
-| **yolo10n**| 0.711 / 0.698 | **+0.013** | 0:40.0 / 1:46.7 | **2.67×** | 400% / 99% | 8.5 / 4.1 | 4642 / 5813 | Ultra 8.4.56† |
-| yolo10s‡   | 0.690 / 0.743 | **−0.053** | 0:45.6 / 1:57.5 | **2.58×** | 361% / 99% | 8.5 / 4.2 | 6700 / 8268 | Ultra 8.4.56† |
-| **yolo10m**| 0.719 / 0.690 | **+0.028** | 1:03.6 / 2:24.2 | **2.27×** | 285% / 99% | 8.5 / 4.3 | 10542 / 12490 | Ultra 8.4.56† |
-| **yolo10b**| 0.675 / 0.651 | **+0.024** | 1:12.6 / 2:36.7 | **2.16×** | 263% / 99% | 8.5 / 4.3 | 13442 / 15486 | Ultra 8.4.56† |
-| **yolo10l**| 0.691 / 0.628 | **+0.063** | 1:23.9 / 2:53.3 | **2.07×** | 240% / 99% | 8.4 / 4.3 | 16098 / 17154 | Ultra 8.4.56† |
-| yolo10x‡   | 0.674 / 0.671 | **+0.003** | 1:52.2 / 3:29.7 | **1.87×** | 204% / 99% | 8.5 / 4.4 | 20492 / 19907 | Ultra 8.4.56† |
+| **yolo9m**[avg-3] | 0.697 / 0.684 | **+0.013** | 1:07.0 / 2:31.4 | **2.26×** | 276% / 99% | 8.2 / 4.0 | 11269 / 11563 | Ultra 8.4.56[w=0] |
+| **yolo9c** | 0.694 / 0.654 | **+0.040** | 1:19.4 / 2:44.1 | **2.07×** | 249% / 99% | 8.1 / 4.1 | 13908 / 14571 | Ultra 8.4.56[w=0] |
+| **yolo9e** | 0.655 / 0.643 | **+0.012** | 2:28.6 / 4:34.6 | **1.85×** | 179% / 99% | 8.2 / 4.6 | 24078 / 23920 | Ultra 8.4.56[w=0] |
+| **yolo10n**| 0.711 / 0.698 | **+0.013** | 0:40.0 / 1:46.7 | **2.67×** | 400% / 99% | 8.5 / 4.1 | 4642 / 5813 | Ultra 8.4.56[w=0] |
+| yolo10s[avg-3]   | 0.690 / 0.743 | **−0.053** | 0:45.6 / 1:57.5 | **2.58×** | 361% / 99% | 8.5 / 4.2 | 6700 / 8268 | Ultra 8.4.56[w=0] |
+| **yolo10m**| 0.719 / 0.690 | **+0.028** | 1:03.6 / 2:24.2 | **2.27×** | 285% / 99% | 8.5 / 4.3 | 10542 / 12490 | Ultra 8.4.56[w=0] |
+| **yolo10b**| 0.675 / 0.651 | **+0.024** | 1:12.6 / 2:36.7 | **2.16×** | 263% / 99% | 8.5 / 4.3 | 13442 / 15486 | Ultra 8.4.56[w=0] |
+| **yolo10l**| 0.691 / 0.628 | **+0.063** | 1:23.9 / 2:53.3 | **2.07×** | 240% / 99% | 8.4 / 4.3 | 16098 / 17154 | Ultra 8.4.56[w=0] |
+| yolo10x[avg-3]   | 0.674 / 0.671 | **+0.003** | 1:52.2 / 3:29.7 | **1.87×** | 204% / 99% | 8.5 / 4.4 | 20492 / 19907 | Ultra 8.4.56[w=0] |
 | yolo11n    | 0.748 / 0.738 | +0.011 | 0:38.1 / 0:55.2 | **1.45×** | 416% / 253% | 8.4 / 8.5 | 4669 / 5187 | Ultra 8.4.56 |
-| yolo11s‡   | 0.708 / 0.720 | −0.012 | 0:43.0 / 1:02.3 | **1.45×** | 377% / 232% | 8.4 / 8.6 | 6657 / 7693 | Ultra 8.4.56 |
-| yolo11m‡   | 0.664 / 0.655 | **+0.009** | 1:02.8 / 1:30.4 | **1.44×** | 291% / 188% | 8.4 / 8.7 | 12080 / 12255 | Ultra 8.4.56 |
-| yolo11l‡   | 0.654 / 0.650 | **+0.004** | 1:15.1 / 1:49.1 | **1.45×** | 261% / 172% | 8.4 / 8.9 | 15844 / 15470 | Ultra 8.4.56 |
-| **yolo11x**‡ | 0.615 / 0.600 | **+0.015** | 1:51.5 / 2:36.1 | **1.40×** | 207% / 149% | 8.5 / 9.3 | 21137 / 18836 | Ultra 8.4.56 |
+| yolo11s[avg-3]   | 0.708 / 0.720 | −0.012 | 0:43.0 / 1:02.3 | **1.45×** | 377% / 232% | 8.4 / 8.6 | 6657 / 7693 | Ultra 8.4.56 |
+| yolo11m[avg-3]   | 0.664 / 0.655 | **+0.009** | 1:02.8 / 1:30.4 | **1.44×** | 291% / 188% | 8.4 / 8.7 | 12080 / 12255 | Ultra 8.4.56 |
+| yolo11l[avg-3]   | 0.654 / 0.650 | **+0.004** | 1:15.1 / 1:49.1 | **1.45×** | 261% / 172% | 8.4 / 8.9 | 15844 / 15470 | Ultra 8.4.56 |
+| **yolo11x**[avg-3] | 0.615 / 0.600 | **+0.015** | 1:51.5 / 2:36.1 | **1.40×** | 207% / 149% | 8.5 / 9.3 | 21137 / 18836 | Ultra 8.4.56 |
 | yolo12n    | 0.719 / 0.722 | −0.003 | 0:45.2 / 1:03.6 | **1.41×** | 364% / 229% | 8.3 / 8.5 | 6684 / 6602 | Ultra 8.4.56 |
-| yolo12s‡   | 0.696 / 0.702 | −0.006 | 0:58.5 / 1:20.0 | **1.37×** | 302% / 199% | 8.5 / 8.6 | 9262 / 9885 | Ultra 8.4.56 |
+| yolo12s[avg-3]   | 0.696 / 0.702 | −0.006 | 0:58.5 / 1:20.0 | **1.37×** | 302% / 199% | 8.5 / 8.6 | 9262 / 9885 | Ultra 8.4.56 |
 | yolo12m    | 0.636 / 0.644 | −0.007 | 1:30.4 / 1:58.6 | **1.31×** | 230% / 166% | 8.4 / 8.8 | 15364 / 15777 | Ultra 8.4.56 |
 | **yolo12l**| 0.641 / 0.627 | **+0.014** | 2:16.0 / 2:49.9 | **1.25×** | 187% / 145% | 8.4 / 8.9 | 21542 / 19051 | Ultra 8.4.56 |
-| **yolo12x**‡ | 0.620 / 0.595 | **+0.026** | 3:20.3 / 4:01.5 | **1.21×** | 160% / 132% | 8.5 / 9.3 | 31347 / 27772 | Ultra 8.4.56 |
+| **yolo12x**[avg-3] | 0.620 / 0.595 | **+0.026** | 3:20.3 / 4:01.5 | **1.21×** | 160% / 132% | 8.5 / 9.3 | 31347 / 27772 | Ultra 8.4.56 |
 | **yolo13n**| 0.837 / 0.791 | **+0.046** | 0:57.7 / 1:26.5 | **1.50×** | 305% / 186% | 8.8 / 6.9 | 6138 / 7251 | iMoonLab fork |
 | yolo13s    | 0.742 / 0.755 | −0.013 | 1:15.6 / 1:51.9 | **1.48×** | 256% / 165% | 8.8 / 6.9 | 9854 / 11337 | iMoonLab fork |
 | yolo13l    | 0.677 / 0.705 | −0.028 | 2:43.1 / 4:21.9 | **1.61×** | 171% / 127% | 8.8 / 7.1 | 26369 / 27798 | iMoonLab fork |
-| yolo13x¶   | OOM @ b=16  | both     | — | — | — | — | both at 32 GB | iMoonLab fork |
-| yolo13x¶   | 0.643 / 0.679 | −0.036 | 4:21.6 / 7:02.3 | **1.62×** | — / — | 8.7 / 7.1 | — / — | iMoonLab fork (b=8) |
+| yolo13x [b=8] | 0.643 / 0.679 | −0.036 | 4:21.6 / 7:02.3 | **1.62×** | — / — | 8.7 / 7.1 | — / — | iMoonLab fork (both impls OOM at b=16 on 32 GB) |
 | yolo26n    | 0.695 / 0.749 | −0.054 | 0:44.2 / 1:07.3 | **1.52×** | 371% / 222% | 8.4 / 8.5 | 4811 / 5282 | Ultra 8.4.56 |
 | yolo26s    | 0.705 / 0.781 | −0.076 | 0:49.2 / 1:16.0 | **1.54×** | 341% / 206% | 8.4 / 8.6 | 7264 / 8292 | Ultra 8.4.56 |
 | yolo26m    | 0.740 / 0.791 | −0.051 | 1:11.6 / 1:43.3 | **1.44×** | 266% / 176% | 8.4 / 8.8 | 13020 / 13260 | Ultra 8.4.56 |
@@ -138,7 +137,7 @@ but the second one needs deeper changes to their auto-download
 flow. yolocpp-only numbers shown; would need their environment
 preserved as Docker image for a future apples-to-apples comparison.
 
-§ **yolo6 P6 variants** (n6/s6/m6/l6) — 4-level head trained at
+**Footnote `[P6]`** — yolo6 P6 variants (n6/s6/m6/l6) — 4-level head trained at
 imgsz=640 (not the upstream 1280). yolocpp's small P6 (n6/s6)
 under-converge in 5 epochs at 640 resolution because the extra
 P6/64 head needs longer to align; Meituan's training is similarly
@@ -148,12 +147,7 @@ the forward path under our channels_last layout on P6 m+ scales —
 documented in TODO #6). At upstream imgsz=1280 (the published P6
 spec) all 4 variants are expected to converge.
 
-¶ yolo13x retried at batch=8 since batch=16 OOMs both implementations
-at 32 GB. With batch=8 yolocpp trains in 4:22 (mAP 0.643) and
-iMoonLab in 7:02 (mAP 0.679) — Δ −0.036, yolocpp 1.62× faster.
-The batch=16 row above remains for the OOM record.
-
-‡ **Multi-seed averaged (seeds 42 / 43 / 44).** Single-seed results
+**Footnote `[avg-3]`** — multi-seed averaged (seeds 42 / 43 / 44). Single-seed results
 for these variants showed apparent gaps of −0.018 to −0.033 mAP; the
 three-seed mean reveals that variance for these specific (variant,
 seed) combinations is **±0.02 mAP from run to run** — eating the
@@ -163,11 +157,24 @@ a true residual** (−0.053 stable across all three seeds). Tested
 enabling dual-head v10 training (matching Ultralytics' E2ELoss
 default) — regressed y10s to 0.641, so reverted. See CHANGELOG 0.99.13.
 
-† Ultralytics 8.4.56 + v9 medium-and-up + v10 + Blackwell deadlocks
+**Footnote `[w=0]`** — Ultralytics 8.4.56 + v9 medium-and-up + v10 + Blackwell deadlocks
 on the default `workers=8` DataLoader workers (stalls at 0 % CPU
 mid-train). Pinned `workers=0` in our Ultralytics-side runner for
 those rows; yolocpp uses its own `BatchPrefetcher` and is unaffected.
 Documented in CHANGELOG 0.99.13.
+
+### Not yet benchmarked
+
+Variants supported by yolocpp but not in the table above because the
+local weight cache doesn't have them yet. Each is one `curl` away:
+
+| variant | upstream URL pattern | reason missing | yolocpp support |
+|---------|----------------------|----------------|-----------------|
+| yolo1   | `https://pjreddie.com/media/files/yolov1.weights` | Joseph Redmon's original Darknet weights — not auto-downloaded yet | predict-only (TODO #66 for train/export) |
+| yolo6 `*_mbla` (s/m/l/x) | `https://github.com/meituan/YOLOv6/releases/download/0.4.0/yolov6{s,m,l,x}_mbla.pt` | upstream-shipped variants; bench infra ready | full pipeline |
+| yolo7 P6 (w6/e6/d6/e6e) | `https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7{w6,e6,d6,e6e}.pt` | upstream-shipped IDetect anchor variants | predict + val + ONNX + TRT; yolocpp-only (WKY's training pipeline broken under current torch — see `[w=0]`) |
+| yolo13m | n/a | iMoonLab fork doesn't ship an `m` variant | — |
+| yolo13l TRT FP16 latency | (build hung) | one-off TensorRT build hang during the FPS sweep; rerun on the next pass | mAP/wall already in main table |
 
 ### Darknet-era models (yolocpp-only)
 
@@ -382,7 +389,7 @@ v27+) are intentionally not supported.
 | **yolo7**  | 2022 | Wang, Bochkovskiy & Liao (academic)        | ELAN backbone + ELAN-W neck + MP/DownC downsamples + SPPCSPC + (3-level IDetect for base/tiny/x; 4-level IDetect + ReOrg input for w6/e6/d6/e6e). e6e adds E-ELAN parallel ELAN sub-blocks summed via Yolo7Shortcut | ✅ **predict + val for all 7 variants**, **train + ONNX+TRT export** for the IDetect anchor-decode form. v7 train via `V7DetectionLoss` (scale_xy=2.0 + `(sigmoid*2)²` wh decode); base finetune mAP@0.5:0.95=0.72 on coco8. v7 ONNX walks the per-scale yaml via the public `yolo7_yaml_for(scale)` accessor. |
 | **yolo8**  | 2023 | upstream (official)                        | CSP + C2f backbone, anchor-free DFL Detect, TAL assigner | ✅ **full** — train / val / predict / export across 5 scales × 5 tasks (detect / segment / classify / pose / OBB) |
 | **yolo9**  | 2024 | Wang, Yeh & Liao (academic)                | GELAN backbone (RepNCSPELAN4 + ADown/AConv + SPPELAN + ELAN1) + v8-style anchor-free Detect head; PGI auxiliary branch dropped at deploy. e adds CBLinear/CBFuse two-pass backbone | ✅ **predict + val + train + ONNX/TRT export for all 5 scales (t / s / m / c / e)**. e ONNX (added 0.20.0) emits the 43-layer two-pass graph: a primary backbone with 5 CBLinear taps, a secondary backbone that re-ingests the input image and pulls CBLinear branches via CBFuse (`Slice` + `Resize(mode=nearest)` + `Add`) at each downsample, plus the standard GELAN head. v9{c,e} TRT FP32 returns 5 dets on bus.jpg matching libtorch. PGI auxiliary branch is intentionally not wired (training-only upstream). |
-| **yolo10** | 2024 | Tsinghua MIG (academic, upstream-hosted)   | SCDown + C2f + C2fCIB + SPPF + PSA backbone; v10Detect (one2one head used at deploy → effectively NMS-free) | ✅ **predict + val + train + ONNX+TRT export for all 6 scales (n / s / m / b / l / x)**. Single-head training uses the deploy one2one head with `V8DetectionLoss`; paper §3.1 dual-head consistent assignment (added 0.22.0) trains a parallel one2many head (legacy=true cv3) with `V10DualLoss` = `V8DetectionLoss(o2m, topk=10)` + `V8DetectionLoss(o2o, topk=1)` — enable via `dual_head=true`. TRT FP32 disables TF32 per-version (the RepVGGDW 7×7 dwconv stack accumulates enough TF32 mantissa loss to saturate cls); after the fix every scale matches ORT (5 dets on bus.jpg, top conf 0.94–0.97). |
+| **yolo10** | 2024 | Tsinghua MIG (academic, upstream-hosted)   | SCDown + C2f + C2fCIB + SPPF + PSA backbone; v10Detect (one2one head used at deploy → effectively NMS-free) | ✅ **predict + val + train + ONNX+TRT export for all 6 scales (n / s / m / b / l / x)**. Single-head training uses the deploy one2one head with `V8DetectionLoss`; paper [P6]3.1 dual-head consistent assignment (added 0.22.0) trains a parallel one2many head (legacy=true cv3) with `V10DualLoss` = `V8DetectionLoss(o2m, topk=10)` + `V8DetectionLoss(o2o, topk=1)` — enable via `dual_head=true`. TRT FP32 disables TF32 per-version (the RepVGGDW 7×7 dwconv stack accumulates enough TF32 mantissa loss to saturate cls); after the fix every scale matches ORT (5 dets on bus.jpg, top conf 0.94–0.97). |
 | **yolo11** | 2024 | **upstream (official)**                    | Refined CSP: C3k2 (kernel-tunable C3) + C2PSA (position-sensitive attention); v11 Detect head with depthwise-separable cv3 (DWConv→Conv) | ✅ **full** — train / val / predict / ONNX + TRT export across 5 scales × 5 tasks. Forward bit-exact vs upstream Python through layer 22 (parity harness verified). Full-COCO val mAP@0.5:0.95 within 0.05% of upstream's own `m.val(rect=False)` on n/s. |
 | **yolo12** | 2025 | Tian et al., upstream-hosted               | Attention-centric: A2C2f (Area-Attention C2f) with windowed global attention, gamma-gated outer residual at l/x | ✅ **detect end-to-end** — train / val / predict / ONNX + TRT export across all 5 scales (n/s/m/l/x). Forward parity-clean (5/5/5/6/5 detections matching Python on bus.jpg). ONNX max\|Δ\| ≤ 1.8e-7 vs Python through onnxruntime. Task heads (segment / pose / obb / classify) ⏳ **planned future session** — upstream ships only detect weights for v12, so we'll train our own task heads on COCO. |
 | **yolo13** | 2025 | Lei et al. (iMoonLab fork)                 | HyperACE (hypergraph adaptive correlation enhancement) + FullPAD distribution + DSConv depthwise-separable variants + V13AAttn (separate qk/v convs, k=5 pe) | ✅ **detect end-to-end** — train / val / predict / ONNX + TRT export across n/s/l/x (iMoonLab does not ship `m`). Forward cls-channel max\|Δ\| ≤ 7.6e-10 vs iMoonLab Python on all 4 scales. ONNX max\|Δ\| ≤ 1.8e-7. Task heads ⏳ **planned future session** — iMoonLab ships only detect weights, so we'll train our own task heads on COCO. |
@@ -417,7 +424,7 @@ yolo13        ✅       ✅            ✅       ✅                ✅
 yolo26        ✅       ✅            ✅       ✅                ✅
 ```
 
-Outstanding work — see **[TODO.md](TODO.md) §2A** for the full filed
+Outstanding work — see **[TODO.md](TODO.md) [P6]2A** for the full filed
 roadmap (#46..#63). The earlier per-version "v3 train / v4 train /
 …" gaps that lived here in pre-0.22 releases have all closed (every
 detect-pipeline cell of the matrix above is ✅); what remains is the
@@ -701,5 +708,5 @@ The full deferred / pending list lives in **[TODO.md](TODO.md)**. Highlights:
 
 For the full filed roadmap (modular architecture, CLI overhaul,
 trackers + SAHI, additional YOLO families, multi-device deployment,
-weights publication, license decision, etc.) see TODO.md §2A
+weights publication, license decision, etc.) see TODO.md [P6]2A
 (tasks #46..#63).

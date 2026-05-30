@@ -31,6 +31,7 @@ struct BenchConfig {
   bool        run_pt      = true;
   bool        run_trt_fp32 = true;
   bool        run_trt_fp16 = true;
+  bool        run_trt_int8 = false;  // requires `int8_calib_dir`
   // YOLO version + scale dispatch. When empty, inferred from the
   // weights filename (`cli::version_from_filename` / `scale_from_filename`).
   // The PT path constructs the correct model (Yolo3/4/5/6/7/8/9/10/11/
@@ -39,6 +40,15 @@ struct BenchConfig {
   std::string version;            // "v3", "v5", "v6", ..., "v26"
   std::string scale;              // "n", "s", "m", "l", "x", or version-specific
   int         nc = 80;
+  // Batch size used for TRT engine + inference. b=1 measures
+  // single-image latency (the legacy default); larger batches
+  // measure peak throughput. PT path always runs single-image
+  // because we time the full preprocess→forward→NMS pipeline.
+  int         batch_size = 1;
+  // INT8 calibration image directory. Required when `run_trt_int8`
+  // is true. Standard choice: val split of the deploy dataset.
+  std::string int8_calib_dir = "";
+  std::string int8_calib_cache = "";
 };
 
 struct BenchResult {

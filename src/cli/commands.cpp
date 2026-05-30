@@ -756,7 +756,10 @@ int cmd_export(const std::string& weights, const std::string& format,
 
 int cmd_benchmark(const std::string& weights, const std::string& source,
                   int imgsz, int warmup, int iters,
-                  const std::string& cache, const std::string& device) {
+                  const std::string& cache, const std::string& device,
+                  int batch_size, const std::string& precision_csv,
+                  const std::string& int8_calib_dir,
+                  const std::string& int8_calib_cache) {
   yolocpp::engine::BenchConfig cfg;
   cfg.weights      = weights;
   cfg.source       = source;
@@ -765,6 +768,28 @@ int cmd_benchmark(const std::string& weights, const std::string& source,
   cfg.iters        = iters;
   cfg.cache_dir    = cache;
   cfg.device       = device;
+  cfg.batch_size   = batch_size;
+  cfg.int8_calib_dir   = int8_calib_dir;
+  cfg.int8_calib_cache = int8_calib_cache;
+  // Parse precision CSV — defaults to fp32+fp16, accepts int8 too.
+  cfg.run_trt_fp32 = false;
+  cfg.run_trt_fp16 = false;
+  cfg.run_trt_int8 = false;
+  std::string p = precision_csv;
+  std::size_t i = 0;
+  while (i < p.size()) {
+    auto j = p.find(',', i);
+    auto tok = p.substr(i, j == std::string::npos ? std::string::npos : j - i);
+    if      (tok == "fp32") cfg.run_trt_fp32 = true;
+    else if (tok == "fp16") cfg.run_trt_fp16 = true;
+    else if (tok == "int8") cfg.run_trt_int8 = true;
+    else if (!tok.empty()) {
+      std::cerr << "[bench] WARN unknown precision token '" << tok
+                << "' (expected fp32 | fp16 | int8)\n";
+    }
+    if (j == std::string::npos) break;
+    i = j + 1;
+  }
   auto rows = yolocpp::engine::run_benchmark(cfg);
   yolocpp::engine::print_benchmark(rows);
   return 0;
