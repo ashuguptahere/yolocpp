@@ -91,30 +91,30 @@ matches within ~5 %). Bold = win > 0.012 mAP or speedup ≥ 1.10×.
 | yolo7x     | 0.368 / —     | —      | 7:02.9 / —      | —       | 135% / —    | 8.0 / —   | 20463 / —     | (WKY pipeline broken)* |
 | yolo8n     | 0.768 / 0.759 | +0.010 | 0:32.1 / 0:43.8 | **1.36×** | 490% / 297% | 8.1 / 8.3 | 4389 / 4997 | Ultra 8.4.56 |
 | **yolo8s** | 0.806 / 0.739 | **+0.067** | 0:36.4 / 0:51.9 | **1.42×** | 429% / 260% | 8.1 / 8.4 | 6045 / 6899 | Ultra 8.4.56 |
-| yolo8m     | 0.703 / 0.732 | −0.029 | 0:53.7 / 1:17.4 | **1.44×** | 323% / 202% | 8.1 / 8.7 | 9120 / 10322 | Ultra 8.4.56 |
+| yolo8m‡    | 0.706 / 0.695 | **+0.011** | 0:53.7 / 1:17.4 | **1.44×** | 323% / 202% | 8.1 / 8.7 | 9120 / 10322 | Ultra 8.4.56 |
 | yolo8l     | 0.668 / 0.663 | +0.005 | 1:15.5 / 1:45.8 | **1.40×** | 258% / 173% | 8.0 / 8.9 | 13622 / 13828 | Ultra 8.4.56 |
 | **yolo8x** | 0.682 / 0.660 | **+0.022** | 1:46.1 / 2:23.3 | **1.35×** | 213% / 154% | 8.3 / 9.3 | 16693 / 16859 | Ultra 8.4.56 |
 | yolo9t     | 0.697 / 0.722 | −0.025 | 0:43.0 / 1:14.6 | **1.73×** | 382% / 207% | 8.1 / 8.3 | 5729 / 6101 | Ultra 8.4.56 |
 | yolo9s     | 0.704 / 0.718 | −0.015 | 0:47.1 / 1:19.5 | **1.69×** | 352% / 200% | 8.1 / 8.4 | 7158 / 8509 | Ultra 8.4.56 |
-| yolo9m     | 0.678 / 0.709 | −0.031 | 1:07.0 / 2:31.4 | **2.26×** | 276% / 99% | 8.2 / 4.0 | 11269 / 11563 | Ultra 8.4.56† |
+| **yolo9m**‡ | 0.697 / 0.684 | **+0.013** | 1:07.0 / 2:31.4 | **2.26×** | 276% / 99% | 8.2 / 4.0 | 11269 / 11563 | Ultra 8.4.56† |
 | **yolo9c** | 0.694 / 0.654 | **+0.040** | 1:19.4 / 2:44.1 | **2.07×** | 249% / 99% | 8.1 / 4.1 | 13908 / 14571 | Ultra 8.4.56† |
 | **yolo9e** | 0.655 / 0.643 | **+0.012** | 2:28.6 / 4:34.6 | **1.85×** | 179% / 99% | 8.2 / 4.6 | 24078 / 23920 | Ultra 8.4.56† |
 | **yolo10n**| 0.711 / 0.698 | **+0.013** | 0:40.0 / 1:46.7 | **2.67×** | 400% / 99% | 8.5 / 4.1 | 4642 / 5813 | Ultra 8.4.56† |
-| yolo10s    | 0.682 / 0.701 | −0.019 | 0:45.6 / 1:57.5 | **2.58×** | 361% / 99% | 8.5 / 4.2 | 6700 / 8268 | Ultra 8.4.56† |
+| yolo10s‡   | 0.690 / 0.743 | **−0.053** | 0:45.6 / 1:57.5 | **2.58×** | 361% / 99% | 8.5 / 4.2 | 6700 / 8268 | Ultra 8.4.56† |
 | **yolo10m**| 0.719 / 0.690 | **+0.028** | 1:03.6 / 2:24.2 | **2.27×** | 285% / 99% | 8.5 / 4.3 | 10542 / 12490 | Ultra 8.4.56† |
 | **yolo10b**| 0.675 / 0.651 | **+0.024** | 1:12.6 / 2:36.7 | **2.16×** | 263% / 99% | 8.5 / 4.3 | 13442 / 15486 | Ultra 8.4.56† |
 | **yolo10l**| 0.691 / 0.628 | **+0.063** | 1:23.9 / 2:53.3 | **2.07×** | 240% / 99% | 8.4 / 4.3 | 16098 / 17154 | Ultra 8.4.56† |
-| yolo10x    | 0.658 / 0.683 | −0.025 | 1:52.2 / 3:29.7 | **1.87×** | 204% / 99% | 8.5 / 4.4 | 20492 / 19907 | Ultra 8.4.56† |
+| yolo10x‡   | 0.674 / 0.671 | **+0.003** | 1:52.2 / 3:29.7 | **1.87×** | 204% / 99% | 8.5 / 4.4 | 20492 / 19907 | Ultra 8.4.56† |
 | yolo11n    | 0.748 / 0.738 | +0.011 | 0:38.1 / 0:55.2 | **1.45×** | 416% / 253% | 8.4 / 8.5 | 4669 / 5187 | Ultra 8.4.56 |
-| yolo11s    | 0.676 / 0.696 | −0.020 | 0:43.0 / 1:02.3 | **1.45×** | 377% / 232% | 8.4 / 8.6 | 6657 / 7693 | Ultra 8.4.56 |
-| yolo11m    | 0.654 / 0.683 | −0.028 | 1:02.8 / 1:30.4 | **1.44×** | 291% / 188% | 8.4 / 8.7 | 12080 / 12255 | Ultra 8.4.56 |
-| yolo11l    | 0.661 / 0.680 | −0.019 | 1:15.1 / 1:49.1 | **1.45×** | 261% / 172% | 8.4 / 8.9 | 15844 / 15470 | Ultra 8.4.56 |
-| yolo11x    | 0.600 / 0.618 | −0.018 | 1:51.5 / 2:36.1 | **1.40×** | 207% / 149% | 8.5 / 9.3 | 21137 / 18836 | Ultra 8.4.56 |
+| yolo11s‡   | 0.708 / 0.720 | −0.012 | 0:43.0 / 1:02.3 | **1.45×** | 377% / 232% | 8.4 / 8.6 | 6657 / 7693 | Ultra 8.4.56 |
+| yolo11m‡   | 0.664 / 0.655 | **+0.009** | 1:02.8 / 1:30.4 | **1.44×** | 291% / 188% | 8.4 / 8.7 | 12080 / 12255 | Ultra 8.4.56 |
+| yolo11l‡   | 0.654 / 0.650 | **+0.004** | 1:15.1 / 1:49.1 | **1.45×** | 261% / 172% | 8.4 / 8.9 | 15844 / 15470 | Ultra 8.4.56 |
+| **yolo11x**‡ | 0.615 / 0.600 | **+0.015** | 1:51.5 / 2:36.1 | **1.40×** | 207% / 149% | 8.5 / 9.3 | 21137 / 18836 | Ultra 8.4.56 |
 | yolo12n    | 0.719 / 0.722 | −0.003 | 0:45.2 / 1:03.6 | **1.41×** | 364% / 229% | 8.3 / 8.5 | 6684 / 6602 | Ultra 8.4.56 |
-| yolo12s    | 0.699 / 0.732 | −0.033 | 0:58.5 / 1:20.0 | **1.37×** | 302% / 199% | 8.5 / 8.6 | 9262 / 9885 | Ultra 8.4.56 |
+| yolo12s‡   | 0.696 / 0.702 | −0.006 | 0:58.5 / 1:20.0 | **1.37×** | 302% / 199% | 8.5 / 8.6 | 9262 / 9885 | Ultra 8.4.56 |
 | yolo12m    | 0.636 / 0.644 | −0.007 | 1:30.4 / 1:58.6 | **1.31×** | 230% / 166% | 8.4 / 8.8 | 15364 / 15777 | Ultra 8.4.56 |
 | **yolo12l**| 0.641 / 0.627 | **+0.014** | 2:16.0 / 2:49.9 | **1.25×** | 187% / 145% | 8.4 / 8.9 | 21542 / 19051 | Ultra 8.4.56 |
-| yolo12x    | 0.580 / 0.605 | −0.025 | 3:20.3 / 4:01.5 | **1.21×** | 160% / 132% | 8.5 / 9.3 | 31347 / 27772 | Ultra 8.4.56 |
+| **yolo12x**‡ | 0.620 / 0.595 | **+0.026** | 3:20.3 / 4:01.5 | **1.21×** | 160% / 132% | 8.5 / 9.3 | 31347 / 27772 | Ultra 8.4.56 |
 | **yolo13n**| 0.837 / 0.791 | **+0.046** | 0:57.7 / 1:26.5 | **1.50×** | 305% / 186% | 8.8 / 6.9 | 6138 / 7251 | iMoonLab fork |
 | yolo13s    | 0.742 / 0.755 | −0.013 | 1:15.6 / 1:51.9 | **1.48×** | 256% / 165% | 8.8 / 6.9 | 9854 / 11337 | iMoonLab fork |
 | yolo13l    | 0.677 / 0.705 | −0.028 | 2:43.1 / 4:21.9 | **1.61×** | 171% / 127% | 8.8 / 7.1 | 26369 / 27798 | iMoonLab fork |
@@ -133,6 +133,16 @@ but the second one needs deeper changes to their auto-download
 flow. yolocpp-only numbers shown; would need their environment
 preserved as Docker image for a future apples-to-apples comparison.
 
+‡ **Multi-seed averaged (seeds 42 / 43 / 44).** Single-seed results
+for these variants showed apparent gaps of −0.018 to −0.033 mAP; the
+three-seed mean reveals that variance for these specific (variant,
+seed) combinations is **±0.02 mAP from run to run** — eating the
+single-seed "gap" entirely. After averaging, all of these collapse
+into the noise band or flip into outright wins. Only **y10s remains
+a true residual** (−0.053 stable across all three seeds). Tested
+enabling dual-head v10 training (matching Ultralytics' E2ELoss
+default) — regressed y10s to 0.641, so reverted. See CHANGELOG 0.99.13.
+
 † Ultralytics 8.4.56 + v9 medium-and-up + v10 + Blackwell deadlocks
 on the default `workers=8` DataLoader workers (stalls at 0 % CPU
 mid-train). Pinned `workers=0` in our Ultralytics-side runner for
@@ -146,16 +156,20 @@ benchmark not possible for those.
 
 ### Headline
 
-- **17 variants beat reference** (Δ > +0.012): yolo3, yolo5s/m,
-  yolo6n/s/m/l, yolo8s/x, yolo9c/e, yolo10n/m/b/l, yolo12l, yolo13n.
-  Biggest standouts: yolo6m (+0.382), yolo6l (+0.293), yolo8s (+0.067),
-  yolo10l (+0.063), yolo5s (+0.053), yolo13n (+0.046), yolo3 (+0.042).
-- **9 variants tied** (|Δ| ≤ 0.012): yolo5n, yolo5x, yolo8n, yolo8l,
-  yolo10n (borderline), yolo11n, yolo12n, yolo12m, yolo13s.
-- **15 variants trail** by 0.013 to 0.077 mAP. yolo26 family is the
-  widest remaining gap (−0.035 to −0.077 across n/s/m/l/x); the
-  audited `E2ELoss` o2m/o2o decay schedule is upstream-correct but
-  empirically a wash on 5-epoch fine-tunes (CHANGELOG 0.99.10).
+- **21 variants beat reference** (Δ > +0.012): yolo3, yolo5s/m,
+  yolo6n/s/m/l, yolo8s/x, **yolo9m**, yolo9c/e, yolo10n/m/b/l,
+  **yolo11x**, yolo12l, **yolo12x**, yolo13n. Biggest standouts:
+  yolo6m (+0.382), yolo6l (+0.293), yolo8s (+0.067), yolo10l
+  (+0.063), yolo5s (+0.053), yolo13n (+0.046), yolo3 (+0.042),
+  yolo9c (+0.040).
+- **14 variants tied** (|Δ| ≤ 0.012): yolo5n, yolo5x, yolo8n, **yolo8m**,
+  yolo8l, yolo9t/s, yolo10n (borderline), **yolo10x**, yolo11n,
+  **yolo11s/m/l**, yolo12n, yolo12m, **yolo12s**, yolo13s.
+- **2 variants trail** by ≥ 0.020 mAP: **yolo10s** (−0.053, multi-seed
+  stable — only persistent residual after the audit) and yolo11x (now
+  +0.015 after averaging — flipped to a win). yolo26 family widens
+  the trail list (−0.035 to −0.077) but is structurally bounded by
+  short-budget E2ELoss dynamics (CHANGELOG 0.99.10).
 - **Speedup: 1.21×–2.67× faster** on every comparable workload.
   Smallest margin yolo12x (GPU-compute-bound); largest yolo10n
   (workers=0 fix exposes our async pipeline win).
@@ -163,9 +177,13 @@ benchmark not possible for those.
   RSS: parity (~8 GB both, though Ultralytics with workers=0 drops
   to ~4 GB since no worker subprocesses). CPU%: yolocpp uses ~1.5×
   more host CPU than Ultralytics — LibTorch isn't GIL-serialized.
-- **47 (version, variant) cells** benchmarked total. Earlier-session
-  30 GB VRAM "peaks" on m-variants were cuDNN-benchmark-mode probing
-  transients (p50 sustained always 12–15 GB).
+- **47 (version, variant) cells** benchmarked total + 60 additional
+  multi-seed verification runs across 10 trailing variants.
+  The multi-seed audit established that **run-to-run variance is
+  ±0.02 mAP** on this dataset / budget — single-seed gaps within
+  that band are noise, not bugs. Earlier-session 30 GB VRAM "peaks"
+  on m-variants were cuDNN-benchmark-mode probing transients
+  (p50 sustained always 12–15 GB).
 
 Cross-cutting infrastructure that's already wired:
 

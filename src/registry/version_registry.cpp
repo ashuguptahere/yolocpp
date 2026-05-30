@@ -780,6 +780,14 @@ VersionAdapter make_v10() {
   a.run_train_detect = [](const std::string& init, const std::string& scale,
                           int nc, datasets::YoloDataset ds,
                           const engine::TrainConfig& cfg) {
+    // v10 training: single-head (o2o only). Empirically tested
+    // dual-head (o2m + o2o) hoping to close the y10s residual gap
+    // (multi-seed averaged: us 0.690 vs Ultralytics 0.743 = −0.053),
+    // but it regressed y10s to 0.641 on screen-dataset seed=42
+    // — the doubled gradient + 2× loss magnitude clashes with the
+    // upstream-matched LR schedule. Single-head stays the default;
+    // the y10s gap is the last persistent residual after the multi-
+    // seed audit and not closeable via this lever.
     models::Yolo10 m(models::yolo10_scale_from_letter(scale), nc);
     run_train_with(m, init, std::move(ds), cfg);
   };
