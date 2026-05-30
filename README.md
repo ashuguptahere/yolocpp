@@ -187,13 +187,82 @@ training pipeline at AlexeyAB/Joseph Redmon repos:
 No training reference benchmark possible — included for completeness
 of the version-coverage matrix.
 
+### Inference speed (FPS) — RTX 5090, batch=1, imgsz=640
+
+Single-image inference latency on `bus.jpg` after a 20-iter warmup, 100
+benchmark iterations. PT = LibTorch FP32, TRT = TensorRT FP32 / FP16.
+INT8 export and batch=32 throughput are TODO in the binary (`#51F2`).
+
+| variant | PT FP32 | TRT FP32 | TRT FP16 | TRT FP16 latency |
+|---------|--------:|---------:|---------:|-----------------:|
+| yolo3 | 104 fps | 109 fps | **291 fps** | 3.43 ms |
+| yolo5n | 248 fps | 468 fps | **516 fps** | 1.94 ms |
+| yolo5s | 226 fps | 389 fps | **498 fps** | 2.01 ms |
+| yolo5m | 208 fps | 255 fps | **427 fps** | 2.34 ms |
+| yolo5l | 154 fps | 166 fps | **370 fps** | 2.70 ms |
+| yolo5x | 113 fps | 119 fps | **283 fps** | 3.54 ms |
+| yolo6n | 249 fps | 444 fps | **541 fps** | 1.85 ms |
+| yolo6s | 260 fps | 293 fps | **500 fps** | 2.00 ms |
+| yolo6m | 182 fps | 205 fps | **402 fps** | 2.48 ms |
+| yolo6l | 122 fps | 138 fps | **326 fps** | 3.07 ms |
+| yolo6n6 | 211 fps | 377 fps | **501 fps** | 2.00 ms |
+| yolo6s6 | 207 fps | 239 fps | **440 fps** | 2.27 ms |
+| yolo6m6 | 139 fps | 162 fps | **360 fps** | 2.78 ms |
+| yolo6l6 |  94 fps | 109 fps | **273 fps** | 3.65 ms |
+| yolo7 | 150 fps | 185 fps | **332 fps** | 3.01 ms |
+| yolo7-tiny | 222 fps | 355 fps | **434 fps** | 2.31 ms |
+| yolo7x | 114 fps | 129 fps | **277 fps** | 3.62 ms |
+| yolo8n | 257 fps | 496 fps | **586 fps** | 1.70 ms |
+| yolo8s | 207 fps | 329 fps | **494 fps** | 2.02 ms |
+| yolo8m | 156 fps | 221 fps | **399 fps** | 2.51 ms |
+| yolo8l | 140 fps | 144 fps | **333 fps** | 3.00 ms |
+| yolo8x | 116 fps | 118 fps | **300 fps** | 3.34 ms |
+| yolo9t | 153 fps | 358 fps | **415 fps** | 2.41 ms |
+| yolo9s | 144 fps | 246 fps | **383 fps** | 2.61 ms |
+| yolo9m | 137 fps | 216 fps | **367 fps** | 2.72 ms |
+| yolo9c | 130 fps | 187 fps | **356 fps** | 2.81 ms |
+| yolo9e |  87 fps | 110 fps | **250 fps** | 4.00 ms |
+| yolo10n | 246 fps | 442 fps | **504 fps** | 1.99 ms |
+| yolo10s | 216 fps | 352 fps | **488 fps** | 2.05 ms |
+| yolo10m | 167 fps | 237 fps | **389 fps** | 2.57 ms |
+| yolo10b | 152 fps | 205 fps | **356 fps** | 2.81 ms |
+| yolo10l | 131 fps | 170 fps | **324 fps** | 3.09 ms |
+| yolo10x | 118 fps | 146 fps | **291 fps** | 3.43 ms |
+| yolo11n | 232 fps | 478 fps | **545 fps** | 1.83 ms |
+| yolo11s | 207 fps | 372 fps | **514 fps** | 1.95 ms |
+| yolo11m | 202 fps | 236 fps | **394 fps** | 2.54 ms |
+| yolo11l | 145 fps | 188 fps | **341 fps** | 2.93 ms |
+| yolo11x | 110 fps | 136 fps | **289 fps** | 3.46 ms |
+| yolo12n | 211 fps | 380 fps | **401 fps** | 2.50 ms |
+| yolo12s | 175 fps | 294 fps | **363 fps** | 2.76 ms |
+| yolo12m | 168 fps | 224 fps | **321 fps** | 3.12 ms |
+| yolo12l | 117 fps | 161 fps | **234 fps** | 4.28 ms |
+| yolo12x |  88 fps | 114 fps | **204 fps** | 4.91 ms |
+| yolo13n | 178 fps | 359 fps | **380 fps** | 2.63 ms |
+| yolo13s | 158 fps | 289 fps | **328 fps** | 3.05 ms |
+| yolo13l | — | — | — | (TRT build hung; deferred) |
+| yolo13x |  81 fps | 115 fps | **175 fps** | 5.72 ms |
+| yolo26n | 218 fps | 431 fps | **482 fps** | 2.08 ms |
+| yolo26s | 175 fps | 341 fps | **463 fps** | 2.16 ms |
+| yolo26m | 175 fps | 228 fps | **385 fps** | 2.60 ms |
+| yolo26l | 138 fps | 188 fps | **341 fps** | 2.93 ms |
+| yolo26x | 103 fps | 137 fps | **282 fps** | 3.55 ms |
+
+Headline: **TRT FP16 hits 250–586 fps across the matrix** at single-
+image batch=1 on RTX 5090. The fastest models are the n/t-scale
+variants of v5/v6/v8/v10/v11/v26 (all 480+ fps). The slowest are
+the e/x-scale heavyweights (v9e, v12x, v13x, v8x).
+
 ### Graphs
 
 Comparison figures live in [`docs/figures/`](docs/figures/):
 
-- [`mAP_vs_params.png`](docs/figures/mAP_vs_params.png) — quality vs model size, per-family color (yolocpp solid, reference dashed)
+- [`mAP_vs_params.png`](docs/figures/mAP_vs_params.png) — quality vs model size (yolocpp solid, reference dashed)
 - [`mAP_vs_wall.png`](docs/figures/mAP_vs_wall.png) — quality vs train wall time
-- [`speedup_per_variant.png`](docs/figures/speedup_per_variant.png) — yolocpp speedup sorted high-to-low
+- [`mAP_vs_fps.png`](docs/figures/mAP_vs_fps.png) — quality vs inference FPS (TRT FP16) — **the operating-point chart**
+- [`fps_per_variant.png`](docs/figures/fps_per_variant.png) — TRT FP16 (solid) vs PT FP32 (faded) per variant
+- [`trt_speedup.png`](docs/figures/trt_speedup.png) — TRT FP16 / PT FP32 speedup sorted high-to-low
+- [`speedup_per_variant.png`](docs/figures/speedup_per_variant.png) — yolocpp train speedup vs reference
 - [`delta_per_variant.png`](docs/figures/delta_per_variant.png) — Δ mAP per variant, BEAT/TIED/TRAIL zones marked
 
 Color stays consistent across all graphs per model family:
