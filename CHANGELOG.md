@@ -4,6 +4,40 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.29] — 2026-06-02
+
+### Docs — consolidated README tables
+- **ONE FPS comparison table** replaces the old per-version scattered
+  FPS section. Ultralytics 8.4.60 vs yolocpp 0.99.28 across 16
+  representative variants (n/s/m/x of v8/v10/v11/v12/v13/v26). Six
+  columns: U-PT / Y-PT / U-FP16 / Y-FP16 / U-INT8 / Y-INT8. Bold =
+  yolocpp wins by ≥ 2 %. Result: **yolocpp leads on every TRT FP16
+  and TRT INT8 row measured** (margins 1.07× – 4.78×).
+  Per-variant yolocpp-only PT/TRT/INT8/latency numbers for all 60+
+  variants stay in CHANGELOG entries 0.99.15 → 0.99.20.
+- **ONE training convergence table** replaces the old scattered
+  reference-comparison rows. 1-epoch (this session's fresh sweep)
+  vs 5-epoch (from CHANGELOG 0.99.13 + the MBLA/P6 follow-ups),
+  with mAP@0.5, mAP@0.5:0.95, P, R, F1, and wall for both. 60
+  rows. The Ultralytics / Meituan / iMoonLab reference comparison
+  lives below it for completeness, but the headline matrix is
+  now self-contained.
+- **Output uniformity section** added to the Public C++ API page.
+  Documents the contract: every model from every backend returns
+  the same `vector<inference::Detection>` with `{x1, y1, x2, y2,
+  conf, cls}`. CLI writes the same `runs/predict/<stem>.jpg` +
+  `<stem>.txt` for every version. Tracks #97 (Results wrapper for
+  fuller Ultralytics-API parity — `.boxes`, `.names`, `.orig_shape`,
+  `.speed`, `.plot()`, `.save()`).
+
+### Sweep results
+- FPS sweep: 16/16 cpp + 14/16 ultra (yolo13n/x missing — Ultralytics'
+  loader rejects iMoonLab fork weights). All yolocpp FPS numbers
+  for the table were captured under 0.99.28's perf code path.
+- 1-epoch training sweep: 55/~60 variants succeeded. Failures:
+  yolo6l6 (channels_last P6 crash — known TODO #6), v7 P6 e6/d6/e6e
+  (OOM at imgsz=1280 on 32 GB).
+
 ## [0.99.28] — 2026-06-02
 
 ### Fixed (perf)

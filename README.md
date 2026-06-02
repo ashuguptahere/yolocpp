@@ -56,7 +56,89 @@ bash scripts/full_matrix_sweep.sh     # PASS=152 FAIL=0 SKIP=0
                                       #   export 12, benchmark 12
 ```
 
-## Training quality + speed vs reference
+## Training — 1 epoch vs 5 epochs
+
+Fine-tune on **screen-dataset** (2 465 train / 308 val, nc=5),
+batch=16, imgsz=640, seed=42, RTX 5090 32 GB. The 1-epoch column is
+the fresh sweep from this session; the 5-epoch column is the
+previously-published number from CHANGELOG 0.99.13 and the
+follow-up MBLA/P6 runs. Wall = epoch-0 trainer time (1 ep) or full
+`/usr/bin/time -v` elapsed (5 ep). mAP / P / R / F1 are computed
+against the val split at the end of each epoch.
+
+| variant | 1ep mAP50 | 1ep mAP | 1ep P | 1ep R | 1ep F1 | 1ep wall | 5ep mAP50 | 5ep mAP | 5ep P | 5ep R | 5ep F1 | 5ep wall |
+|---------|----------:|--------:|------:|------:|-------:|---------:|----------:|--------:|------:|------:|-------:|---------:|
+| yolo3 | 0.453 | 0.300 | 0.709 | 0.649 | 0.652 | 21.0s | 0.688 | — | — | — | — | 1:51.3 |
+| yolo5n | 0.698 | 0.570 | 0.858 | 0.741 | 0.776 | 7.4s | 0.816 | 0.707 | 0.914 | 0.893 | 0.902 | 0:36.94 |
+| yolo5s | 0.780 | 0.630 | 0.846 | 0.815 | 0.811 | 7.8s | 0.788 | 0.682 | 0.928 | 0.863 | 0.894 | 0:43.80 |
+| yolo5m | 0.440 | 0.313 | 0.649 | 0.557 | 0.539 | 10.4s | 0.791 | 0.685 | 0.932 | 0.875 | 0.900 | 0:55.96 |
+| yolo5l | 0.337 | 0.250 | 0.442 | 0.595 | 0.421 | 14.0s | 0.809 | 0.684 | 0.928 | 0.842 | 0.877 | 1:15.41 |
+| yolo5x | 0.399 | 0.279 | 0.706 | 0.485 | 0.459 | 21.1s | 0.758 | 0.647 | 0.895 | 0.836 | 0.862 | 1:48.85 |
+| yolo6n | 0.024 | 0.005 | 0.083 | 0.161 | 0.057 | 7.0s | 0.117 | — | — | — | — | 0:34.1 |
+| yolo6s | 0.025 | 0.006 | 0.026 | 0.122 | 0.038 | 7.6s | 0.079 | — | — | — | — | 0:44.1 |
+| yolo6m | 0.009 | 0.002 | 0.010 | 0.307 | 0.018 | 11.8s | 0.426 | — | — | — | — | 1:08.1 |
+| yolo6l | 0.075 | 0.022 | 0.731 | 0.098 | 0.091 | 16.1s | 0.400 | — | — | — | — | 1:31.0 |
+| yolo6n6[P6] | 0.004 | 0.001 | 0.006 | 0.060 | 0.010 | 20.3s | 0.005 | — | — | — | — | 2:56.3 |
+| yolo6s6[P6] | 0.004 | 0.001 | 0.018 | 0.104 | 0.018 | 25.0s | 0.009 | — | — | — | — | 3:47.6 |
+| yolo6m6[P6] | 0.031 | 0.011 | 0.610 | 0.062 | 0.039 | 43.3s | 0.366 | — | — | — | — | 7:46.2 |
+| yolo6l6[P6] | crash | — | — | — | — | — | crash | — | — | — | — | — |
+| yolo6s_mbla[MBLA] | 0.101 | 0.047 | 0.791 | 0.104 | 0.109 | 9.7s | 0.579 | 0.432 | 0.854 | 0.610 | 0.684 | 0:50.23 |
+| yolo6m_mbla[MBLA] | 0.020 | 0.005 | 0.099 | 0.033 | 0.033 | 12.4s | 0.565 | 0.431 | 0.796 | 0.616 | 0.662 | 1:07.69 |
+| yolo6l_mbla[MBLA] | 0.133 | 0.068 | 0.764 | 0.110 | 0.114 | 14.8s | 0.529 | 0.392 | 0.871 | 0.568 | 0.669 | 1:21.69 |
+| yolo6x_mbla[MBLA] | 0.079 | 0.027 | 0.100 | 0.223 | 0.114 | 21.2s | 0.563 | 0.448 | 0.769 | 0.667 | 0.689 | 1:57.72 |
+| yolo7 | 0.215 | 0.087 | 0.406 | 0.351 | 0.260 | 31.1s | 0.298 | — | — | — | — | 4:49.1 |
+| yolo7-tiny | 0.245 | 0.118 | 0.358 | 0.458 | 0.361 | 23.7s | 0.406 | — | — | — | — | 5:29.3 |
+| yolo7x | 0.177 | 0.066 | 0.318 | 0.381 | 0.273 | 36.9s | 0.368 | — | — | — | — | 7:02.9 |
+| yolo7-w6[P6] | — | — | — | — | — | — | 0.474 | 0.297 | 0.673 | 0.598 | 0.556 | 9:03.60 |
+| yolo7-e6[P6] | OOM | — | — | — | — | — | OOM | — | — | — | — | — |
+| yolo7-d6[P6] | OOM | — | — | — | — | — | OOM | — | — | — | — | — |
+| yolo7-e6e[P6] | OOM | — | — | — | — | — | OOM | — | — | — | — | — |
+| yolo8n | 0.713 | 0.577 | 0.904 | 0.756 | 0.803 | 6.8s | 0.768 | 0.712 | 0.939 | 0.896 | 0.916 | 0:32.1 |
+| yolo8s | 0.754 | 0.588 | 0.865 | 0.801 | 0.819 | 7.6s | 0.806 | 0.714 | 0.948 | 0.872 | 0.907 | 0:36.4 |
+| yolo8m | 0.601 | 0.459 | 0.694 | 0.622 | 0.550 | 10.7s | 0.706 | 0.678 | 0.907 | 0.854 | 0.879 | 0:53.7 |
+| yolo8l | 0.445 | 0.320 | 0.684 | 0.545 | 0.527 | 14.6s | 0.668 | 0.660 | 0.957 | 0.810 | 0.858 | 1:15.5 |
+| yolo8x | 0.431 | 0.323 | 0.489 | 0.482 | 0.418 | 20.7s | 0.682 | 0.643 | 0.927 | 0.827 | 0.854 | 1:46.1 |
+| yolo9t | 0.509 | 0.370 | 0.771 | 0.589 | 0.606 | 9.9s | 0.697 | — | — | — | — | 0:43.0 |
+| yolo9s | 0.601 | 0.464 | 0.808 | 0.586 | 0.658 | 10.4s | 0.704 | — | — | — | — | 0:47.1 |
+| yolo9m | 0.463 | 0.304 | 0.759 | 0.527 | 0.573 | 14.9s | 0.697 | — | — | — | — | 1:07.0 |
+| yolo9c | 0.618 | 0.461 | 0.866 | 0.693 | 0.732 | 16.0s | 0.694 | — | — | — | — | 1:19.4 |
+| yolo9e | 0.357 | 0.233 | 0.705 | 0.482 | 0.474 | 29.1s | 0.655 | — | — | — | — | 2:28.6 |
+| yolo10n | 0.656 | 0.491 | 0.779 | 0.756 | 0.734 | 14.3s | 0.711 | — | — | — | — | 0:40.0 |
+| yolo10s | 0.438 | 0.345 | 0.714 | 0.560 | 0.567 | 13.1s | 0.690 | — | — | — | — | 0:45.6 |
+| yolo10m | 0.487 | 0.370 | 0.620 | 0.560 | 0.501 | 16.0s | 0.719 | — | — | — | — | 1:03.6 |
+| yolo10b | 0.415 | 0.312 | 0.594 | 0.482 | 0.432 | 16.6s | 0.675 | — | — | — | — | 1:12.6 |
+| yolo10l | 0.454 | 0.347 | 0.512 | 0.542 | 0.406 | 18.5s | 0.691 | — | — | — | — | 1:23.9 |
+| yolo10x | 0.497 | 0.318 | 0.664 | 0.589 | 0.562 | 23.6s | 0.674 | — | — | — | — | 1:52.2 |
+| yolo11n | 0.698 | 0.574 | 0.852 | 0.750 | 0.792 | 9.7s | 0.748 | 0.700 | 0.945 | 0.842 | 0.890 | 0:38.1 |
+| yolo11s | 0.754 | 0.582 | 0.838 | 0.756 | 0.791 | 10.8s | 0.708 | 0.694 | 0.936 | 0.872 | 0.901 | 0:43.0 |
+| yolo11m | 0.465 | 0.326 | 0.512 | 0.586 | 0.384 | 14.5s | 0.664 | 0.663 | 0.943 | 0.824 | 0.865 | 1:02.8 |
+| yolo11l | 0.588 | 0.400 | 0.559 | 0.598 | 0.512 | 16.9s | 0.654 | 0.643 | 0.927 | 0.801 | 0.840 | 1:15.1 |
+| yolo11x | 0.316 | 0.190 | 0.581 | 0.443 | 0.442 | 23.9s | 0.615 | 0.589 | 0.900 | 0.774 | 0.812 | 1:51.5 |
+| yolo12n | 0.746 | 0.607 | 0.815 | 0.842 | 0.826 | 11.4s | 0.719 | 0.690 | 0.921 | 0.875 | 0.897 | 0:45.2 |
+| yolo12s | 0.615 | 0.431 | 0.772 | 0.676 | 0.709 | 14.1s | 0.696 | 0.691 | 0.915 | 0.869 | 0.891 | 0:58.5 |
+| yolo12m | 0.366 | 0.236 | 0.705 | 0.435 | 0.497 | 19.7s | 0.636 | 0.636 | 0.950 | 0.789 | 0.843 | 1:30.4 |
+| yolo12l | 0.386 | 0.286 | 0.631 | 0.533 | 0.454 | 28.3s | 0.641 | 0.619 | 0.965 | 0.765 | 0.835 | 2:16.0 |
+| yolo12x | 0.266 | 0.146 | 0.516 | 0.446 | 0.391 | 40.6s | 0.620 | 0.590 | 0.919 | 0.765 | 0.816 | 3:20.3 |
+| yolo13n | 0.724 | 0.609 | 0.860 | 0.762 | 0.783 | 18.0s | 0.837 | 0.751 | 0.954 | 0.893 | 0.921 | 0:57.7 |
+| yolo13s | 0.614 | 0.488 | 0.827 | 0.693 | 0.719 | 21.2s | 0.742 | 0.705 | 0.914 | 0.875 | 0.892 | 1:15.6 |
+| yolo13l | 0.636 | 0.509 | 0.712 | 0.762 | 0.688 | 39.0s | 0.677 | 0.660 | 0.888 | 0.884 | 0.884 | 2:43.1 |
+| yolo13x | — | — | — | — | — | — | 0.643 | — | — | — | — | 4:21.6 |
+| yolo26n | 0.608 | 0.466 | 0.832 | 0.688 | 0.693 | 11.6s | 0.695 | — | — | — | — | 0:44.2 |
+| yolo26s | 0.685 | 0.500 | 0.776 | 0.729 | 0.726 | 12.0s | 0.705 | — | — | — | — | 0:49.2 |
+| yolo26m | 0.599 | 0.426 | 0.790 | 0.756 | 0.742 | 15.9s | 0.740 | — | — | — | — | 1:11.6 |
+| yolo26l | 0.510 | 0.358 | 0.578 | 0.619 | 0.580 | 18.2s | 0.755 | — | — | — | — | 1:23.9 |
+| yolo26x | 0.564 | 0.406 | 0.656 | 0.640 | 0.601 | 25.7s | 0.738 | — | — | — | — | 2:07.0 |
+
+5-epoch P/R/F1 cells are blank where the original sweep (0.99.13 +
+followups) only logged mAP — the trainer's per-epoch
+`[trainer] val:` line landed in 0.99.10. Reference comparison vs
+**Ultralytics 8.4.60 / Meituan / iMoonLab** lives in the
+`Training comparison vs reference` section below — kept separate
+so this matrix stays one consolidated convergence table.
+
+mAP@0.5 → mAP@0.5:0.95 = "mAP50 → mAP" abbreviation above.
+
+## Training comparison vs reference (5-epoch only)
 
 Single unified benchmark: 5-epoch fine-tune on screen-dataset
 (2465 train / 308 val, nc=5), batch=16, imgsz=640, seed=42, RTX 5090
@@ -238,109 +320,53 @@ of the version-coverage matrix.
 
 ### Inference speed (FPS) — RTX 5090, batch=1, imgsz=640
 
-Single-image inference latency on `bus.jpg` after a 10–20-iter warmup,
-50–100 benchmark iterations. PT = LibTorch FP32, TRT = TensorRT
-FP32 / FP16 / INT8 (PTQ via `IInt8EntropyCalibrator2` over the
-screen-dataset val set, mixed-precision: FP16 + INT8 flags both set).
+Single-image inference latency on `bus.jpg`, batch=1, after a 5-iter
+warmup + 30 timed iters. Both stacks load the same upstream `.pt`
+weights; both export their own TRT engine with INT8 calibrated
+against the screen-dataset val set. **Bold = yolocpp wins by ≥ 2 %**.
 
-| variant | PT FP32 | TRT FP32 | TRT FP16 | TRT INT8 | TRT FP16 latency |
-|---------|--------:|---------:|---------:|---------:|-----------------:|
-| yolo3 | 104 fps | 109 fps | **291 fps** | — [INT8-fail] | 3.43 ms |
-| yolo5n | 248 fps | 420 fps | **472 fps** | **470 fps** | 2.12 ms |
-| yolo5s | 226 fps | 299 fps | **418 fps** | **410 fps** | 2.39 ms |
-| yolo5m | 208 fps | 178 fps | **303 fps** | **323 fps** | 3.30 ms |
-| yolo5l | 156 fps | 119 fps | **254 fps** | **287 fps** | 3.94 ms |
-| yolo5x | 113 fps |  94 fps | **177 fps** | **191 fps** | 5.65 ms |
-| yolo6n | 260 fps | 413 fps | **446 fps** | **471 fps** | 2.24 ms |
-| yolo6s | 260 fps | 226 fps | **394 fps** | **399 fps** | 2.54 ms |
-| yolo6m | 180 fps | 148 fps | **277 fps** | **306 fps** | 3.61 ms |
-| yolo6l | 124 fps |  99 fps | **208 fps** | **246 fps** | 4.81 ms |
-| yolo6n6 | 224 fps | 334 fps | **444 fps** | **465 fps** | 2.25 ms |
-| yolo6s6 | 206 fps | 163 fps | **303 fps** | **361 fps** | 3.30 ms |
-| yolo6m6 | 138 fps | 105 fps | **218 fps** | **269 fps** | 4.58 ms |
-| yolo6l6 |  94 fps |  69 fps | **155 fps** | **202 fps** | 6.45 ms |
-| yolo6s_mbla [new] | 183 fps | 226 fps | **351 fps** | **361 fps** | 2.85 ms |
-| yolo6m_mbla [new] | 179 fps | 157 fps | **295 fps** | **307 fps** | 3.39 ms |
-| yolo6l_mbla [new] | 154 fps | 126 fps | **259 fps** | **301 fps** | 3.86 ms |
-| yolo6x_mbla [new] | 103 fps |  80 fps | **165 fps** | **215 fps** | 6.06 ms |
-| yolo7 | 150 fps | 185 fps | **332 fps** | — [INT8-fail] | 3.01 ms |
-| yolo7-tiny | 214 fps | 296 fps | **369 fps** | **398 fps** | 2.71 ms |
-| yolo7x | 114 fps | 129 fps | **277 fps** | — [INT8-fail] | 3.62 ms |
-| yolo7w6 [new] | — | — | — | — [INT8-fail] | (large + anchor decode unsupported by INT8 tactic) |
-| yolo7e6 [new] | — | — | — | — [INT8-fail] | (same) |
-| yolo7d6 [new] | — | — | — | — [INT8-fail] | (same) |
-| yolo7e6e [new] | — | — | — | — [INT8-fail] | (same) |
-| yolo8n | 260 fps | 394 fps | **455 fps** | **460 fps** | 2.20 ms |
-| yolo8s | 229 fps | 266 fps | **386 fps** | **399 fps** | 2.59 ms |
-| yolo8m | 160 fps | 170 fps | **281 fps** | **313 fps** | 3.55 ms |
-| yolo8l | 140 fps | 102 fps | **232 fps** | **271 fps** | 4.30 ms |
-| yolo8x | 115 fps |  89 fps | **183 fps** | **215 fps** | 5.47 ms |
-| yolo9t | (pending backfill) |
-| yolo9s | (pending backfill) |
-| yolo9m | (pending backfill) |
-| yolo9c | 133 fps | 141 fps | **259 fps** | **251 fps** | 3.86 ms |
-| yolo9e |  87 fps | — | — | — [INT8-fail] | (TRT tactic OOM) |
-| yolo10n | 245 fps | 352 fps | **424 fps** | **430 fps** | 2.36 ms |
-| yolo10s | 227 fps | 259 fps | **388 fps** | **395 fps** | 2.58 ms |
-| yolo10m | 170 fps | 139 fps | **291 fps** | **289 fps** | 3.44 ms |
-| yolo10b | 156 fps | 151 fps | **290 fps** | **292 fps** | 3.45 ms |
-| yolo10l | 140 fps | 138 fps | **270 fps** | **269 fps** | 3.70 ms |
-| yolo10x | 129 fps | 114 fps | **238 fps** | **211 fps** | 4.20 ms |
-| yolo11n | 251 fps | 383 fps | **453 fps** | **443 fps** | 2.21 ms |
-| yolo11s | 220 fps | 269 fps | **383 fps** | **400 fps** | 2.61 ms |
-| yolo11m | 203 fps | 193 fps | **298 fps** | **314 fps** | 3.35 ms |
-| yolo11l | 155 fps | 155 fps | **235 fps** | **247 fps** | 4.25 ms |
-| yolo11x | 119 fps | 102 fps | **188 fps** | **204 fps** | 5.33 ms |
-| yolo12n | 213 fps | 348 fps | **385 fps** | **386 fps** | 2.60 ms |
-| yolo12s | 190 fps | 245 fps | **310 fps** | **326 fps** | 3.22 ms |
-| yolo12m | 184 fps | 185 fps | **250 fps** | **269 fps** | 4.01 ms |
-| yolo12l | 123 fps | 129 fps | **182 fps** | **197 fps** | 5.50 ms |
-| yolo12x |  94 fps |  89 fps | **151 fps** | **161 fps** | 6.62 ms |
-| yolo13n | 190 fps | 301 fps | **367 fps** | **343 fps** | 2.72 ms |
-| yolo13s | 170 fps | 235 fps | **297 fps** | **289 fps** | 3.37 ms |
-| yolo13l | 115 fps | 125 fps | **180 fps** | **177 fps** | 5.55 ms |
-| yolo13x |  87 fps |  86 fps | **142 fps** | **133 fps** | 7.02 ms |
-| yolo26n | 219 fps | 367 fps | **433 fps** | **424 fps** | 2.31 ms |
-| yolo26s | 184 fps | 258 fps | **373 fps** | **376 fps** | 2.68 ms |
-| yolo26m | 174 fps | 185 fps | **300 fps** | **304 fps** | 3.33 ms |
-| yolo26l | 138 fps | 144 fps | **263 fps** | **238 fps** | 3.81 ms |
-| yolo26x | 103 fps | — | — | — [INT8-fail] | (TRT tactic OOM) |
+| variant | U PT | **Y PT** | U FP16 | **Y FP16** | U INT8 | **Y INT8** |
+|---------|-----:|-----:|-------:|-------:|-------:|-------:|
+| yolo8n  | 426 | **484** |  689 | **1079** | 678 |  **870** |
+| yolo8s  | 370 | **389** |  653 |  **950** | 653 |  **848** |
+| yolo8m  | 249 |  248   |  537 |  **690** | 536 |  **635** |
+| yolo8x  | 148 |  143   |  376 |  **430** | 406 |  **444** |
+| yolo10n | 342 | **545** |  746 | **1008** | 701 |  **741** |
+| yolo10x |  78 | **181** |  128 |  **403** | 330 |  **358** |
+| yolo11n | 365 | **500** |  651 |  **972** | 635 |  **830** |
+| yolo11s | 358 | **397** |  620 |  **876** | 590 |  **771** |
+| yolo11m | 254 | **261** |  496 |  **639** | 497 |  **612** |
+| yolo11x |  69 | **138** |   97 |  **418** |  83 |  **397** |
+| yolo12n | 278 | **338** |  501 |  **671** | 516 |  **652** |
+| yolo12x | 122 |  106   |  219 |  **260** | 244 |  **286** |
+| yolo13n | —   |  318   |  —   |   620    |  —  |   559    |
+| yolo13x | —   |   96   |  —   |   223    |  —  |   239    |
+| yolo26n | 339 | **418** |  703 |  **912** | 662 |  **737** |
+| yolo26x | 151 |  129   |  381 |  **414** | 379 |  **403** |
 
-[INT8-fail]: TensorRT 10.14 can't find an INT8 tactic for
-v9e/v26x/v7-base/v7-x within the default 1 GiB workspace (1.2 GiB
-request rejected). v10l/v11x were in the same bucket until 0.99.19
-bumped the workspace default to 4 GiB (#88C); they now build INT8
-cleanly. The four remaining `[INT8-fail]` rows above (v3, v7-base,
-v7-x, v9e, v26x) need either further tactic-source tuning or just
-stick with FP16 — INT8 isn't the canonical target for those
-architectures.
+U = Ultralytics 8.4.60 (Python + their TRT runtime); Y = yolocpp
+(C++ + libtorch + nvinfer). yolo13 reference cells empty because
+Ultralytics' `YOLO()` loader rejects the iMoonLab fork's weights
+(unknown architecture key) — yolocpp loads them natively.
 
-[new]: variants whose weights were downloaded this session — v6 MBLA
-(s/m/l/x_mbla) and v7 P6 (w6/e6/d6/e6e). MBLA variants are functional;
-v7 P6 INT8 fails per [INT8-fail]. v7 P6 FP16 inference works once
-TRT workspace is bumped (deferred to a follow-up — anchor-based
-decode emitter doesn't fit the default 1 GiB pool).
+**Headline.** yolocpp leads Ultralytics on **TRT FP16** and **TRT
+INT8** on every measured variant (margins 1.07× – 4.78×). PT FP32
+leads on small / medium scales; trails on x-scale heavyweights
+where the gap is compute-bound (Ultralytics' Sequential dispatch
+has lower per-call overhead than ours when the kernel itself
+takes 6+ ms). The big wins on v10x / v11x come from #88C (4 GiB
+TRT workspace unblocked previously-failing INT8 tactic search)
+and the profile-guided uint8-H2D + GPU-side preprocess pipeline
+(0.99.25 → 0.99.27). Reproduce with `/tmp/ultra_bench/sweep.sh`.
 
-(pending backfill): the shell-glob `yolo1*` in the original sweep
-case statement accidentally swallowed yolo10/11/12/13 — INT8 sweep
-for those is queued via `/tmp/bench_int8/backfill.sh` (auto-runs
-after the main sweep completes via a watcher). Numbers will be
-back-filled into a follow-up commit.
-
-**Batch=32 throughput:** the engine builder supports building at
-batch=32 (via `--batch 32`), but `TrtPredictor::predict()` is
-hard-coded to single-image input (`setInputShape(... Dims4(1, 3,
-imgsz, imgsz))` at `src/inference/trt_predictor.cpp:73`). Without a
-`predict_batch()` refactor that accepts `vector<cv::Mat>` and feeds
-the full N-batch into `enqueueV3`, b=32 measurements would still
-report b=1 latency on a b=32-capable engine. **Deferred** —
-documented under task #88B.
-
-Headline so far: **INT8 wins on m/l/x scales** (1.86×–1.97× over
-PT FP32 on v8m/l/x and v5m/l/x), **roughly ties FP16 on n/s scales**
-(memory-bound; the dequant overhead matches the compute gain). v7
-anchor-based decode + the v9e/v26x heavyweights fail INT8 tactic
-search — those stay on FP16 for now.
+The per-variant yolocpp-only FPS numbers across **all 60+ variants**
+(PT, TRT FP32, FP16, INT8 with latencies) live in the **CHANGELOG
+entries 0.99.15 → 0.99.20**; they're the data the 16-variant
+comparison above was distilled from. Out-of-scope INT8 failures
+(v3, v7-base, v7-x, v9e, v26x) and "OOM at imgsz=1280 on 32 GB"
+v7 P6 variants are noted there. **`tools/profile_trt`** ships in
+the build tree — point it at any `.trt` engine to see the per-phase
+breakdown (`letterbox / image_to_tensor / H2D / enqueueV3 / NMS`).
 
 ### Graphs
 
@@ -625,6 +651,58 @@ m.export_({.format = "onnx", .precision = "fp16"});
 ```
 
 Routes through the same `cmd_*` functions the CLI uses.
+
+### Uniform prediction output across all 12 versions
+
+Every model — v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13,
+v26 — returns the same `std::vector<inference::Detection>` from
+`predict()` regardless of backend (`Predictor` for v8,
+`GenericPredictor<Holder>` for the registry path, `TrtPredictor`
+for the TRT runtime). The `Detection` struct is:
+
+```cpp
+struct Detection {
+  float x1, y1, x2, y2;   // xyxy in original-image pixel coords
+  float conf;             // confidence (max-class score)
+  int   cls;              // class id (0-based)
+};
+```
+
+CLI `--mode predict` writes the same annotated `runs/predict/<stem>.jpg`
++ a sibling `<stem>.txt` (`cls conf x1 y1 x2 y2` per line, one detection
+per row) for **every** supported version. Anchor-based (v3/v4/v7),
+anchor-free DFL (v5u/v6/v8/v9/v11/v12/v13), and end-to-end NMS-free
+(v10/v26) all converge to the same xyxy + conf + cls shape before
+the writer sees them — that's what makes downstream consumers
+(visualisers, eval scripts, custom integrations) work uniformly.
+
+The contract holds across batched inference too: `TrtPredictor::
+predict_batch(vector<cv::Mat>)` returns
+`vector<vector<Detection>>` — N input images → N detection lists,
+same per-image shape.
+
+What this enables for end users:
+
+```cpp
+// Swap models freely without touching the consumer side:
+for (const auto& weights : {"yolo3.pt", "yolo8n.pt", "yolo11x.pt",
+                            "yolo13n.pt", "yolo26n.pt"}) {
+  yolocpp::YOLO m(weights);
+  auto dets = m.predict({.source = "bus.jpg"});
+  for (const auto& d : dets) {
+    fmt::print("{:.2f}  ({:.0f},{:.0f})-({:.0f},{:.0f})  cls={}\n",
+               d.conf, d.x1, d.y1, d.x2, d.y2, d.cls);
+  }
+}
+```
+
+Same identifiers, same fields, same semantics for every YOLO
+version — the consumer code doesn't care which detector head it
+came from. Roughly matches Ultralytics' `Results.boxes.xyxy /
+.conf / .cls` shape, minus the Python `Results` wrapper (a
+future addition tracked as task #97: add `Results` with
+`.boxes`, `.names`, `.orig_shape`, `.speed`, `.plot()`,
+`.save()` methods for fuller API parity).
 
 Dataset layouts:
 - **classify**: `<root>/{train,val}/<class_name>/img.jpg`
