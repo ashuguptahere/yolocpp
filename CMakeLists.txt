@@ -182,6 +182,7 @@ add_library(yolocpp_core
   src/inference/letterbox.cpp
   src/inference/nms.cpp
   src/inference/predictor.cpp
+  src/inference/results.cpp
   src/datasets/coco_dataset.cpp
   src/datasets/flat_dataset.cpp
   src/datasets/voc_dataset.cpp
