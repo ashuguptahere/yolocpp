@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "yolocpp/inference/letterbox.hpp"
+#include "yolocpp/core/profile.hpp"
 
 namespace yolocpp::inference {
 
@@ -130,9 +131,13 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
         "predict_batch: requested batch=" + std::to_string(N) +
         " exceeds engine max_batch=" + std::to_string(max_batch_));
 
+  using ::yolocpp::core::ProfileScope;
   std::vector<LetterboxResult> lbs;
   lbs.reserve(N);
-  for (const auto& bgr : bgrs) lbs.push_back(letterbox(bgr, imgsz_));
+  {
+    ProfileScope _s{"letterbox"};
+    for (const auto& bgr : bgrs) lbs.push_back(letterbox(bgr, imgsz_));
+  }
 
   // Profiling (#95-followup) showed image_to_tensor (BGR→RGB +
   // uint8→float + /255 + HWC→CHW on CPU) was 51% of yolo11n's call
@@ -142,18 +147,27 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
   // the float conversion with whatever else the GPU is doing.
   std::vector<torch::Tensor> per_image;
   per_image.reserve(N);
-  for (const auto& lb : lbs)
-    per_image.push_back(image_to_tensor_u8_bgr_chw(lb.img));     // BGR CHW uint8
-  auto x_u8 = torch::stack(per_image, /*dim=*/0).contiguous();   // [N, 3, H, W] BGR uint8 CPU
-  // H2D of BGR uint8, then on-device:
-  //   • BGR → RGB via `.flip(1)` (reverses dim 1; libtorch ships a
-  //     dedicated reverse-stride kernel — no index_select tensor needed).
-  //   • cast to float + /255.
-  // Sequencing keeps the .flip on uint8 (3× smaller activations than
-  // float) so the BGR2RGB pass is the cheapest part of the chain.
-  auto x = x_u8.to(at::kCUDA, /*non_blocking=*/false)
-              .flip(/*dim=*/1)
-              .to(at::kFloat).div_(255.0f);
+  {
+    ProfileScope _s{"image_to_tensor"};
+    for (const auto& lb : lbs)
+      per_image.push_back(image_to_tensor_u8_bgr_chw(lb.img));     // BGR CHW uint8
+  }
+  torch::Tensor x_u8, x;
+  {
+    ProfileScope _s{"stack+H2D"};
+    x_u8 = torch::stack(per_image, /*dim=*/0).contiguous();        // [N, 3, H, W] BGR uint8 CPU
+    // H2D of BGR uint8, then on-device:
+    //   • BGR → RGB via `.flip(1)` (reverses dim 1; libtorch ships a
+    //     dedicated reverse-stride kernel — no index_select tensor needed).
+    //   • cast to float + /255.
+    x = x_u8.to(at::kCUDA, /*non_blocking=*/false)
+            .flip(/*dim=*/1)
+            .to(at::kFloat).div_(255.0f);
+    // Force the H2D+kernels to finish so the next stop() captures real
+    // wall-clock when --profile is on; no-op when profile is disabled.
+    if (::yolocpp::core::Profile::instance().enabled())
+      cudaStreamSynchronize(impl_->stream);
+  }
   // We no longer need the explicit H2D below — the .to(kCUDA) above
   // already uploaded the bytes into a torch tensor. Hand TRT a pointer
   // to that tensor instead of memcpying through impl_->d_in.
@@ -167,17 +181,20 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
     }
   }
 
-  // Zero-copy input: x is already a CUDA tensor (uint8→float on GPU
-  // above). Point TRT's input binding straight at it instead of
-  // memcpy'ing into impl_->d_in. Mirrors Ultralytics' approach
-  // (nn/backends/tensorrt.py:141 — `int(im.data_ptr())`).
-  impl_->ctx->setTensorAddress(impl_->input_name.c_str(), x.data_ptr());
-  if (!impl_->ctx->enqueueV3(impl_->stream))
-    throw std::runtime_error("enqueueV3 failed");
-  CUDA_OK(cudaStreamSynchronize(impl_->stream));
-  // Restore the persistent input binding so subsequent calls that
-  // don't go through this fast path still find a valid pointer.
-  impl_->ctx->setTensorAddress(impl_->input_name.c_str(), impl_->d_in);
+  {
+    ProfileScope _s{"enqueueV3"};
+    // Zero-copy input: x is already a CUDA tensor (uint8→float on GPU
+    // above). Point TRT's input binding straight at it instead of
+    // memcpy'ing into impl_->d_in. Mirrors Ultralytics' approach
+    // (nn/backends/tensorrt.py:141 — `int(im.data_ptr())`).
+    impl_->ctx->setTensorAddress(impl_->input_name.c_str(), x.data_ptr());
+    if (!impl_->ctx->enqueueV3(impl_->stream))
+      throw std::runtime_error("enqueueV3 failed");
+    CUDA_OK(cudaStreamSynchronize(impl_->stream));
+    // Restore the persistent input binding so subsequent calls that
+    // don't go through this fast path still find a valid pointer.
+    impl_->ctx->setTensorAddress(impl_->input_name.c_str(), impl_->d_in);
+  }
 
   // Alias the engine's CUDA output buffer as a torch tensor — no D2H
   // memcpy. The downstream `nms()` runs the [N, 4+nc, A] → conf filter
@@ -191,7 +208,12 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
        (int64_t)impl_->output_anchors},
       at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
 
-  auto outs = nms(out_cuda, nmscfg);
+  std::vector<torch::Tensor> outs;
+  {
+    ProfileScope _s{"nms"};
+    outs = nms(out_cuda, nmscfg);
+  }
+  ProfileScope _s_post{"postprocess"};
   std::vector<std::vector<Detection>> result(N);
   for (int i = 0; i < N && i < (int)outs.size(); ++i) {
     auto det = outs[i];

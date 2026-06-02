@@ -9,6 +9,7 @@
 
 #include <yolocpp/config.hpp>
 #include "yolocpp/cli/commands.hpp"
+#include "yolocpp/core/profile.hpp"
 
 #include <CLI11.hpp>
 
@@ -55,6 +56,7 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   bool   export_fp16 = true;
   uint64_t seed = 0;
   std::string save_dir = "runs/train";
+  bool   profile_enabled = false;
 
   app.add_option("--model,-m,--weights", weights,
                   "weights `.pt` / `.trt` (alias: --weights)");
@@ -114,11 +116,23 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
                  "INT8 calibration image directory (val split recommended)");
   app.add_option("--int8-calib-cache", int8_calib_cache,
                  "INT8 calibration cache file (default: <engine>.calib)");
+  app.add_flag  ("--profile", profile_enabled,
+                  "enable per-phase wall-clock profiler (every mode, every model)");
   app.add_option("--dataset",    dl_target,
                   "download mode: dataset short-name (coco8, VOC, ...) or .zip URL");
 
   CLI11_PARSE(app, argc, argv);
   device = normalise_device(device);
+  // Flip the global profile switch as early as possible — every
+  // PROFILE_SCOPE downstream will then start recording. atexit
+  // hook prints the summary on clean exit.
+  if (profile_enabled) {
+    yolocpp::core::Profile::instance().set_enabled(true);
+    std::atexit([]() {
+      yolocpp::core::Profile::instance().print_summary(std::cout);
+    });
+    std::cerr << "[profile] enabled — summary will print at exit\n";
+  }
 
   // Auto-resolve weights: searches cwd, ./data/, ~/.cache/yolocpp/weights/,
   // and falls back to downloading from upstream for recognised
