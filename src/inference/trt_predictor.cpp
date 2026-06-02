@@ -130,20 +130,15 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
         "predict_batch: requested batch=" + std::to_string(N) +
         " exceeds engine max_batch=" + std::to_string(max_batch_));
 
-  // Letterbox per-image so each image keeps its own scale/pad metadata
-  // for box rescaling at the end.
   std::vector<LetterboxResult> lbs;
   lbs.reserve(N);
   for (const auto& bgr : bgrs) lbs.push_back(letterbox(bgr, imgsz_));
 
-  // Stack into [N, 3, H, W]. image_to_tensor returns [3, H, W] CHW float.
   std::vector<torch::Tensor> per_image;
   per_image.reserve(N);
   for (const auto& lb : lbs) per_image.push_back(image_to_tensor(lb.img));
   auto x = torch::stack(per_image, /*dim=*/0).contiguous();   // [N, 3, H, W]
 
-  // The engine was built with the profile kMAX = max_batch_, so any
-  // batch <= max_batch_ works. Set the actual batch for this call.
   if (N != max_batch_) {
     if (!impl_->ctx->setInputShape(
             impl_->input_name.c_str(),
@@ -154,22 +149,26 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
   }
 
   const size_t in_bytes  = (size_t)N * 3 * imgsz_ * imgsz_ * sizeof(float);
-  const size_t out_bytes = (size_t)N * impl_->output_channels *
-                                       impl_->output_anchors * sizeof(float);
 
   CUDA_OK(cudaMemcpyAsync(impl_->d_in, x.data_ptr(), in_bytes,
                           cudaMemcpyHostToDevice, impl_->stream));
   if (!impl_->ctx->enqueueV3(impl_->stream))
     throw std::runtime_error("enqueueV3 failed");
-
-  auto out_cpu = torch::empty(
-      {N, impl_->output_channels, impl_->output_anchors}, torch::kFloat32);
-  CUDA_OK(cudaMemcpyAsync(out_cpu.data_ptr(), impl_->d_out, out_bytes,
-                          cudaMemcpyDeviceToHost, impl_->stream));
   CUDA_OK(cudaStreamSynchronize(impl_->stream));
 
-  // Per-image NMS + box rescale.
-  auto outs = nms(out_cpu, nmscfg);
+  // Alias the engine's CUDA output buffer as a torch tensor — no D2H
+  // memcpy. The downstream `nms()` runs the [N, 4+nc, A] → conf filter
+  // → top-k pipeline on GPU and only transfers the tiny survivor set
+  // (typically K ≤ 100) to CPU for the AVX2 IoU loop. Ultralytics'
+  // TRT backend does the same thing via `Binding.data` (also GPU
+  // tensor aliasing the engine buffer). (Task #95 perf fix.)
+  auto out_cuda = at::from_blob(
+      impl_->d_out,
+      {(int64_t)N, (int64_t)impl_->output_channels,
+       (int64_t)impl_->output_anchors},
+      at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+
+  auto outs = nms(out_cuda, nmscfg);
   std::vector<std::vector<Detection>> result(N);
   for (int i = 0; i < N && i < (int)outs.size(); ++i) {
     auto det = outs[i];

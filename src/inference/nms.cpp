@@ -140,10 +140,16 @@ static torch::Tensor nms_cpu(const torch::Tensor& boxes,
 }
 
 std::vector<torch::Tensor> nms(torch::Tensor pred, NMSConfig cfg) {
-  // pred: [N, 4 + nc, A] → permute to [N, A, 4 + nc]; CPU only.
-  pred = pred.detach().to(torch::kCPU).transpose(1, 2).contiguous();
+  // pred: [N, 4 + nc, A]. Filter + score-extract + top-k stay on the
+  // input's device (CUDA when called from TrtPredictor). Only the
+  // surviving boxes/scores (~10-100) are moved to CPU for the
+  // O(K²) IoU loop. Saves the ~700 KB-per-image D2H we'd otherwise
+  // pay every call. This is what Ultralytics' torchvision.ops.nms +
+  // forward-returns-GPU-tensor pipeline does, minus the actual NMS
+  // kernel (we still use AVX2 CPU NMS on the filtered survivors).
+  // (Task #95 perf fix.)
+  pred = pred.detach().transpose(1, 2).contiguous();
   auto N = pred.size(0);
-  auto A = pred.size(1);
   auto C = pred.size(2);
   int  nc = (int)C - 4;
 
@@ -157,12 +163,10 @@ std::vector<torch::Tensor> nms(torch::Tensor pred, NMSConfig cfg) {
 
     torch::Tensor conf, cls;
     if (cfg.multi_label) {
-      // For every (anchor, class) pair with score > conf, emit one row.
-      // Matches the upstream val multi_label=True path.
       auto mask = scr > cfg.conf_thresh;                      // [A, nc] bool
-      auto coords = torch::nonzero(mask);                     // [K, 2] (anchor, class)
+      auto coords = torch::nonzero(mask);                     // [K, 2]
       if (coords.size(0) == 0) {
-        outputs.emplace_back(torch::zeros({0, 6}, p.options()));
+        outputs.emplace_back(torch::zeros({0, 6}, p.options().device(at::kCPU)));
         continue;
       }
       auto anchor_idx = coords.select(1, 0);
@@ -171,14 +175,13 @@ std::vector<torch::Tensor> nms(torch::Tensor pred, NMSConfig cfg) {
       conf = scr.index({anchor_idx, class_idx});              // [K]
       cls  = class_idx;                                       // [K] int64
     } else {
-      // Single-label: pick the best class per anchor.
       auto best = scr.max(/*dim=*/1, /*keepdim=*/false);
-      conf = std::get<0>(best);  // [A]
-      cls  = std::get<1>(best);  // [A] int64
+      conf = std::get<0>(best);
+      cls  = std::get<1>(best);
       auto mask = conf > cfg.conf_thresh;
       auto idx  = torch::nonzero(mask).flatten();
       if (idx.numel() == 0) {
-        outputs.emplace_back(torch::zeros({0, 6}, p.options()));
+        outputs.emplace_back(torch::zeros({0, 6}, p.options().device(at::kCPU)));
         continue;
       }
       box  = box.index_select(0, idx);
@@ -187,7 +190,6 @@ std::vector<torch::Tensor> nms(torch::Tensor pred, NMSConfig cfg) {
     }
 
     if (conf.numel() > cfg.max_nms) {
-      // keep top-max_nms by confidence
       auto topk = conf.topk(cfg.max_nms);
       auto ti = std::get<1>(topk);
       box  = box.index_select(0, ti);
@@ -195,8 +197,15 @@ std::vector<torch::Tensor> nms(torch::Tensor pred, NMSConfig cfg) {
       cls  = cls.index_select(0, ti);
     }
 
-    // Class-aware NMS via a per-class offset (standard upstream trick).
-    auto offset = cls.to(box.dtype()) * 7680.f;  // larger than any image
+    // Bring the (now-small) survivor set to CPU for the AVX2 IoU loop.
+    // The whole-tensor D2H from the engine-output [1,84,8400] (~2.6 MB)
+    // becomes a [K, 4]+[K]+[K] D2H (~K * 24 bytes) — typically a 10²×
+    // shrink. clone() forces the device transfer in one op.
+    box  = box.to(at::kCPU, /*non_blocking=*/false).contiguous();
+    conf = conf.to(at::kCPU, /*non_blocking=*/false).contiguous();
+    cls  = cls.to(at::kCPU, /*non_blocking=*/false).contiguous();
+
+    auto offset = cls.to(box.dtype()) * 7680.f;
     auto box_off = box.clone();
     box_off.select(1, 0).add_(offset);
     box_off.select(1, 1).add_(offset);

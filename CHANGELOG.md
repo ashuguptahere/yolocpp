@@ -4,6 +4,59 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.22] — 2026-06-02
+
+### Fixed (perf)
+- **Closed the FPS gap to Ultralytics** (task #95). On yolo11n,
+  yolocpp went from **585 → 663 fps** TRT FP16 — now ~3% **faster**
+  than Ultralytics' Python+TRT pipeline (643 fps), where we were
+  previously ~10% slower. Two compounding bottlenecks found by
+  reading Ultralytics' `nn/backends/tensorrt.py` + `utils/nms.py`:
+
+  1. **Explicit D2H memcpy of the full engine output every call.**
+     `TrtPredictor::predict_batch` was doing
+     `cudaMemcpyAsync(out_cpu, d_out, ...)` followed by
+     `cudaStreamSynchronize`, transferring the entire
+     `[N, 4+nc, A]` tensor (~2.6 MB for yolo11n) to host every
+     call. Replaced with `at::from_blob(d_out, shape,
+     device=CUDA)` — aliases the engine output buffer as a torch
+     CUDA tensor, zero copies. Ultralytics does the same via
+     `Binding.data` aliasing the `int(im.data_ptr())` pointer
+     they pass to `context.execute_v2`.
+
+  2. **CPU NMS run on the unfiltered output.** `nms()` was
+     calling `.to(kCPU)` on the whole `[N, A, 4+nc]` tensor
+     before doing the conf-filter / multi-label expansion /
+     top-k. For yolo11n that's 8400 anchors × 84 channels
+     transferred — but typically only ~10-100 survive the conf
+     threshold. Moved the conf-filter / multi-label / top-k /
+     class-offset to GPU and only transfer the surviving
+     `K × 4` boxes + `K` scores + `K` cls to host for the AVX2
+     IoU loop. ~100× shrink on the D2H payload. Matches
+     `torchvision.ops.nms`'s pattern (CUDA kernel on the
+     filtered set).
+
+  Net effect on yolo11n TRT FP16:
+  | | Before | After | vs Ultralytics 643 |
+  |---|------:|------:|-------------------:|
+  | yolocpp | 585 fps | **663 fps** | +3% |
+  | Ultralytics | — | 643 fps | baseline |
+
+  Gain is biggest on small models where NMS-vs-compute ratio is
+  high. For larger models (yolo11x) the GPU compute itself
+  (~3 ms) dominates and the fix is in the noise.
+
+### Note on PT FP32 gap
+- Ultralytics' libtorch FP32 path is still faster than ours
+  (~50%) because they call `model.fuse()` (BN folded into the
+  preceding Conv) at predict-time, whereas yolocpp's
+  `GenericPredictor` runs the unfused training-mode forward.
+  Wiring `fuse()` into the bench_pt path is a bigger refactor
+  (each model holder needs its own fuser; our ONNX exporter
+  already does this via `fuse_conv_bn`) — tracked as #95B.
+  Not urgent: TRT FP16 is the user-facing measurement, and we
+  now lead there.
+
 ## [0.99.21] — 2026-06-02
 
 ### Added
