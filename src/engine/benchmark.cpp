@@ -219,7 +219,10 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
         serialization::TrtBuildConfig tcfg;
         with_batch_profile(tcfg);
         tcfg.int8 = true;
-        tcfg.fp16 = true;  // mixed INT8/FP16: layers without INT8 fall back to FP16
+        tcfg.fp16 = false;  // INT8-only — matches Ultralytics' engine.py
+        // (line 283: they only set FP16 flag in the `elif half` branch).
+        // Mixing FP16+INT8 made TRT pick more FP16 fallback tactics
+        // than necessary, costing ~5% throughput on small models.
         tcfg.calib_image_dir = cfg.int8_calib_dir;
         tcfg.calib_cache     = cfg.int8_calib_cache.empty()
             ? trt8 + ".calib"

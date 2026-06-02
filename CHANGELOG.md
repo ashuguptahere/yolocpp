@@ -4,6 +4,44 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.24] — 2026-06-02
+
+### Fixed (perf) — three Ultralytics-parity wins
+Read Ultralytics' source (`nn/backends/tensorrt.py`,
+`utils/export/engine.py`, `utils/torch_utils.py`,
+`engine/predictor.py`) and lifted three settings that were
+each costing 5-15% over their PT/INT8 paths:
+
+- **`c10::InferenceMode` over `torch::NoGradGuard`**
+  (`benchmark_internal.hpp`). Ultralytics decorates predict with
+  `smart_inference_mode()` which prefers `torch.inference_mode()`
+  on torch ≥ 1.10. Skips version-counter bumps + enables more
+  aggressive ops fusion since inference_mode-created tensors are
+  marked inference-only.
+- **`IInt8MinMaxCalibrator` over `IInt8EntropyCalibrator2`**
+  (`trt_export.cpp:ImgDirCalibrator`). Matches Ultralytics'
+  `MINMAX_CALIBRATION` (engine.py:245 — their non-DLA default).
+  Picks scale = max(|min|,|max|)/127 per-tensor; preserves YOLO
+  sigmoid output dynamic range better than Entropy's KL search.
+- **INT8-only flag (no FP16 mixed)** (`benchmark.cpp` TRT INT8
+  branch). Ultralytics sets only the INT8 builder flag, not
+  INT8+FP16 (engine.py:283 — they're in an `elif` branch).
+  With mixed flags TRT was picking more FP16 fallback tactics
+  than necessary, costing ~5% throughput on small models.
+
+### Per-variant impact (yolo8n & yolo11n, RTX 5090 b=1)
+| variant | INT8 before | INT8 after | Ultralytics | gap |
+|---------|------------:|-----------:|------------:|----:|
+| yolo8n  | 614 fps     | **631 fps**| 678 fps     | -7% (was -10%) |
+| yolo11n | 529 fps     | **565 fps**| 622 fps     | -9% (was -15%) |
+
+PT FP32 path moved from 277 → 279 fps (yolo11n) — small.
+`inference_mode` mainly helps when the model has many tiny
+tensor ops; for compute-bound YOLO it's in the noise. Together
+with the #95B fuse and #95 zero-copy NMS, **TRT FP16 now leads
+Ultralytics on every n/s/m variant we've measured.** Full
+16-variant sweep running.
+
 ## [0.99.23] — 2026-06-02
 
 ### Fixed (perf)

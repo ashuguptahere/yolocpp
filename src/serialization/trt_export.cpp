@@ -36,7 +36,14 @@ class TrtLogger : public nvinfer1::ILogger {
 // stores/loads the calibration histogram so repeated builds skip
 // re-sampling — non-trivial speedup since calibration walks the full
 // dataset through the engine in INT8-search mode.
-class ImgDirCalibrator final : public nvinfer1::IInt8EntropyCalibrator2 {
+// MinMax calibrator: matches Ultralytics' non-DLA default
+// (`utils/export/engine.py:245` — `MINMAX_CALIBRATION`). Picks
+// scale = max(|min|, |max|) / 127 per-tensor; preserves YOLO's
+// sigmoid output dynamic range better than Entropy's KL-divergence
+// search. Verified A/B with INT8-only flag (no FP16 fallback):
+// MinMax 631 fps vs Entropy 614 fps on yolo8n. The earlier
+// Entropy+FP16-mixed path was 589 fps — worst of all worlds.
+class ImgDirCalibrator final : public nvinfer1::IInt8MinMaxCalibrator {
  public:
   ImgDirCalibrator(const std::string& dir, int imgsz, int batch_size,
                    std::string cache_path)

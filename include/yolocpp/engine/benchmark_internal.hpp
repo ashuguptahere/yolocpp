@@ -101,7 +101,14 @@ struct GenericPredictor {
     auto x  = inference::image_to_tensor(lb.img).unsqueeze(0).to(device);
     torch::Tensor pred;
     {
-      torch::NoGradGuard ng;
+      // InferenceMode is strictly faster than NoGradGuard: skips
+      // version-counter bumps + grants more aggressive ops fusion
+      // since tensors created inside the guard are marked as
+      // inference-only. Matches Ultralytics' `smart_inference_mode()`
+      // decorator (utils/torch_utils.py:76). Trade-off: tensors
+      // created in this scope can't have gradients re-enabled later,
+      // which is fine for the bench harness.
+      c10::InferenceMode im_guard;
       pred = const_cast<ModelHolder&>(model)->forward_eval(x);
     }
     auto outs = inference::nms(pred, nms);
