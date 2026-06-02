@@ -134,10 +134,23 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
   lbs.reserve(N);
   for (const auto& bgr : bgrs) lbs.push_back(letterbox(bgr, imgsz_));
 
+  // Profiling (#95-followup) showed image_to_tensor (BGR→RGB +
+  // uint8→float + /255 + HWC→CHW on CPU) was 51% of yolo11n's call
+  // time. Match Ultralytics' approach (engine/predictor.py:163-176):
+  // keep the CPU conversion as uint8 (~4× smaller H2D payload), then
+  // cast to float + divide by 255 on GPU after the memcpy. Overlaps
+  // the float conversion with whatever else the GPU is doing.
   std::vector<torch::Tensor> per_image;
   per_image.reserve(N);
-  for (const auto& lb : lbs) per_image.push_back(image_to_tensor(lb.img));
-  auto x = torch::stack(per_image, /*dim=*/0).contiguous();   // [N, 3, H, W]
+  for (const auto& lb : lbs) per_image.push_back(image_to_tensor_u8(lb.img));
+  auto x_u8 = torch::stack(per_image, /*dim=*/0).contiguous();      // [N, 3, H, W] uint8 CPU
+  // Async H2D of uint8 + on-device cast to float + divide. Both are
+  // single-pass element-wise kernels on Blackwell.
+  auto x = x_u8.to(at::kCUDA, /*non_blocking=*/false)
+              .to(at::kFloat).div_(255.0f);
+  // We no longer need the explicit H2D below — the .to(kCUDA) above
+  // already uploaded the bytes into a torch tensor. Hand TRT a pointer
+  // to that tensor instead of memcpying through impl_->d_in.
 
   if (N != max_batch_) {
     if (!impl_->ctx->setInputShape(
@@ -148,13 +161,17 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
     }
   }
 
-  const size_t in_bytes  = (size_t)N * 3 * imgsz_ * imgsz_ * sizeof(float);
-
-  CUDA_OK(cudaMemcpyAsync(impl_->d_in, x.data_ptr(), in_bytes,
-                          cudaMemcpyHostToDevice, impl_->stream));
+  // Zero-copy input: x is already a CUDA tensor (uint8→float on GPU
+  // above). Point TRT's input binding straight at it instead of
+  // memcpy'ing into impl_->d_in. Mirrors Ultralytics' approach
+  // (nn/backends/tensorrt.py:141 — `int(im.data_ptr())`).
+  impl_->ctx->setTensorAddress(impl_->input_name.c_str(), x.data_ptr());
   if (!impl_->ctx->enqueueV3(impl_->stream))
     throw std::runtime_error("enqueueV3 failed");
   CUDA_OK(cudaStreamSynchronize(impl_->stream));
+  // Restore the persistent input binding so subsequent calls that
+  // don't go through this fast path still find a valid pointer.
+  impl_->ctx->setTensorAddress(impl_->input_name.c_str(), impl_->d_in);
 
   // Alias the engine's CUDA output buffer as a torch tensor — no D2H
   // memcpy. The downstream `nms()` runs the [N, 4+nc, A] → conf filter

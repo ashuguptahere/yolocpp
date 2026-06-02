@@ -18,3 +18,5 @@ function(yolocpp_tool name)
 endfunction()
 
 yolocpp_tool(convert_weights)
+yolocpp_tool(profile_trt)
+target_link_libraries(profile_trt PRIVATE TensorRT::nvinfer TensorRT::nvinfer_plugin CUDA::cudart)

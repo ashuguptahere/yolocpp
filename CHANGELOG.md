@@ -4,6 +4,61 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.25] — 2026-06-02
+
+### Added
+- **`tools/profile_trt`** — per-phase wall-clock profiler for the
+  TRT inference pipeline. Splits a single `predict()` call into
+  letterbox / image_to_tensor / H2D / enqueueV3 / NMS, syncs CUDA
+  between each, reports median ms across N iters. Standalone
+  binary; `cmake --build build --target profile_trt`. Use it to
+  find the next bottleneck instead of guessing.
+
+### Fixed (perf) — profile-guided
+Profiling yolo11n (where we were closest to Ultralytics in raw
+TRT FP16 fps) showed **`image_to_tensor` consuming 51% of the
+2.18 ms call** (1.09 ms on CPU for BGR→RGB + float32 cast +
+/255 + HWC→CHW). The cast + normalize were the dominant cost.
+H2D was another 0.25 ms for a [1,3,640,640] float32 tensor.
+
+- **Uint8 H2D + on-GPU float cast** in `TrtPredictor::predict_batch`.
+  Matches Ultralytics' `engine/predictor.py:163-176` —
+  CPU does BGR→RGB + uint8 HWC→CHW only; the float cast and
+  `im /= 255` happen on the GPU after H2D. The H2D payload
+  shrinks 4× (uint8 vs float32), and the float conversion
+  overlaps with whatever else the GPU is doing.
+- **Zero-copy input binding** — point TRT's `setTensorAddress`
+  directly at the torch CUDA tensor's `data_ptr()` rather than
+  doing a `cudaMemcpyAsync` into `impl_->d_in`. The persistent
+  binding is restored after `enqueueV3` so other callers still
+  work. Matches Ultralytics'
+  `nn/backends/tensorrt.py:141` (`int(im.data_ptr())`).
+
+### Per-variant impact (RTX 5090 b=1)
+| variant | TRT FP16 before | TRT FP16 after | Ultralytics |
+|---------|----------------:|---------------:|------------:|
+| yolo11n |    663 fps      |   **986 fps**  | 643 fps     |
+| yolo11x |    348 fps      |   **403 fps**  | TBD         |
+
+| variant | TRT INT8 before | TRT INT8 after | Ultralytics |
+|---------|----------------:|---------------:|------------:|
+| yolo11n |    565 fps      |   **814 fps**  | 622 fps     |
+| yolo11x |   (no data)     |   **400 fps**  | TBD         |
+
+yolocpp now leads Ultralytics by **+53% (yolo11n FP16)** /
+**+31% (yolo11n INT8)** — was -10% / -15% before this session's
+perf work started.
+
+### Profile breakdown (yolo11n FP16, RTX 5090)
+| phase | before (ms) | after (ms) | Δ |
+|-------|-----------:|-----------:|----:|
+| letterbox       | 0.22 | 0.22 | 0 |
+| image_to_tensor | 1.09 | 0.16 | **-85%** |
+| H2D + sync      | 0.26 | 0.09 | **-67%** |
+| enqueueV3+sync  | 0.46 | 0.44 | -4% |
+| nms             | 0.16 | 0.11 | -31% |
+| **TOTAL**       | **2.18** | **1.01** | **-54%** |
+
 ## [0.99.24] — 2026-06-02
 
 ### Fixed (perf) — three Ultralytics-parity wins
