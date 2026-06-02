@@ -4,6 +4,31 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.20] — 2026-06-02
+
+### Added
+- **INT8 fps numbers for v10l, v11x, and all v12/v13 variants**
+  (README FPS table). All 11 previously-failing rows now have real
+  INT8 measurements thanks to the #88C workspace bump and #88D
+  dynamic-batch ONNX export.
+
+### Headline INT8 numbers (RTX 5090, batch=1)
+| variant | PT FP32 | TRT FP16 | TRT INT8 | INT8/PT |
+|---------|--------:|---------:|---------:|--------:|
+| yolo10l | 140 fps | 270 fps  | **269 fps** | 1.92× |
+| yolo11x | 119 fps | 188 fps  | **204 fps** | 1.71× |
+| yolo12n | 213 fps | 385 fps  | **386 fps** | 1.81× |
+| yolo12x |  94 fps | 151 fps  | **161 fps** | 1.71× |
+| yolo13n | 190 fps | 367 fps  | **343 fps** | 1.80× |
+| yolo13x |  87 fps | 142 fps  | **133 fps** | 1.53× |
+
+Pattern holds across the matrix: INT8 wins on m/l/x scales of
+v10/v11/v12 (+5–10% over FP16); ties/slightly trails FP16 on
+v13 (HyperACE/AAttn dequant overhead) and on n-scale variants.
+v10x retains the FP16-beats-INT8 inversion noted in CLAUDE.md's
+v10 TF32 quirk — INT8 calibration accumulates the same mantissa
+loss across RepVGGDW's 7×7 dwconv stack.
+
 ## [0.99.19] — 2026-06-02
 
 ### Fixed

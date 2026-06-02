@@ -284,46 +284,36 @@ screen-dataset val set, mixed-precision: FP16 + INT8 flags both set).
 | yolo10s | 227 fps | 259 fps | **388 fps** | **395 fps** | 2.58 ms |
 | yolo10m | 170 fps | 139 fps | **291 fps** | **289 fps** | 3.44 ms |
 | yolo10b | 156 fps | 151 fps | **290 fps** | **292 fps** | 3.45 ms |
-| yolo10l | — | — | — | — [INT8-fail] | (TRT tactic workspace OOM) |
+| yolo10l | 140 fps | 138 fps | **270 fps** | **269 fps** | 3.70 ms |
 | yolo10x | 129 fps | 114 fps | **238 fps** | **211 fps** | 4.20 ms |
 | yolo11n | 251 fps | 383 fps | **453 fps** | **443 fps** | 2.21 ms |
 | yolo11s | 220 fps | 269 fps | **383 fps** | **400 fps** | 2.61 ms |
 | yolo11m | 203 fps | 193 fps | **298 fps** | **314 fps** | 3.35 ms |
 | yolo11l | 155 fps | 155 fps | **235 fps** | **247 fps** | 4.25 ms |
-| yolo11x | — | — | — | — [INT8-fail] | (TRT tactic workspace OOM) |
-| yolo12n | 211 fps | 380 fps | **401 fps** | — [ONNX-batch][def] | 2.50 ms |
-| yolo12s | 175 fps | 294 fps | **363 fps** | — [ONNX-batch][def] | 2.76 ms |
-| yolo12m | 168 fps | 224 fps | **321 fps** | — [ONNX-batch][def] | 3.12 ms |
-| yolo12l | 117 fps | 161 fps | **234 fps** | — [ONNX-batch][def] | 4.28 ms |
-| yolo12x |  88 fps | 114 fps | **204 fps** | — [ONNX-batch][def] | 4.91 ms |
-| yolo13n | 178 fps | 359 fps | **380 fps** | — [ONNX-batch][def] | 2.63 ms |
-| yolo13s | 158 fps | 289 fps | **328 fps** | — [ONNX-batch][def] | 3.05 ms |
-| yolo13l | — | — | — | — [ONNX-batch][def] | (TRT build hung + INT8 ONNX-batch; both deferred) |
-| yolo13x |  81 fps | 115 fps | **175 fps** | — [ONNX-batch][def] | 5.72 ms |
+| yolo11x | 119 fps | 102 fps | **188 fps** | **204 fps** | 5.33 ms |
+| yolo12n | 213 fps | 348 fps | **385 fps** | **386 fps** | 2.60 ms |
+| yolo12s | 190 fps | 245 fps | **310 fps** | **326 fps** | 3.22 ms |
+| yolo12m | 184 fps | 185 fps | **250 fps** | **269 fps** | 4.01 ms |
+| yolo12l | 123 fps | 129 fps | **182 fps** | **197 fps** | 5.50 ms |
+| yolo12x |  94 fps |  89 fps | **151 fps** | **161 fps** | 6.62 ms |
+| yolo13n | 190 fps | 301 fps | **367 fps** | **343 fps** | 2.72 ms |
+| yolo13s | 170 fps | 235 fps | **297 fps** | **289 fps** | 3.37 ms |
+| yolo13l | 115 fps | 125 fps | **180 fps** | **177 fps** | 5.55 ms |
+| yolo13x |  87 fps |  86 fps | **142 fps** | **133 fps** | 7.02 ms |
 | yolo26n | 219 fps | 367 fps | **433 fps** | **424 fps** | 2.31 ms |
 | yolo26s | 184 fps | 258 fps | **373 fps** | **376 fps** | 2.68 ms |
 | yolo26m | 174 fps | 185 fps | **300 fps** | **304 fps** | 3.33 ms |
 | yolo26l | 138 fps | 144 fps | **263 fps** | **238 fps** | 3.81 ms |
 | yolo26x | 103 fps | — | — | — [INT8-fail] | (TRT tactic OOM) |
 
-[INT8-fail]: TensorRT 10.14 can't find an INT8 tactic for v7
-anchor-based decode + v9e/v10l/v11x/v26x large-scale builders
-within the default workspace (1.2 GB request rejected). Either
-bump workspace (`setMaxWorkspaceSize` in `trt_export.cpp`, task
-#88C) or stick with FP16 for these — they aren't the typical
-INT8 target.
-
-[ONNX-batch][def]: v12/v13 INT8 path requires the ONNX exporter
-to emit dynamic batch dim (or the cache key to include batch).
-Current `cache/yolo12{n,s,m,l,x}.640.onnx` and `yolo13{n,s,l,x}`
-files bake batch=16 into the input tensor, so TRT's b=1
-optimisation profile rejects them with `Error Code 4: Input tensor
-images has static dimensions that don't match kOPT`. Tracked as
-**#88D**. FP32/FP16 paths work because they share the same engine
-cache before the batch-aware cache key landed, so they hit a
-working pre-batch engine; INT8 always needs a fresh build, which
-hits the static-shape ONNX. Workaround until #88D: pass
-`--batch 16` when benchmarking v12/v13 INT8.
+[INT8-fail]: TensorRT 10.14 can't find an INT8 tactic for
+v9e/v26x/v7-base/v7-x within the default 1 GiB workspace (1.2 GiB
+request rejected). v10l/v11x were in the same bucket until 0.99.19
+bumped the workspace default to 4 GiB (#88C); they now build INT8
+cleanly. The four remaining `[INT8-fail]` rows above (v3, v7-base,
+v7-x, v9e, v26x) need either further tactic-source tuning or just
+stick with FP16 — INT8 isn't the canonical target for those
+architectures.
 
 [new]: variants whose weights were downloaded this session — v6 MBLA
 (s/m/l/x_mbla) and v7 P6 (w6/e6/d6/e6e). MBLA variants are functional;
