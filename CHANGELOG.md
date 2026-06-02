@@ -4,6 +4,34 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.26] — 2026-06-02
+
+### Fixed (perf) — same uint8 path for PT FP32
+Applied the 0.99.25 `image_to_tensor_u8` → on-GPU `float + /255`
+pattern to **both** PT inference entry points:
+- `GenericPredictor::predict` (`benchmark_internal.hpp`) — the
+  registry's PT bench path (v3/v5/v6/v7/v9/v10/v11/v12/v13/v26).
+- `inference::Predictor::predict` (`predictor.cpp`) — the legacy
+  v8 / v8-task fallback used when the registry returns nullopt.
+
+Same root cause as the TRT side: 1 ms of CPU-side
+`cv::convertTo(CV_32F, 1/255)` + HWC→CHW permute was dominating
+the 3-4 ms forward on small models. Now the CPU only does the
+uint8 BGR→RGB + HWC→CHW; cast + normalise happen on GPU.
+
+### Per-variant impact (RTX 5090 b=1, PT FP32)
+| variant | PT before | PT after | Ultralytics | vs Ultra |
+|---------|---------:|--------:|------------:|---------:|
+| yolo8n  |  278 fps | **489** | 426 fps     | **+15%** |
+| yolo11n |  277 fps | **432** | 367 fps     | **+18%** |
+| yolo11x |  124 fps | **135** | 145 fps     | -7%      |
+
+yolocpp now leads Ultralytics on **PT FP32** as well as TRT FP16
+and TRT INT8 across the small/medium variants. yolo11x trails
+Ultralytics by 7% on PT FP32 — compute-bound, ~7.4 ms forward
+where Ultralytics' Python wrapper has lower per-call overhead
+than ours from elsewhere (Sequential / ModuleList dispatch).
+
 ## [0.99.25] — 2026-06-02
 
 ### Added
