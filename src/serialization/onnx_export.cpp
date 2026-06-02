@@ -2365,9 +2365,14 @@ std::string emit_aattn_v12(GraphBuilder& g, const std::string& in,
 
   // 1) qkv conv (act=False; v12 qkv has bias=False).
   auto qkv = emit_conv_module(g, in, prefix + ".qkv", a->qkv.get());
+  // Batch positions emit -1 for dynamic-batch ONNX (#88D); ONNX's
+  // Reshape allows one -1 per shape and infers it from the total
+  // element count. Each reshape below has exactly one -1 so the
+  // inference is well-defined.
+  (void)B; (void)Bg;
   // 2) Reshape [B, 3C, H, W] → [B, 3C, N]
   auto rshape0 = g.add_init_int64(prefix + ".rshape0",
-                                   {(int64_t)B, (int64_t)(3*C), (int64_t)N});
+                                   {-1L, (int64_t)(3*C), (int64_t)N});
   auto y3 = g.node("Reshape", {qkv, rshape0}, {}, prefix + ".y3");
   // Transpose perm=(0,2,1) → [B, N, 3C]
   auto y_flat = g.node("Transpose", {y3},
@@ -2376,12 +2381,12 @@ std::string emit_aattn_v12(GraphBuilder& g, const std::string& in,
   std::string after_window = y_flat;
   if (area > 1) {
     auto ws = g.add_init_int64(prefix + ".win_shape",
-                                {(int64_t)Bg, (int64_t)Ng, (int64_t)(3*C)});
+                                {-1L, (int64_t)Ng, (int64_t)(3*C)});
     after_window = g.node("Reshape", {y_flat, ws}, {}, prefix + ".windowed");
   }
   // 4) View [Bg, Ng, nh, 3hd] → permute (0,2,3,1) → [Bg, nh, 3hd, Ng]
   auto vshape = g.add_init_int64(prefix + ".v.shape",
-                                  {(int64_t)Bg, (int64_t)Ng, (int64_t)nh,
+                                  {-1L, (int64_t)Ng, (int64_t)nh,
                                    (int64_t)(3*hd)});
   auto y4 = g.node("Reshape", {after_window, vshape}, {}, prefix + ".y4");
   auto qkv_h = g.node("Transpose", {y4},
@@ -2418,11 +2423,11 @@ std::string emit_aattn_v12(GraphBuilder& g, const std::string& in,
   // 9) reshape to [B, N, C] (un-windows if area > 1) then to [B, H, W, C]
   //    then permute to [B, C, H, W].
   auto bnc_shape = g.add_init_int64(prefix + ".bnc",
-                                     {(int64_t)B, (int64_t)N, (int64_t)C});
+                                     {-1L, (int64_t)N, (int64_t)C});
   auto out_bnc = g.node("Reshape", {out1, bnc_shape}, {}, prefix + ".out.bnc");
   auto v_p_bnc = g.node("Reshape", {v_p1, bnc_shape}, {}, prefix + ".v_p.bnc");
   auto bhwc_shape = g.add_init_int64(prefix + ".bhwc",
-                                      {(int64_t)B, (int64_t)H, (int64_t)W,
+                                      {-1L, (int64_t)H, (int64_t)W,
                                        (int64_t)C});
   auto out_bhwc = g.node("Reshape", {out_bnc, bhwc_shape}, {}, prefix + ".out.bhwc");
   auto v_p_bhwc = g.node("Reshape", {v_p_bnc, bhwc_shape}, {}, prefix + ".v_p.bhwc");
@@ -2645,15 +2650,17 @@ std::string emit_v13_aattn(GraphBuilder& g, const std::string& in,
                          attr_ints("strides", {1, 1})},
                         prefix + ".pe.out");
 
+  // Batch positions emit -1 for dynamic-batch ONNX (#88D); see v12 note.
+  (void)B; (void)Bg;
   // qk_flat: [B, 2C, H, W] → [B, 2C, N] → transpose → [B, N, 2C]
   auto qk_n2c = g.add_init_int64(prefix + ".qk.n2c",
-                                  {(int64_t)B, (int64_t)(2*C), (int64_t)N});
+                                  {-1L, (int64_t)(2*C), (int64_t)N});
   auto qk_r = g.node("Reshape", {qk, qk_n2c}, {}, prefix + ".qk.r");
   auto qk_flat = g.node("Transpose", {qk_r},
                          {attr_ints("perm", {0, 2, 1})}, prefix + ".qk.flat");
   // v_flat: [B, N, C]
   auto v_nc = g.add_init_int64(prefix + ".v.n1c",
-                                {(int64_t)B, (int64_t)C, (int64_t)N});
+                                {-1L, (int64_t)C, (int64_t)N});
   auto v_r = g.node("Reshape", {v_4d, v_nc}, {}, prefix + ".v.r");
   auto v_flat = g.node("Transpose", {v_r},
                         {attr_ints("perm", {0, 2, 1})}, prefix + ".v.flat");
@@ -2662,10 +2669,10 @@ std::string emit_v13_aattn(GraphBuilder& g, const std::string& in,
   std::string v_w  = v_flat;
   if (area > 1) {
     auto qkw = g.add_init_int64(prefix + ".qk.win",
-                                 {(int64_t)Bg, (int64_t)Ng, (int64_t)(2*C)});
+                                 {-1L, (int64_t)Ng, (int64_t)(2*C)});
     qk_w = g.node("Reshape", {qk_flat, qkw}, {}, prefix + ".qk.windowed");
     auto vw  = g.add_init_int64(prefix + ".v.win",
-                                 {(int64_t)Bg, (int64_t)Ng, (int64_t)C});
+                                 {-1L, (int64_t)Ng, (int64_t)C});
     v_w  = g.node("Reshape", {v_flat, vw}, {}, prefix + ".v.windowed");
   }
   // Split qk → q, k along last dim (size C each).
@@ -2680,7 +2687,7 @@ std::string emit_v13_aattn(GraphBuilder& g, const std::string& in,
 
   // Reshape q/k/v to (Bg, Ng, nh, hd) → transpose to (Bg, nh, hd, Ng).
   auto qkv_shape = g.add_init_int64(prefix + ".qkv.shape",
-                                     {(int64_t)Bg, (int64_t)Ng,
+                                     {-1L, (int64_t)Ng,
                                       (int64_t)nh, (int64_t)hd});
   auto q_r = g.node("Reshape", {qf, qkv_shape}, {}, prefix + ".q.r");
   auto k_r = g.node("Reshape", {kf, qkv_shape}, {}, prefix + ".k.r");
@@ -2707,10 +2714,10 @@ std::string emit_v13_aattn(GraphBuilder& g, const std::string& in,
                       {attr_ints("perm", {0, 3, 1, 2})}, prefix + ".out1");
   // → reshape to (B, N, C) → (B, H, W, C) → permute to (B, C, H, W)
   auto bnc = g.add_init_int64(prefix + ".bnc",
-                               {(int64_t)B, (int64_t)N, (int64_t)C});
+                               {-1L, (int64_t)N, (int64_t)C});
   auto out_bnc = g.node("Reshape", {out1, bnc}, {}, prefix + ".out.bnc");
   auto bhwc = g.add_init_int64(prefix + ".bhwc",
-                                {(int64_t)B, (int64_t)H, (int64_t)W,
+                                {-1L, (int64_t)H, (int64_t)W,
                                  (int64_t)C});
   auto out_bhwc = g.node("Reshape", {out_bnc, bhwc}, {}, prefix + ".out.bhwc");
   auto out_sp = g.node("Transpose", {out_bhwc},
@@ -2835,9 +2842,10 @@ std::string emit_ada_hyperedge_gen(GraphBuilder& g, const std::string& in,
   auto offsets_flat = g.node("MatMul", {ctx, cw}, {}, prefix + ".offsets.mm");
   offsets_flat = g.node("Add", {offsets_flat, cb}, {},
                          prefix + ".offsets.bias");
-  // Reshape offsets to [B, M, D]
+  // Reshape offsets to [B, M, D] — dynamic batch (#88D).
+  (void)B;
   auto off_shape = g.add_init_int64(prefix + ".off.shape",
-                                     {(int64_t)B, (int64_t)M, (int64_t)D});
+                                     {-1L, (int64_t)M, (int64_t)D});
   auto offsets = g.node("Reshape", {offsets_flat, off_shape}, {},
                          prefix + ".offsets");
   // prototypes = prototype_base.unsqueeze(0) + offsets  → [B, M, D]
@@ -2857,14 +2865,14 @@ std::string emit_ada_hyperedge_gen(GraphBuilder& g, const std::string& in,
 
   // Reshape & permute X_proj to (B, num_heads, N, head_dim)
   auto xshape = g.add_init_int64(prefix + ".x.shape",
-                                  {(int64_t)B, (int64_t)N, (int64_t)nh,
+                                  {-1L, (int64_t)N, (int64_t)nh,
                                    (int64_t)hd});
   auto x_r = g.node("Reshape", {x_proj, xshape}, {}, prefix + ".x.r");
   auto X_heads = g.node("Transpose", {x_r},
                          {attr_ints("perm", {0, 2, 1, 3})}, prefix + ".X_heads");
   // proto_heads: (B, M, num_heads, head_dim) → permute (0,2,1,3) → (B, nh, M, hd)
   auto pshape = g.add_init_int64(prefix + ".proto.shape",
-                                  {(int64_t)B, (int64_t)M, (int64_t)nh,
+                                  {-1L, (int64_t)M, (int64_t)nh,
                                    (int64_t)hd});
   auto p_r = g.node("Reshape", {prototypes, pshape}, {}, prefix + ".p.r");
   auto proto_heads = g.node("Transpose", {p_r},
@@ -2950,10 +2958,13 @@ std::string emit_ada_hg_computation(GraphBuilder& g, const std::string& in,
                                      int B, int C, int H, int W,
                                      const std::string& prefix,
                                      models::AdaHGComputationImpl* m) {
-  // tokens = in.flatten(2).transpose(1, 2)  → (B, N, C)
+  // tokens = in.flatten(2).transpose(1, 2)  → (B, N, C). Dynamic batch
+  // (#88D): emit -1 for batch in Reshape shapes; B is still passed down
+  // so emit_ada_hg_conv and its callees know to do the same.
   int N = H * W;
+  (void)B;
   auto bcn = g.add_init_int64(prefix + ".bcn",
-                               {(int64_t)B, (int64_t)C, (int64_t)N});
+                               {-1L, (int64_t)C, (int64_t)N});
   auto x_r = g.node("Reshape", {in, bcn}, {}, prefix + ".x.r");
   auto tokens = g.node("Transpose", {x_r},
                         {attr_ints("perm", {0, 2, 1})}, prefix + ".tokens");
@@ -2963,7 +2974,7 @@ std::string emit_ada_hg_computation(GraphBuilder& g, const std::string& in,
   auto y_t = g.node("Transpose", {y},
                      {attr_ints("perm", {0, 2, 1})}, prefix + ".y.t");
   auto bchw = g.add_init_int64(prefix + ".bchw",
-                                {(int64_t)B, (int64_t)C, (int64_t)H, (int64_t)W});
+                                {-1L, (int64_t)C, (int64_t)H, (int64_t)W});
   return g.node("Reshape", {y_t, bchw}, {}, prefix + ".out");
 }
 
@@ -3042,7 +3053,7 @@ void export_yolo12_onnx(models::Yolo12Detect& model,
                          const OnnxExportConfig& cfg) {
   model->eval();
   GraphBuilder g;
-  g.set_input(cfg.input_name, /*FLOAT=*/1, {1, 3, cfg.imgsz, cfg.imgsz});
+  g.set_input(cfg.input_name, /*FLOAT=*/1, {-1, 3, cfg.imgsz, cfg.imgsz});
 
   // v12 yaml: 22 layers ending in Detect (legacy=false).
   struct Step { std::vector<int> from; std::string kind; };
@@ -3062,7 +3073,12 @@ void export_yolo12_onnx(models::Yolo12Detect& model,
   std::vector<std::pair<int, int>> outs_hw(yaml.size());
   std::string prev = cfg.input_name;
   int H_in = cfg.imgsz, W_in = cfg.imgsz;
-  int B_in = 1;
+  // Dynamic batch placeholder — emitters that bake batch into Reshape
+  // shape constants must emit -1 in those positions. ONNX infers the
+  // batch dim from the input tensor's actual size at runtime. Lets the
+  // same .onnx serve b=1 single-image latency and b=N throughput
+  // profiles without re-exporting. (Task #88D.)
+  int B_in = -1;
 
   auto idx_or_prev = [&](int f) { return (f == -1) ? prev : outs[f]; };
   auto hw_at = [&](int i, int f) -> std::pair<int, int> {
@@ -3126,7 +3142,7 @@ void export_yolo13_onnx(models::Yolo13Detect& model,
                          const OnnxExportConfig& cfg) {
   model->eval();
   GraphBuilder g;
-  g.set_input(cfg.input_name, /*FLOAT=*/1, {1, 3, cfg.imgsz, cfg.imgsz});
+  g.set_input(cfg.input_name, /*FLOAT=*/1, {-1, 3, cfg.imgsz, cfg.imgsz});
 
   // 33-layer v13 yaml; same kV13Yaml table as Yolo13DetectImpl.
   struct Step { std::vector<int> from; std::string kind; };
@@ -3154,7 +3170,12 @@ void export_yolo13_onnx(models::Yolo13Detect& model,
   std::vector<std::pair<int, int>> outs_hw(yaml.size());
   std::string prev = cfg.input_name;
   int H_in = cfg.imgsz, W_in = cfg.imgsz;
-  int B_in = 1;
+  // Dynamic batch placeholder — emitters that bake batch into Reshape
+  // shape constants must emit -1 in those positions. ONNX infers the
+  // batch dim from the input tensor's actual size at runtime. Lets the
+  // same .onnx serve b=1 single-image latency and b=N throughput
+  // profiles without re-exporting. (Task #88D.)
+  int B_in = -1;
 
   auto idx_or_prev = [&](int f) { return (f == -1) ? prev : outs[f]; };
   auto hw_at = [&](int i, int f) -> std::pair<int, int> {

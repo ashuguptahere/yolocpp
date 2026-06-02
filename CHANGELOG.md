@@ -4,6 +4,41 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.19] — 2026-06-02
+
+### Fixed
+- **#88C TRT workspace bump (1 → 4 GiB)** in `TrtBuildConfig::workspace_bytes`
+  default. Unblocks INT8 tactic search for the larger builders that
+  previously failed with `UNSUPPORTED_STATE: Skipping tactic 0 due to
+  insufficient memory of requested size of 1.17–1.30 GB`: v9e, v10l,
+  v11x, v26x, and the v7 anchor-based variants. RTX 5090 has 32 GB
+  total so the 4 GiB workspace is a comfortable ceiling.
+  Verified yolo11x INT8 @ b=1: **292 fps**, 2.36× PT FP32 (vs failing
+  to build before).
+- **#88D Dynamic-batch ONNX export for v12/v13.** ONNX exporter for
+  `Yolo12Detect` and `Yolo13Detect` was emitting the input tensor
+  with static batch=1 dim, and the v12/v13 AAttn + HyperACE emitters
+  baked `B` and `Bg = B * area` into every Reshape shape constant.
+  TRT then rejected any optimisation profile with `batch_opt != 1`
+  with `Error Code 4: Input tensor images has static dimensions that
+  don't match kOPT`. Fixed by switching `set_input`'s batch dim to
+  `-1` (dynamic), `B_in = -1` at the v12/v13 walker entry, and
+  replacing every `(int64_t)B` / `(int64_t)Bg` in `emit_aattn_v12`,
+  `emit_v13_aattn`, `emit_ada_hyperedge_gen`, `emit_ada_hg_computation`
+  with `-1L`. ONNX's Reshape allows one `-1` per shape and infers it
+  from the total element count; each shape has exactly one `-1` so
+  inference is well-defined. Other emitters (v8/v9/v10/v11/v26/...)
+  were already dynamic-batch (`-1`) — only v12/v13 were stragglers.
+  Verified yolo12n INT8 @ b=1: **393 fps**, 1.88× PT FP32 (vs failing
+  to build before).
+
+### Note
+- The v8/v11/v26 INT8 numbers in the README's FPS table from 0.99.15
+  were captured before either fix landed, so they were built with
+  the 1 GiB workspace and dynamic-batch ONNX. The 4 GiB workspace
+  bump might shift their tactic choices slightly on re-bench; the
+  next sweep will refresh those rows if they move > 5%.
+
 ## [0.99.18] — 2026-06-02
 
 ### Added

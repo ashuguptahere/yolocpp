@@ -11,8 +11,12 @@
 namespace yolocpp::serialization {
 
 struct TrtBuildConfig {
-  // Workspace / tactic memory limit (bytes).
-  std::size_t workspace_bytes = 1ull << 30;     // 1 GiB
+  // Workspace / tactic memory limit (bytes). 4 GiB lets TRT find INT8
+  // tactics for the larger builders (v9e, v10l, v11x, v26x, v7 anchor-
+  // based) that hit UNSUPPORTED_STATE at 1 GiB on Blackwell — the
+  // tactic search requests ~1.2 GiB for those. RTX 5090 has 32 GB so
+  // 4 GiB workspace is a comfortable ceiling. (Task #88C.)
+  std::size_t workspace_bytes = 4ull << 30;     // 4 GiB
   // Optional FP16 precision (reduces engine size & latency on RTX 5090).
   bool fp16 = true;
   // Optional INT8 PTQ — requires `calib_image_dir` to be set so the
