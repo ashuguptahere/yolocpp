@@ -4,6 +4,28 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.35] — 2026-06-02
+
+### Docs — yolo13x[b=8] row filled in
+yolo13x is the only variant where both yolocpp and iMoonLab fork
+OOM at the standard batch=16 / imgsz=640 config on 32 GB
+(model + autograd state ≈ 30 GB; the residual allocation that
+triggers SiLU forward fails by ~38 MiB on both sides). Re-ran
+both at **batch=8**:
+
+| variant | side | 1-ep mAP50 | 1-ep mAP | P | R | wall |
+|---------|------|----------:|---------:|--:|--:|-----:|
+| yolo13x[b=8] | yolocpp | 0.518 | **0.406** | 0.904 | 0.402 | 56s |
+| yolo13x[b=8] | iMoon   | 0.155 |  0.093    | 0.599 | 0.232 | 97s |
+
+yolocpp: **+0.313 mAP at 58% of the wall time**. Likely cause is
+iMoon's larger working-set footprint forcing SDPA-attention
+fallback (FlashAttention isn't available on Blackwell sm_120 at
+the iMoon-fork's pinned torch 2.12 + cu130; their `engine.py`
+prints `FlashAttention is not available on this device. Using
+scaled_dot_product_attention instead.`), inflating both compute
+and pressure even at b=8.
+
 ## [0.99.34] — 2026-06-02
 
 ### Docs — iMoonLab fork v13 data filled in

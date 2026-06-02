@@ -126,7 +126,7 @@ numbers stay in CHANGELOG 0.99.13 for that detail.
 | yolo13n | 0.609 | 0.592 | **+0.017** | 0.751 | 0.780 | **-0.029** | 18s | 34s | 0:57.51 | 1:50 |
 | yolo13s | 0.488 | 0.556 | **-0.068** | 0.705 | 0.719 | -0.014 | 21s | 40s | 1:15.59 | 2:14 |
 | yolo13l | 0.509 | 0.261 | **+0.248** | 0.660 | 0.686 | **-0.026** | 39s | 69s | 2:42.81 | 4:40 |
-| yolo13x | — | — | — | — | — | — | — | — | — | — |
+| yolo13x[b=8] | 0.406 | 0.093 | **+0.313** | — | — | — | 56s | 97s | — | — |
 | yolo26n | 0.466 | 0.440 | **+0.026** | — | — | — | 12s | 27s | — | — |
 | yolo26s | 0.500 | 0.525 | **-0.024** | — | — | — | 12s | 29s | — | — |
 | yolo26m | 0.426 | 0.374 | **+0.052** | — | — | — | 16s | 34s | — | — |
@@ -192,7 +192,7 @@ returns only mp/mr at this surface):
 | yolo13n | 0.724 / 0.860 / 0.762 / 0.783 | 0.840 / 0.954 / 0.893 / 0.921 |
 | yolo13s | 0.614 / 0.827 / 0.693 / 0.719 | 0.798 / 0.914 / 0.875 / 0.892 |
 | yolo13l | 0.636 / 0.712 / 0.762 / 0.688 | 0.765 / 0.888 / 0.884 / 0.884 |
-| yolo13x | — / — / — / — | — / — / — / — |
+| yolo13x[b=8] | 0.518 / 0.904 / 0.402 / 0.509 | — / — / — / — |
 | yolo26n | 0.608 / 0.832 / 0.688 / 0.693 | — / — / — / — |
 | yolo26s | 0.685 / 0.776 / 0.729 / 0.726 | — / — / — / — |
 | yolo26m | 0.599 / 0.790 / 0.756 / 0.742 | — / — / — / — |
@@ -207,6 +207,15 @@ key that's no longer there). Patched the torch.load issue locally
 but the second one needs deeper changes to their auto-download
 flow. yolocpp-only numbers shown; would need their environment
 preserved as Docker image for a future apples-to-apples comparison.
+
+**Footnote `[b=8]`** — yolo13x is the only variant where both
+yolocpp and iMoonLab fork OOM at the standard batch=16 / imgsz=640
+config on 32 GB. Re-ran both at batch=8: yolocpp lands 0.406
+mAP@0.5:0.95 in 56 s/epoch; iMoon fork lands 0.093 in 97 s. yolocpp
+is **+0.313 mAP at half the wall time**; the gap is likely because
+iMoon's larger memory footprint forces SDPA-attention fallback
+(FlashAttn not available on Blackwell sm_120 at their torch
+version), inflating both compute and memory pressure even at b=8.
 
 **Footnote `[P6]`** — yolo6 P6 variants (n6/s6/m6/l6) — 4-level head trained at
 imgsz=640 (not the upstream 1280). yolocpp's small P6 (n6/s6)
