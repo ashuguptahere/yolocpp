@@ -58,6 +58,16 @@ struct ConvImpl : torch::nn::Module {
   torch::nn::Conv2d      conv{nullptr};
   torch::nn::BatchNorm2d bn{nullptr};
   bool                   act_silu = true;
+  // Inference-time Conv+BN fusion (#95B). After `fuse()`, `forward`
+  // skips BN and runs `at::conv2d` with weight/bias folded with BN's
+  // running stats. Mirrors Ultralytics' `Conv.fuse_convs` (which is
+  // why their PT FP32 inference is ~40% faster than our unfused
+  // generic forward). Re-callable; idempotent. Restores the unfused
+  // forward when called with `fuse=false`.
+  bool                   fused = false;
+  torch::Tensor          fused_weight;
+  torch::Tensor          fused_bias;
+  void fuse();
   ConvImpl(int c_in, int c_out, int k = 1, int s = 1, int p = -1, int g = 1,
            bool act = true, bool conv_bias = false);
   torch::Tensor forward(torch::Tensor x);
@@ -171,10 +181,21 @@ struct DWConvImpl : torch::nn::Module {
   torch::nn::Conv2d      conv{nullptr};
   torch::nn::BatchNorm2d bn{nullptr};
   bool                   act_silu = true;
+  // Inference-time Conv+BN fusion (#95B). Same as ConvImpl::fuse.
+  bool                   fused = false;
+  torch::Tensor          fused_weight;
+  torch::Tensor          fused_bias;
+  void fuse();
   DWConvImpl(int c_in, int c_out, int k = 1, int s = 1, bool act = true);
   torch::Tensor forward(torch::Tensor x);
 };
 TORCH_MODULE(DWConv);
+
+// Recursive Conv+BN fuser. Walks any module tree, calls `fuse()` on
+// every ConvImpl/DWConvImpl child found. Idempotent. Call once
+// after loading weights and before timing PT inference.
+// (#95B helper.)
+void fuse_model(torch::nn::Module& root);
 
 // DWConvBlock = (DWConv 3×3) → (Conv 1×1). Registered children are named
 // "0" and "1" so when this is pushed into another Sequential at index i, the

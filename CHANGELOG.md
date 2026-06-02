@@ -4,6 +4,45 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.23] — 2026-06-02
+
+### Fixed (perf)
+- **#95B Inference-time Conv+BN fusion** for `ConvImpl` and
+  `DWConvImpl` (the shared blocks used by every v8+ family —
+  v8/v9/v10/v11/v12/v13/v26 detect + classify + segment + pose +
+  obb). Each block now has a `fuse()` method that pre-computes
+  `fused_weight = conv_w * (bn_w / sqrt(bn_rv + eps)).view(-1,1,1,1)`
+  and `fused_bias  = (conv_b - bn_rm) * scale + bn_b`, then
+  forward does a single `at::conv2d` and skips the BN module.
+  A recursive `fuse_model(Module&)` walks the holder tree and
+  folds every Conv+BN pair found.
+- **`GenericPredictor` ctor calls `fuse_model(*model)`** so every
+  PT bench path (registry's `benchmark_pt` adapter hook) runs
+  fused forward. Idempotent + no-op for non-ConvImpl modules.
+- **Before/after on RTX 5090 (batch=1, imgsz=640):**
+
+  | variant | PT FP32 before | PT FP32 after | Ultralytics PT | gap |
+  |---------|---------------:|--------------:|---------------:|----:|
+  | yolo11n |    248 fps     |   **277 fps** |    367 fps     | -25% (was -33%) |
+  | yolo11x |    120 fps     |   **124 fps** |    145 fps     | -14% (was -18%) |
+
+  Bigger models close more — they have more conv+bn pairs to
+  amortise the fusion benefit. The residual ~14% gap on yolo11x
+  is from Sequential/ModuleList dispatch overhead and the
+  letterbox/image_to_tensor preprocessing, both of which Ultralytics
+  has optimised at the framework level. TRT FP16 (the user-facing
+  measurement) remains ahead of Ultralytics on small models since
+  0.99.22.
+
+### Note
+- Fuser currently lands ConvImpl + DWConvImpl. v6's ConvBNReLU,
+  v3/v5's per-version conv blocks, and v7's IDetect helpers fall
+  through `fuse_model` as no-ops (their `as<ConvImpl>()` returns
+  null). Adding a per-block `fuse()` to those is a mechanical
+  follow-up; not landed here because v6/v3/v5 PT FP32 isn't the
+  primary user measurement (TRT FP16 is what the README headline
+  table reports).
+
 ## [0.99.22] — 2026-06-02
 
 ### Fixed (perf)

@@ -69,9 +69,44 @@ ConvImpl::ConvImpl(int c_in, int c_out, int k, int s, int p, int g, bool act,
 }
 
 torch::Tensor ConvImpl::forward(torch::Tensor x) {
-  x = bn(conv(x));
+  if (fused) {
+    // Fused Conv+BN path (#95B): single conv2d with absorbed BN stats.
+    // The bias slot of fused_weight is the conv bias post-folding;
+    // BN module is bypassed entirely.
+    const auto& s_arr = *conv->options.stride();
+    const auto& p_arr = *std::get<torch::ExpandingArray<2>>(conv->options.padding());
+    const auto& d_arr = *conv->options.dilation();
+    std::vector<int64_t> stride{s_arr[0], s_arr[1]};
+    std::vector<int64_t> padding{p_arr[0], p_arr[1]};
+    std::vector<int64_t> dilation{d_arr[0], d_arr[1]};
+    int groups = (int)conv->options.groups();
+    x = at::conv2d(x, fused_weight, fused_bias,
+                   at::IntArrayRef(stride),
+                   at::IntArrayRef(padding),
+                   at::IntArrayRef(dilation),
+                   groups);
+  } else {
+    x = bn(conv(x));
+  }
   if (act_silu) x = F::silu(x);
   return x;
+}
+
+void ConvImpl::fuse() {
+  if (fused) return;
+  torch::NoGradGuard ng;
+  auto cw = conv->weight.detach();
+  auto cb = conv->bias.defined() ? conv->bias.detach()
+                                 : torch::zeros({cw.size(0)}, cw.options());
+  auto bw = bn->weight.detach();
+  auto bb = bn->bias.detach();
+  auto rm = bn->running_mean.detach();
+  auto rv = bn->running_var.detach();
+  double eps = bn->options.eps();
+  auto scale = bw / torch::sqrt(rv + eps);
+  fused_weight = (cw * scale.view({-1, 1, 1, 1})).contiguous();
+  fused_bias   = ((cb - rm) * scale + bb).contiguous();
+  fused = true;
 }
 
 // ─── DWConv ────────────────────────────────────────────────────────────────
@@ -101,9 +136,51 @@ DWConvImpl::DWConvImpl(int c_in, int c_out, int k, int s, bool act)
 }
 
 torch::Tensor DWConvImpl::forward(torch::Tensor x) {
-  x = bn(conv(x));
+  if (fused) {
+    const auto& s_arr = *conv->options.stride();
+    const auto& p_arr = *std::get<torch::ExpandingArray<2>>(conv->options.padding());
+    const auto& d_arr = *conv->options.dilation();
+    std::vector<int64_t> stride{s_arr[0], s_arr[1]};
+    std::vector<int64_t> padding{p_arr[0], p_arr[1]};
+    std::vector<int64_t> dilation{d_arr[0], d_arr[1]};
+    int groups = (int)conv->options.groups();
+    x = at::conv2d(x, fused_weight, fused_bias,
+                   at::IntArrayRef(stride),
+                   at::IntArrayRef(padding),
+                   at::IntArrayRef(dilation),
+                   groups);
+  } else {
+    x = bn(conv(x));
+  }
   if (act_silu) x = F::silu(x);
   return x;
+}
+
+void DWConvImpl::fuse() {
+  if (fused) return;
+  torch::NoGradGuard ng;
+  auto cw = conv->weight.detach();
+  auto cb = conv->bias.defined() ? conv->bias.detach()
+                                 : torch::zeros({cw.size(0)}, cw.options());
+  auto bw = bn->weight.detach();
+  auto bb = bn->bias.detach();
+  auto rm = bn->running_mean.detach();
+  auto rv = bn->running_var.detach();
+  double eps = bn->options.eps();
+  auto scale = bw / torch::sqrt(rv + eps);
+  fused_weight = (cw * scale.view({-1, 1, 1, 1})).contiguous();
+  fused_bias   = ((cb - rm) * scale + bb).contiguous();
+  fused = true;
+}
+
+// Recursive fuser: walks the module tree, calls fuse() on every
+// ConvImpl/DWConvImpl. Other module types are descended into via
+// children(). Handles modular composition (C2f/C3k2/Bottleneck/etc.)
+// because they ultimately leaf into ConvImpl/DWConvImpl. (#95B.)
+void fuse_model(torch::nn::Module& root) {
+  if (auto* c = root.as<ConvImpl>())        { c->fuse(); return; }
+  if (auto* d = root.as<DWConvImpl>())      { d->fuse(); return; }
+  for (auto& child : root.children()) fuse_model(*child);
 }
 
 // ─── DWConvBlock = DWConv → Conv 1×1 (children registered as "0" / "1") ──

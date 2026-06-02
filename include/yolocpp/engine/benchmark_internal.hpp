@@ -22,6 +22,7 @@
 #include "yolocpp/engine/benchmark.hpp"
 #include "yolocpp/inference/letterbox.hpp"
 #include "yolocpp/inference/nms.hpp"
+#include "yolocpp/models/yolo8.hpp"  // fuse_model()
 
 namespace yolocpp::engine::detail {
 
@@ -83,6 +84,14 @@ struct GenericPredictor {
       : model(std::move(m)), imgsz(sz), device(dev) {
     model->to(device);
     model->eval();
+    // Fuse Conv+BN for the eval-only PT path (#95B). Ultralytics calls
+    // `model.fuse()` at predict-time which folds BN's running stats
+    // into the preceding conv's weight/bias; without it our PT FP32
+    // path was ~40% slower than theirs. `fuse_model` is recursive and
+    // a no-op for module types without a `fuse()` method (e.g. v6's
+    // ConvBNReLU — those still go through the unfused path until a
+    // version-specific fuser lands).
+    models::fuse_model(*model);
   }
 
   std::vector<inference::Detection>
