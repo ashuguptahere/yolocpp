@@ -122,4 +122,65 @@ void scale_boxes(torch::Tensor& xyxy, const LetterboxResult& lb) {
   ys.clamp_(0, lb.orig_h);
 }
 
+GpuLetterboxBatch gpu_letterbox_batch(const std::vector<cv::Mat>& bgrs,
+                                      int imgsz,
+                                      torch::Device device) {
+  namespace F = torch::nn::functional;
+  GpuLetterboxBatch out;
+  out.lbs.reserve(bgrs.size());
+  std::vector<torch::Tensor> per_image;
+  per_image.reserve(bgrs.size());
+
+  // Per-image pipeline (#95C):
+  //   1. H2D the raw HWC BGR uint8 bytes (no CPU resize, no cvtColor).
+  //   2. Permute HWC → CHW, cast to float (kFloat), divide by 255.
+  //   3. F::interpolate(bilinear, align_corners=false) to the
+  //      aspect-ratio-preserving size.
+  //   4. F::pad(constant=114/255) up to imgsz × imgsz.
+  //   5. .flip(0) on the channel dim → BGR → RGB.
+  // Each image's metadata (gain / pad_x / pad_y) is captured into a
+  // LetterboxResult so scale_boxes() still works downstream.
+  for (const auto& src : bgrs) {
+    TORCH_CHECK(src.type() == CV_8UC3, "gpu_letterbox: need CV_8UC3");
+    LetterboxResult lb;
+    lb.orig_w = src.cols; lb.orig_h = src.rows;
+    double r = std::min((double)imgsz / src.rows, (double)imgsz / src.cols);
+    int new_w = (int)std::round(src.cols * r);
+    int new_h = (int)std::round(src.rows * r);
+    int dw = imgsz - new_w, dh = imgsz - new_h;
+    double pad_x = dw / 2.0, pad_y = dh / 2.0;
+    lb.gain = r; lb.pad_x = pad_x; lb.pad_y = pad_y;
+
+    // Upload raw HWC uint8 → GPU → CHW float → interpolate → pad.
+    auto cpu_u8 = torch::from_blob(
+                      src.data, {src.rows, src.cols, 3},
+                      torch::TensorOptions().dtype(torch::kUInt8));
+    auto chw_u8 = cpu_u8.permute({2, 0, 1}).contiguous();      // [3, H, W] BGR uint8 CPU
+    auto chw    = chw_u8.to(device).flip(0).to(torch::kFloat)  // [3, H, W] RGB float
+                       .div_(255.0f)
+                       .unsqueeze(0);                          // [1, 3, H, W]
+    auto resized = F::interpolate(
+        chw,
+        F::InterpolateFuncOptions()
+            .size(std::vector<int64_t>{new_h, new_w})
+            .mode(torch::kBilinear)
+            .align_corners(false));
+    int top    = (int)std::round(pad_y - 0.1);
+    int bottom = (int)std::round(pad_y + 0.1);
+    int left   = (int)std::round(pad_x - 0.1);
+    int right  = (int)std::round(pad_x + 0.1);
+    auto padded = F::pad(
+        resized,
+        F::PadFuncOptions({left, right, top, bottom})
+            .mode(torch::kConstant)
+            .value(114.0 / 255.0));               // pad colour, matches upstream
+    per_image.push_back(padded.squeeze(0));       // [3, imgsz, imgsz]
+    // For scale_boxes we keep `lb.img` empty — the GPU path doesn't
+    // build a cv::Mat. Callers should use the returned tensor.
+    out.lbs.push_back(std::move(lb));
+  }
+  out.x = torch::stack(per_image, /*dim=*/0).contiguous();
+  return out;
+}
+
 }  // namespace yolocpp::inference

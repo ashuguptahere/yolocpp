@@ -48,4 +48,22 @@ torch::Tensor image_to_tensor_u8_bgr_chw(const cv::Mat& bgr);
 // original-image coordinates. Operates in place on a [N, 4] float tensor.
 void scale_boxes(torch::Tensor& xyxy, const LetterboxResult& lb);
 
+// GPU letterbox (#95C). Takes a list of raw BGR uint8 cv::Mat images
+// (each can be a different size), runs the full resize-with-aspect-
+// ratio + pad + BGR→RGB + cast-to-float + /255 pipeline on the device,
+// and returns:
+//   - x : a stacked [N, 3, imgsz, imgsz] float tensor on `device`
+//   - lbs : per-image gain/pad metadata for scale_boxes() afterwards
+// All H2D transfers happen as raw HWC uint8 (smallest payload). Each
+// per-image resize is a single libtorch F::interpolate call; the
+// padding uses F::pad's constant=114 path. Doesn't allocate any
+// intermediate cv::Mat. Saves the ~0.22 ms CPU letterbox cost.
+struct GpuLetterboxBatch {
+  torch::Tensor                x;     // [N, 3, imgsz, imgsz] float
+  std::vector<LetterboxResult> lbs;   // per-image metadata
+};
+GpuLetterboxBatch gpu_letterbox_batch(const std::vector<cv::Mat>& bgrs,
+                                      int imgsz,
+                                      torch::Device device);
+
 }  // namespace yolocpp::inference

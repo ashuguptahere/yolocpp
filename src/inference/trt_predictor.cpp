@@ -132,41 +132,59 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
         " exceeds engine max_batch=" + std::to_string(max_batch_));
 
   using ::yolocpp::core::ProfileScope;
-  std::vector<LetterboxResult> lbs;
-  lbs.reserve(N);
-  {
-    ProfileScope _s{"letterbox"};
-    for (const auto& bgr : bgrs) lbs.push_back(letterbox(bgr, imgsz_));
-  }
 
-  // Profiling (#95-followup) showed image_to_tensor (BGR→RGB +
-  // uint8→float + /255 + HWC→CHW on CPU) was 51% of yolo11n's call
-  // time. Match Ultralytics' approach (engine/predictor.py:163-176):
-  // keep the CPU conversion as uint8 (~4× smaller H2D payload), then
-  // cast to float + divide by 255 on GPU after the memcpy. Overlaps
-  // the float conversion with whatever else the GPU is doing.
-  std::vector<torch::Tensor> per_image;
-  per_image.reserve(N);
-  {
-    ProfileScope _s{"image_to_tensor"};
-    for (const auto& lb : lbs)
-      per_image.push_back(image_to_tensor_u8_bgr_chw(lb.img));     // BGR CHW uint8
-  }
-  torch::Tensor x_u8, x;
-  {
-    ProfileScope _s{"stack+H2D"};
-    x_u8 = torch::stack(per_image, /*dim=*/0).contiguous();        // [N, 3, H, W] BGR uint8 CPU
-    // H2D of BGR uint8, then on-device:
-    //   • BGR → RGB via `.flip(1)` (reverses dim 1; libtorch ships a
-    //     dedicated reverse-stride kernel — no index_select tensor needed).
-    //   • cast to float + /255.
-    x = x_u8.to(at::kCUDA, /*non_blocking=*/false)
-            .flip(/*dim=*/1)
-            .to(at::kFloat).div_(255.0f);
-    // Force the H2D+kernels to finish so the next stop() captures real
-    // wall-clock when --profile is on; no-op when profile is disabled.
-    if (::yolocpp::core::Profile::instance().enabled())
-      cudaStreamSynchronize(impl_->stream);
+  // GPU letterbox is on by default (#95C). A/B verified across
+  // yolo8n / yolo11n / yolo11x: +28%, +18%, +9% respectively
+  // — combined CPU letterbox + image_to_tensor + H2D (~0.46 ms)
+  // collapses to a single ~0.25 ms gpu_letterbox pass. Set
+  // YOLOCPP_GPU_LETTERBOX=0 to fall back to the CPU pipeline (kept
+  // as the conservative path in case a future regression surfaces).
+  static const bool gpu_lb =
+      [] {
+        const char* e = std::getenv("YOLOCPP_GPU_LETTERBOX");
+        return !(e && e[0] == '0');                              // default ON
+      }();
+
+  std::vector<LetterboxResult> lbs;
+  torch::Tensor x;
+  if (gpu_lb) {
+    GpuLetterboxBatch batch;
+    {
+      ProfileScope _s{"gpu_letterbox"};
+      batch = gpu_letterbox_batch(bgrs, imgsz_,
+                                  torch::Device(torch::kCUDA, 0));
+      if (::yolocpp::core::Profile::instance().enabled())
+        cudaStreamSynchronize(impl_->stream);
+    }
+    x   = std::move(batch.x);
+    lbs = std::move(batch.lbs);
+  } else {
+    lbs.reserve(N);
+    {
+      ProfileScope _s{"letterbox"};
+      for (const auto& bgr : bgrs) lbs.push_back(letterbox(bgr, imgsz_));
+    }
+    // Profiling (#95-followup) showed image_to_tensor (BGR→RGB +
+    // uint8→float + /255 + HWC→CHW on CPU) was 51% of yolo11n's call
+    // time. Match Ultralytics' approach (engine/predictor.py:163-176):
+    // keep the CPU conversion as uint8 (~4× smaller H2D payload), then
+    // cast to float + divide by 255 on GPU after the memcpy.
+    std::vector<torch::Tensor> per_image;
+    per_image.reserve(N);
+    {
+      ProfileScope _s{"image_to_tensor"};
+      for (const auto& lb : lbs)
+        per_image.push_back(image_to_tensor_u8_bgr_chw(lb.img));   // BGR CHW uint8
+    }
+    {
+      ProfileScope _s{"stack+H2D"};
+      auto x_u8 = torch::stack(per_image, /*dim=*/0).contiguous(); // [N, 3, H, W] BGR uint8 CPU
+      x = x_u8.to(at::kCUDA, /*non_blocking=*/false)
+              .flip(/*dim=*/1)
+              .to(at::kFloat).div_(255.0f);
+      if (::yolocpp::core::Profile::instance().enabled())
+        cudaStreamSynchronize(impl_->stream);
+    }
   }
   // We no longer need the explicit H2D below — the .to(kCUDA) above
   // already uploaded the bytes into a torch tensor. Hand TRT a pointer
