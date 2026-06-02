@@ -4,6 +4,33 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.34] — 2026-06-02
+
+### Docs — iMoonLab fork v13 data filled in
+Re-ran the iMoonLab fork sweep after fixing the venv deps
+(numpy<2 so np.trapz exists; onnx in venv). Got full PT FPS +
+1-ep + 5-ep training across n/s/l/x. **iMoonLab still can't
+export to TRT** through `YOLO.export(format=engine)` (the
+pip-installed-onnxslim path conflicts with the system-managed
+environment under PEP 668), so FP16/INT8 cells on the
+Ultralytics side stay marked `[no-iMoon-TRT]`. The PT and
+training rows are now full.
+
+### Per-variant v13 numbers (RTX 5090 b=1)
+| variant | PT FPS  Y / U(iMoon) | 5ep mAP Y / U | 5ep wall Y / U |
+|---------|--------------------:|--------------:|---------------:|
+| yolo13n |       318 / 195     | 0.751 / 0.780 |   0:57 / 1:50  |
+| yolo13s |       260 / 203     | 0.705 / 0.719 |   1:15 / 2:14  |
+| yolo13l |       132 / 130     | 0.660 / 0.686 |   2:43 / 4:40  |
+| yolo13x |        96 / 105     |      — / —    |        — / —   |
+
+### TRT FP16/INT8 yolocpp v13 fresh numbers
+- yolo13s: FP16 = 546 fps, INT8 = 595 fps
+- yolo13l: FP16 = 281 fps, INT8 = 327 fps
+
+Captured under 0.99.32 (GPU letterbox + uint8 H2D + InferenceMode
++ MinMax calibrator) so they reflect the current peak.
+
 ## [0.99.33] — 2026-06-02
 
 ### Docs
