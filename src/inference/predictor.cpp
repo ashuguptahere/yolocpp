@@ -75,9 +75,9 @@ Predictor::Predictor(const std::string& weights, int imgsz, std::string device,
 std::vector<Detection> Predictor::predict(const cv::Mat& bgr,
                                           NMSConfig conf) const {
   auto lb = letterbox(bgr, imgsz_);
-  // Uint8 H2D + on-GPU float cast (0.99.25 / 0.99.26 perf fix).
-  auto x_u8 = image_to_tensor_u8(lb.img).unsqueeze(0);
-  auto x    = x_u8.to(device_).to(at::kFloat).div_(255.0f);
+  // Uint8 BGR H2D + on-GPU BGR→RGB (flip) + cast + /255.
+  auto x_u8 = image_to_tensor_u8_bgr_chw(lb.img).unsqueeze(0);
+  auto x    = x_u8.to(device_).flip(/*dim=*/1).to(at::kFloat).div_(255.0f);
 
   torch::Tensor pred;
   {

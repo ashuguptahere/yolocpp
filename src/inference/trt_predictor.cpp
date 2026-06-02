@@ -142,11 +142,17 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
   // the float conversion with whatever else the GPU is doing.
   std::vector<torch::Tensor> per_image;
   per_image.reserve(N);
-  for (const auto& lb : lbs) per_image.push_back(image_to_tensor_u8(lb.img));
-  auto x_u8 = torch::stack(per_image, /*dim=*/0).contiguous();      // [N, 3, H, W] uint8 CPU
-  // Async H2D of uint8 + on-device cast to float + divide. Both are
-  // single-pass element-wise kernels on Blackwell.
+  for (const auto& lb : lbs)
+    per_image.push_back(image_to_tensor_u8_bgr_chw(lb.img));     // BGR CHW uint8
+  auto x_u8 = torch::stack(per_image, /*dim=*/0).contiguous();   // [N, 3, H, W] BGR uint8 CPU
+  // H2D of BGR uint8, then on-device:
+  //   • BGR → RGB via `.flip(1)` (reverses dim 1; libtorch ships a
+  //     dedicated reverse-stride kernel — no index_select tensor needed).
+  //   • cast to float + /255.
+  // Sequencing keeps the .flip on uint8 (3× smaller activations than
+  // float) so the BGR2RGB pass is the cheapest part of the chain.
   auto x = x_u8.to(at::kCUDA, /*non_blocking=*/false)
+              .flip(/*dim=*/1)
               .to(at::kFloat).div_(255.0f);
   // We no longer need the explicit H2D below — the .to(kCUDA) above
   // already uploaded the bytes into a torch tensor. Hand TRT a pointer

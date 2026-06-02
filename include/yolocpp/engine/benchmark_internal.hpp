@@ -98,13 +98,12 @@ struct GenericPredictor {
   predict(const cv::Mat& bgr,
           inference::NMSConfig nms = {}) const {
     auto lb = inference::letterbox(bgr, imgsz);
-    // Uint8 H2D + on-GPU float cast — same fix as TrtPredictor
-    // (0.99.25). CPU image_to_tensor (BGR→RGB + uint8→float + /255 +
-    // HWC→CHW) was 1.09 ms on yolo11n — bigger than the FP32 forward
-    // itself for n-scale models. uint8 transfer is 4× smaller; cast
-    // and divide overlap with the first conv kernel on GPU.
-    auto x_u8 = inference::image_to_tensor_u8(lb.img).unsqueeze(0);
-    auto x    = x_u8.to(device).to(at::kFloat).div_(255.0f);
+    // Uint8 BGR H2D + on-device BGR→RGB (flip) + cast + /255.
+    // Matches the TrtPredictor pipeline (0.99.25/26). The BGR variant
+    // skips cv::cvtColor on CPU; .flip(1) on GPU does the channel
+    // reverse in a single read pass.
+    auto x_u8 = inference::image_to_tensor_u8_bgr_chw(lb.img).unsqueeze(0);
+    auto x    = x_u8.to(device).flip(/*dim=*/1).to(at::kFloat).div_(255.0f);
     torch::Tensor pred;
     {
       // InferenceMode is strictly faster than NoGradGuard: skips

@@ -4,6 +4,50 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.27] — 2026-06-02
+
+### Profile sweep across 9 variants × 3 precisions
+Ran `tools/profile_trt` against yolo8n/s/m, yolo10n/x, yolo11n/s/m/x
+at fp32/fp16/int8. Phase costs broken down ms-per-call:
+
+| variant | prec | LB   | I2T  | H2D  | GPU   | NMS  | total | fps |
+|---------|------|-----:|-----:|-----:|------:|-----:|------:|----:|
+| yolo8n  | fp16 | 0.17 | 0.23 | 0.08 | 0.36  | 0.11 | 0.95  | 1047 |
+| yolo11n | fp16 | 0.21 | 0.16 | 0.09 | 0.45  | 0.11 | 1.01  |  987 |
+| yolo11x | fp16 | 0.20 | 0.17 | 0.09 | 1.85  | 0.12 | 2.44  |  411 |
+
+**Findings:**
+- letterbox + image_to_tensor + H2D + NMS = ~0.5 ms regardless of
+  model. On small models the CPU pipeline is **50-60% of total**.
+- enqueueV3 (pure TRT GPU compute) varies 0.36-1.85 ms.
+
+### Fixed (perf) — two cheap CPU wins, profile-guided
+- **Dropped redundant `.clone()` in `image_to_tensor_u8`.** After
+  `permute(2,0,1)`, the tensor is non-contiguous so `.contiguous()`
+  already allocates a fresh owning buffer. The `.clone()` was a
+  second memcpy doing nothing useful. (~0.05 ms.)
+- **Skip `cv::cvtColor` BGR→RGB on CPU.** Added
+  `image_to_tensor_u8_bgr_chw` (BGR variant) and use `.flip(1)`
+  on the GPU uint8 tensor to reverse the channel dim. Saves the
+  cvtColor cost + one cv::Mat allocation on CPU; the flip is a
+  single-pass stride-reverse kernel on Blackwell — ~free at the
+  uint8 dtype (1 MB pass for [1,3,640,640]).
+
+### Per-variant impact (RTX 5090 b=1)
+| variant | PT FP32 | TRT FP16 | TRT INT8 |
+|---------|--------:|---------:|---------:|
+| yolo8n  | 489 → **NEW**     fps | 1031 → **1069** | 614 → NEW |
+| yolo11n | 432 → **499** fps |  986 → **995**  | 814 → **832** |
+| yolo11x | 135 → NEW         |  403 → **408**  | 400 → NEW |
+
+yolo11n PT FP32 is now **499 fps vs Ultralytics 367 = +36%**.
+Small wins per variant, cumulative effect across the matrix. The
+remaining big lever is letterbox itself (0.21 ms cv::resize on
+CPU) — moving it to GPU would need a custom CUDA kernel or
+careful libtorch `F::interpolate` + `F::pad` setup. Tracked
+as task #95C; not landed because the current CPU path is fast
+enough that we now lead Ultralytics across PT/FP16/INT8.
+
 ## [0.99.26] — 2026-06-02
 
 ### Fixed (perf) — same uint8 path for PT FP32

@@ -82,12 +82,31 @@ torch::Tensor image_to_tensor_u8(const cv::Mat& bgr) {
   TORCH_CHECK(bgr.type() == CV_8UC3, "image_to_tensor_u8: need CV_8UC3 input");
   cv::Mat rgb;
   cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-  auto t = torch::from_blob(
-               rgb.data, {rgb.rows, rgb.cols, 3},
-               torch::TensorOptions().dtype(torch::kUInt8))
-               .permute({2, 0, 1})
-               .contiguous();
-  return t.clone();  // own the data
+  // `.contiguous()` already allocates a fresh owning tensor when
+  // the input is a strided view (which permute(2,0,1) of an HWC
+  // tensor is). The previous `.clone()` after `.contiguous()` was
+  // a redundant second memcpy — dropped, saves ~0.05 ms per call.
+  // (#95 profile-guided.)
+  return torch::from_blob(
+             rgb.data, {rgb.rows, rgb.cols, 3},
+             torch::TensorOptions().dtype(torch::kUInt8))
+             .permute({2, 0, 1})
+             .contiguous();
+}
+
+torch::Tensor image_to_tensor_u8_bgr_chw(const cv::Mat& bgr) {
+  TORCH_CHECK(bgr.type() == CV_8UC3,
+              "image_to_tensor_u8_bgr_chw: need CV_8UC3 input");
+  // Skip cv::cvtColor entirely — alias bgr.data directly, permute
+  // HWC→CHW, contiguous() copies into an owning buffer. Saves the
+  // BGR→RGB cvtColor cost (~0.03 ms) and the intermediate cv::Mat
+  // allocation. The caller is responsible for BGR→RGB on GPU
+  // (cheap index_select on the channel dim).
+  return torch::from_blob(
+             bgr.data, {bgr.rows, bgr.cols, 3},
+             torch::TensorOptions().dtype(torch::kUInt8))
+             .permute({2, 0, 1})
+             .contiguous();
 }
 
 void scale_boxes(torch::Tensor& xyxy, const LetterboxResult& lb) {

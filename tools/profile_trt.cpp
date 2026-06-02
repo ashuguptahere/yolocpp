@@ -92,11 +92,11 @@ int main(int argc, char** argv) {
     auto t0 = clk::now();
     auto lb = yolocpp::inference::letterbox(img, imgsz);
     auto t1 = clk::now();
-    // New path: uint8 CHW (no float convert on CPU).
-    auto x_u8 = yolocpp::inference::image_to_tensor_u8(lb.img).unsqueeze(0).contiguous();
+    // BGR CHW uint8 — skip cv::cvtColor on CPU, flip on GPU.
+    auto x_u8 = yolocpp::inference::image_to_tensor_u8_bgr_chw(lb.img).unsqueeze(0).contiguous();
     auto t2 = clk::now();
-    // H2D of uint8 (4× smaller) + GPU cast to float + /255.
-    auto x = x_u8.to(at::kCUDA).to(at::kFloat).div_(255.0f);
+    // H2D + GPU flip(1) (BGR→RGB) + cast to float + /255.
+    auto x = x_u8.to(at::kCUDA).flip(/*dim=*/1).to(at::kFloat).div_(255.0f);
     cudaStreamSynchronize(stream);
     auto t3 = clk::now();
     ctx->setTensorAddress("images", x.data_ptr());
