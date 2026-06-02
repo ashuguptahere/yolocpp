@@ -3,8 +3,11 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
+
+#include "yolocpp/inference/results.hpp"
 
 #include "yolocpp/cli/resolve.hpp"
 #include "yolocpp/inference/letterbox.hpp"
@@ -134,6 +137,24 @@ void draw_detections(cv::Mat& img,
     cv::putText(img, buf, {(int)d.x1 + 2, yt - 2},
                 cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
   }
+}
+
+Results Predictor::predict_results(const cv::Mat& bgr,
+                                   const std::vector<std::string>& names,
+                                   NMSConfig conf) const {
+  using clk = std::chrono::steady_clock;
+  using ms  = std::chrono::duration<double, std::milli>;
+  auto t0 = clk::now();
+  auto dets = predict(bgr, conf);
+  auto t1 = clk::now();
+  Results r;
+  r.boxes    = std::move(dets);
+  r.orig_img = bgr;
+  r.orig_w   = bgr.cols;
+  r.orig_h   = bgr.rows;
+  r.names    = names;
+  r.speed.inference_ms = ms(t1 - t0).count();
+  return r;
 }
 
 std::vector<Detection> Predictor::predict_to_file(

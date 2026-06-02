@@ -4,6 +4,34 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.36] — 2026-06-02
+
+### Added
+- **`predict_results()` on `TrtPredictor` + `Predictor`** (#97
+  continuation). Returns the `inference::Results` wrapper from
+  0.99.31 directly, with `orig_img`, `orig_w/h`, `names`,
+  `speed.{preprocess,inference,postprocess}_ms` populated. Batched
+  variant `predict_results_batch(vector<cv::Mat>)` returns
+  `vector<Results>`. Existing `predict()` / `predict_batch()`
+  unchanged for back-compat.
+- **`--save-json <path>`** and **`--save-txt <path>`** CLI flags
+  for `--mode predict`. JSON output is the Results JSON schema
+  (`boxes[].{cls,name,conf,xyxy}`, `orig_shape`, `speed`). TXT
+  matches Ultralytics' "cls conf x1 y1 x2 y2" per-line format.
+  Smoke test on `yolo11n + bus.jpg`:
+  ```
+  cat preds.txt
+  5 0.93926 11.9098 228.389 799.248 735.221
+  0 0.901945 48.5925 397.958 243.214 904.533
+  ...
+  ```
+
+### Sweep status
+- Ultralytics 5-epoch training sweep kicked off in background —
+  36 stock-loadable variants × 5 epochs ≈ 6–10 h. Results land
+  under `/tmp/ultra_bench/ultra_train_5ep/`; a follow-up commit
+  will fill the `U5ep` cells across the unified training table.
+
 ## [0.99.35] — 2026-06-02
 
 ### Docs — yolo13x[b=8] row filled in

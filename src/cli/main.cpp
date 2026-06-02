@@ -10,6 +10,9 @@
 #include <yolocpp/config.hpp>
 #include "yolocpp/cli/commands.hpp"
 #include "yolocpp/core/profile.hpp"
+#include "yolocpp/inference/results.hpp"
+
+#include <fstream>
 
 #include <CLI11.hpp>
 
@@ -57,6 +60,9 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   uint64_t seed = 0;
   std::string save_dir = "runs/train";
   bool   profile_enabled = false;
+  // Predict output options (#97 Results integration).
+  std::string save_json;       // --save-json <path>: dump Results.json()
+  std::string save_txt;        // --save-txt  <path>: dump "cls conf x1 y1 x2 y2"
 
   app.add_option("--model,-m,--weights", weights,
                   "weights `.pt` / `.trt` (alias: --weights)");
@@ -118,6 +124,10 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
                  "INT8 calibration cache file (default: <engine>.calib)");
   app.add_flag  ("--profile", profile_enabled,
                   "enable per-phase wall-clock profiler (every mode, every model)");
+  app.add_option("--save-json", save_json,
+                  "predict: dump Results.json() (boxes + xyxy + names + speed) to file");
+  app.add_option("--save-txt", save_txt,
+                  "predict: dump 'cls conf x1 y1 x2 y2' lines to file (Ultralytics-style)");
   app.add_option("--dataset",    dl_target,
                   "download mode: dataset short-name (coco8, VOC, ...) or .zip URL");
 
@@ -189,8 +199,35 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   if (mode == "predict") {
     if (!need(mode, "model",  !weights.empty())) return 2;
     if (!need(mode, "source", !source.empty()))  return 2;
-    return cmd_predict_task(task, weights, source, out, imgsz, device,
-                             scale_s, nc, conf, iou);
+    // #97: collect last-image detections so we can emit Ultralytics-
+    // style sidecar files (.json / .txt) when the user asks for them.
+    std::vector<yolocpp::inference::Detection> last_dets;
+    int rc = cmd_predict_task(task, weights, source, out, imgsz, device,
+                              scale_s, nc, conf, iou,
+                              /*version_hint=*/"", &last_dets);
+    if (rc == 0 && (!save_json.empty() || !save_txt.empty())) {
+      // Wrap last-image detections in a Results object so callers get
+      // the same shape Ultralytics returns. orig_img isn't carried
+      // through cmd_predict_task — Results.json() works without it
+      // (orig_shape will be [0, 0]); Results.save_txt() works too.
+      yolocpp::inference::Results r;
+      r.boxes = std::move(last_dets);
+      // Parse names_csv (already set above for the CLI dispatcher).
+      if (!names_csv.empty()) {
+        for (const auto& nm : yolocpp::cli::split_csv(names_csv))
+          r.names.push_back(nm);
+      }
+      if (!save_json.empty()) {
+        std::ofstream f(save_json);
+        f << r.json() << "\n";
+        std::cerr << "[predict] wrote " << save_json << "\n";
+      }
+      if (!save_txt.empty()) {
+        r.save_txt(save_txt);
+        std::cerr << "[predict] wrote " << save_txt << "\n";
+      }
+    }
+    return rc;
   }
 
   if (mode == "val") {

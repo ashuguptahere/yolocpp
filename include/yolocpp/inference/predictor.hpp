@@ -52,6 +52,11 @@ class Predictor {
   std::vector<Detection> predict(const cv::Mat& bgr,
                                  NMSConfig conf = {}) const;
 
+  // Ultralytics-API parity entry point (#97). See trt_predictor.hpp.
+  struct Results predict_results(const cv::Mat& bgr,
+                                 const std::vector<std::string>& names = {},
+                                 NMSConfig conf = {}) const;
+
   // Convenience: read image from disk, predict, and write annotated image.
   // Returns the detections.
   std::vector<Detection> predict_to_file(const std::string& in_path,

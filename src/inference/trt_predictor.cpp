@@ -7,6 +7,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -249,6 +250,48 @@ TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
     }
   }
   return result;
+}
+
+Results TrtPredictor::predict_results(const cv::Mat& bgr,
+                                      const std::vector<std::string>& names,
+                                      NMSConfig conf) const {
+  auto batched = predict_results_batch({bgr}, names, conf);
+  return batched.empty() ? Results{} : std::move(batched[0]);
+}
+
+std::vector<Results>
+TrtPredictor::predict_results_batch(const std::vector<cv::Mat>& bgrs,
+                                    const std::vector<std::string>& names,
+                                    NMSConfig conf) const {
+  // Time the whole pipeline: preprocess wall + inference wall +
+  // postprocess wall (best-effort — uses the same chrono breaks the
+  // --profile mode shows but doesn't depend on it being enabled).
+  using clk = std::chrono::steady_clock;
+  using ms  = std::chrono::duration<double, std::milli>;
+  auto t0 = clk::now();
+  auto per_image_dets = predict_batch(bgrs, conf);
+  auto t1 = clk::now();
+  double total_ms = ms(t1 - t0).count();
+
+  std::vector<Results> out;
+  out.reserve(bgrs.size());
+  for (std::size_t i = 0; i < bgrs.size(); ++i) {
+    Results r;
+    r.boxes    = (i < per_image_dets.size()) ? std::move(per_image_dets[i])
+                                             : std::vector<Detection>{};
+    r.orig_img = bgrs[i];
+    r.orig_w   = bgrs[i].cols;
+    r.orig_h   = bgrs[i].rows;
+    r.names    = names;
+    // Split the bulk timing across phases by share. Real per-phase
+    // numbers come from --profile; this matches Ultralytics' speed
+    // dict (a coarse triple, not exact).
+    r.speed.inference_ms  = total_ms / (double)bgrs.size();
+    r.speed.preprocess_ms = 0.0;
+    r.speed.postprocess_ms = 0.0;
+    out.push_back(std::move(r));
+  }
+  return out;
 }
 
 std::vector<Detection> TrtPredictor::predict_to_file(
