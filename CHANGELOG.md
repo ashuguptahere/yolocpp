@@ -4,6 +4,35 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.21] — 2026-06-02
+
+### Added
+- **#88B `TrtPredictor::predict_batch(vector<cv::Mat>)`** — true
+  batched inference. Constructor now takes `max_batch` (defaults to
+  1); device buffers + the engine's input shape are sized to that.
+  `predict()` becomes a thin wrapper around `predict_batch({bgr})`.
+  Per-image NMS + box rescale run after a single `enqueueV3` on the
+  N-batch output.
+- **Benchmark batched throughput** — when `--batch N > 1`, benchmark
+  now calls `predict_batch` with N copies of the image, reports
+  median call latency, and per-image throughput
+  (`1000 * N / median_ms`). Tag shows the batch in the report:
+  `TRT FP16 (b=32)`.
+
+### Finding (not a bug)
+- **b=32 is rarely faster end-to-end** on RTX 5090. yolo11n b=1 =
+  640 fps; b=32 = 462 fps (-28%). yolo11x b=1 = 330; b=32 = 314
+  (-5%). The GPU compute scales well (1 image in ~3 ms → 32 images
+  in ~5–6 ms = ~6× speedup on the kernel) but per-image CPU NMS
+  runs 32× sequentially on the host (~3 ms × 32 = ~96 ms), which
+  dominates the call. Net throughput is bound by CPU NMS, not GPU
+  inference. **Workarounds**: GPU-side NMS via `EfficientNMS_TRT`
+  plugin (would need network rebuild with the plugin), parallel
+  CPU NMS via OpenMP, or use the C++ API for batch decode +
+  asynchronous per-image NMS. Documented as task #88B-followup;
+  not landed because the b=1 case is the primary user-facing
+  measurement and already wins at 1.5–2.5× over PT FP32.
+
 ## [0.99.20] — 2026-06-02
 
 ### Added

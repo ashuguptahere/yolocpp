@@ -152,6 +152,42 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
     if (version == "v10") tcfg.tf32 = false;
   };
 
+  // True batched throughput at batch=N: call predict_batch(N copies of
+  // img) so a single enqueueV3 processes all N images. Reports median
+  // call latency (ms) and per-image throughput = N / latency_s. (#88B.)
+  auto bench_trt = [&](const std::string& tag, const std::string& plan_path) {
+    inference::TrtPredictor p(plan_path, cfg.imgsz, cfg.batch_size);
+    if (cfg.batch_size <= 1) {
+      results.push_back(bench_one(tag, img, p,
+                                  cfg.warmup_iters, cfg.iters));
+      return;
+    }
+    std::vector<cv::Mat> batch(cfg.batch_size, img);
+    for (int i = 0; i < cfg.warmup_iters; ++i) {
+      auto _ = p.predict_batch(batch); (void)_;
+    }
+    std::vector<double> times_ms;
+    times_ms.reserve(cfg.iters);
+    std::vector<std::vector<inference::Detection>> last;
+    for (int i = 0; i < cfg.iters; ++i) {
+      auto t0 = std::chrono::steady_clock::now();
+      last = p.predict_batch(batch);
+      auto t1 = std::chrono::steady_clock::now();
+      times_ms.push_back(
+          std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    BenchResult r;
+    r.backend          = tag + " (b=" + std::to_string(cfg.batch_size) + ")";
+    r.median_ms        = detail::percentile(times_ms, 50);
+    r.p95_ms           = detail::percentile(times_ms, 95);
+    r.mean_ms          = detail::mean(times_ms);
+    // Per-image throughput: N images processed per call.
+    r.throughput_imgps = 1000.0 * cfg.batch_size / r.median_ms;
+    r.num_detections   = last.empty() ? 0 : (int)last[0].size();
+    if (!last.empty()) r.dets = std::move(last[0]);
+    results.push_back(std::move(r));
+  };
+
   // ── TRT FP32 ────────────────────────────────────────────────────────────
   if (cfg.run_trt_fp32) {
     if (!fs::exists(trt32)) {
@@ -160,9 +196,7 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
       tcfg.fp16 = false;
       serialization::build_trt_engine(onnx_path, trt32, tcfg);
     }
-    inference::TrtPredictor p(trt32, cfg.imgsz);
-    results.push_back(bench_one("TRT FP32", img, p,
-                                cfg.warmup_iters, cfg.iters));
+    bench_trt("TRT FP32", trt32);
   }
 
   // ── TRT FP16 ────────────────────────────────────────────────────────────
@@ -173,9 +207,7 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
       tcfg.fp16 = true;
       serialization::build_trt_engine(onnx_path, trt16, tcfg);
     }
-    inference::TrtPredictor p(trt16, cfg.imgsz);
-    results.push_back(bench_one("TRT FP16", img, p,
-                                cfg.warmup_iters, cfg.iters));
+    bench_trt("TRT FP16", trt16);
   }
 
   // ── TRT INT8 ────────────────────────────────────────────────────────────
@@ -194,9 +226,7 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
             : cfg.int8_calib_cache;
         serialization::build_trt_engine(onnx_path, trt8, tcfg);
       }
-      inference::TrtPredictor p(trt8, cfg.imgsz);
-      results.push_back(bench_one("TRT INT8", img, p,
-                                  cfg.warmup_iters, cfg.iters));
+      bench_trt("TRT INT8", trt8);
     }
   }
 

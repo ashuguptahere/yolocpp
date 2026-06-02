@@ -52,8 +52,9 @@ struct TrtPredictor::Impl {
 };
 
 TrtPredictor::TrtPredictor(const std::string& engine_path, int imgsz,
+                           int max_batch,
                            std::string input_name, std::string output_name)
-    : impl_(std::make_unique<Impl>()), imgsz_(imgsz) {
+    : impl_(std::make_unique<Impl>()), imgsz_(imgsz), max_batch_(max_batch) {
   initLibNvInferPlugins(&impl_->logger, "");
   impl_->input_name  = std::move(input_name);
   impl_->output_name = std::move(output_name);
@@ -70,21 +71,29 @@ TrtPredictor::TrtPredictor(const std::string& engine_path, int imgsz,
   impl_->ctx.reset(impl_->engine->createExecutionContext());
   if (!impl_->ctx) throw std::runtime_error("createExecutionContext failed");
 
-  // Set input shape (batch=1, 3, imgsz, imgsz).
-  impl_->ctx->setInputShape(impl_->input_name.c_str(),
-                            nvinfer1::Dims4(1, 3, imgsz, imgsz));
+  // Set runtime input shape to the requested max batch. Engine's profile
+  // kMAX must cover this; if it doesn't, setInputShape returns false and
+  // we surface that to the caller.
+  if (!impl_->ctx->setInputShape(
+          impl_->input_name.c_str(),
+          nvinfer1::Dims4(max_batch_, 3, imgsz, imgsz))) {
+    throw std::runtime_error(
+        "setInputShape rejected batch=" + std::to_string(max_batch_) +
+        " — engine profile kMAX is smaller than requested batch");
+  }
 
   CUDA_OK(cudaStreamCreate(&impl_->stream));
-  impl_->d_in_size = (size_t)1 * 3 * imgsz * imgsz * sizeof(float);
+  impl_->d_in_size = (size_t)max_batch_ * 3 * imgsz * imgsz * sizeof(float);
   CUDA_OK(cudaMalloc(&impl_->d_in,  impl_->d_in_size));
 
   // Probe output shape (now resolved after setInputShape).
   auto out_dims = impl_->ctx->getTensorShape(impl_->output_name.c_str());
-  if (out_dims.nbDims != 3 || out_dims.d[0] != 1)
+  if (out_dims.nbDims != 3 || out_dims.d[0] != max_batch_)
     throw std::runtime_error("unexpected output rank/shape from engine");
   impl_->output_channels = (int)out_dims.d[1];
   impl_->output_anchors  = (int)out_dims.d[2];
-  impl_->d_out_size = (size_t)impl_->output_channels *
+  impl_->d_out_size = (size_t)max_batch_ *
+                      (size_t)impl_->output_channels *
                       (size_t)impl_->output_anchors * sizeof(float);
   CUDA_OK(cudaMalloc(&impl_->d_out, impl_->d_out_size));
 
@@ -92,9 +101,10 @@ TrtPredictor::TrtPredictor(const std::string& engine_path, int imgsz,
   impl_->ctx->setTensorAddress(impl_->output_name.c_str(), impl_->d_out);
 
   std::cout << "[trt-pred] engine ready: in=" << impl_->input_name
-            << "[1,3," << imgsz << "," << imgsz << "] → out=" << impl_->output_name
-            << "[1," << impl_->output_channels << "," << impl_->output_anchors
-            << "]\n";
+            << "[" << max_batch_ << ",3," << imgsz << "," << imgsz
+            << "] → out=" << impl_->output_name
+            << "[" << max_batch_ << "," << impl_->output_channels << ","
+            << impl_->output_anchors << "]\n";
 }
 
 TrtPredictor::~TrtPredictor() {
@@ -106,36 +116,75 @@ TrtPredictor::~TrtPredictor() {
 
 std::vector<Detection> TrtPredictor::predict(const cv::Mat& bgr,
                                               NMSConfig nmscfg) const {
-  auto lb = letterbox(bgr, imgsz_);
-  auto x  = image_to_tensor(lb.img).unsqueeze(0).contiguous();  // [1,3,H,W]
+  auto batched = predict_batch({bgr}, nmscfg);
+  return batched.empty() ? std::vector<Detection>{} : std::move(batched[0]);
+}
 
-  CUDA_OK(cudaMemcpyAsync(impl_->d_in, x.data_ptr(), impl_->d_in_size,
+std::vector<std::vector<Detection>>
+TrtPredictor::predict_batch(const std::vector<cv::Mat>& bgrs,
+                            NMSConfig nmscfg) const {
+  const int N = (int)bgrs.size();
+  if (N == 0) return {};
+  if (N > max_batch_)
+    throw std::runtime_error(
+        "predict_batch: requested batch=" + std::to_string(N) +
+        " exceeds engine max_batch=" + std::to_string(max_batch_));
+
+  // Letterbox per-image so each image keeps its own scale/pad metadata
+  // for box rescaling at the end.
+  std::vector<LetterboxResult> lbs;
+  lbs.reserve(N);
+  for (const auto& bgr : bgrs) lbs.push_back(letterbox(bgr, imgsz_));
+
+  // Stack into [N, 3, H, W]. image_to_tensor returns [3, H, W] CHW float.
+  std::vector<torch::Tensor> per_image;
+  per_image.reserve(N);
+  for (const auto& lb : lbs) per_image.push_back(image_to_tensor(lb.img));
+  auto x = torch::stack(per_image, /*dim=*/0).contiguous();   // [N, 3, H, W]
+
+  // The engine was built with the profile kMAX = max_batch_, so any
+  // batch <= max_batch_ works. Set the actual batch for this call.
+  if (N != max_batch_) {
+    if (!impl_->ctx->setInputShape(
+            impl_->input_name.c_str(),
+            nvinfer1::Dims4(N, 3, imgsz_, imgsz_))) {
+      throw std::runtime_error(
+          "setInputShape failed for batch=" + std::to_string(N));
+    }
+  }
+
+  const size_t in_bytes  = (size_t)N * 3 * imgsz_ * imgsz_ * sizeof(float);
+  const size_t out_bytes = (size_t)N * impl_->output_channels *
+                                       impl_->output_anchors * sizeof(float);
+
+  CUDA_OK(cudaMemcpyAsync(impl_->d_in, x.data_ptr(), in_bytes,
                           cudaMemcpyHostToDevice, impl_->stream));
   if (!impl_->ctx->enqueueV3(impl_->stream))
     throw std::runtime_error("enqueueV3 failed");
-  // Pull output back to host.
+
   auto out_cpu = torch::empty(
-      {1, impl_->output_channels, impl_->output_anchors}, torch::kFloat32);
-  CUDA_OK(cudaMemcpyAsync(out_cpu.data_ptr(), impl_->d_out, impl_->d_out_size,
+      {N, impl_->output_channels, impl_->output_anchors}, torch::kFloat32);
+  CUDA_OK(cudaMemcpyAsync(out_cpu.data_ptr(), impl_->d_out, out_bytes,
                           cudaMemcpyDeviceToHost, impl_->stream));
   CUDA_OK(cudaStreamSynchronize(impl_->stream));
 
+  // Per-image NMS + box rescale.
   auto outs = nms(out_cpu, nmscfg);
-  if (outs[0].size(0) == 0) return {};
-
-  auto det = outs[0];
-  auto boxes = det.slice(1, 0, 4).contiguous();
-  scale_boxes(boxes, lb);
-  det.slice(1, 0, 4) = boxes;
-
-  std::vector<Detection> result;
-  result.reserve(det.size(0));
-  auto a = det.accessor<float, 2>();
-  for (int i = 0; i < det.size(0); ++i) {
-    Detection d;
-    d.x1   = a[i][0]; d.y1 = a[i][1]; d.x2 = a[i][2]; d.y2 = a[i][3];
-    d.conf = a[i][4]; d.cls = (int)a[i][5];
-    result.push_back(d);
+  std::vector<std::vector<Detection>> result(N);
+  for (int i = 0; i < N && i < (int)outs.size(); ++i) {
+    auto det = outs[i];
+    if (det.size(0) == 0) continue;
+    auto boxes = det.slice(1, 0, 4).contiguous();
+    scale_boxes(boxes, lbs[i]);
+    det.slice(1, 0, 4) = boxes;
+    auto a = det.accessor<float, 2>();
+    result[i].reserve(det.size(0));
+    for (int j = 0; j < det.size(0); ++j) {
+      Detection d;
+      d.x1   = a[j][0]; d.y1 = a[j][1]; d.x2 = a[j][2]; d.y2 = a[j][3];
+      d.conf = a[j][4]; d.cls = (int)a[j][5];
+      result[i].push_back(d);
+    }
   }
   return result;
 }
