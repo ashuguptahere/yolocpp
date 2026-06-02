@@ -1,4 +1,8 @@
 #include "yolocpp/models/yolo8.hpp"
+// fuse_model() dispatches across block types from sibling versions
+// — pull their headers so as<>() resolves their RTTI here too.
+#include "yolocpp/models/yolo6.hpp"
+#include "yolocpp/models/yolo13.hpp"
 
 #include <torch/nn/functional.h>
 
@@ -174,12 +178,22 @@ void DWConvImpl::fuse() {
 }
 
 // Recursive fuser: walks the module tree, calls fuse() on every
-// ConvImpl/DWConvImpl. Other module types are descended into via
-// children(). Handles modular composition (C2f/C3k2/Bottleneck/etc.)
-// because they ultimately leaf into ConvImpl/DWConvImpl. (#95B.)
+// Conv+BN block we know about. Other module types are descended into
+// via children(). Handles modular composition (C2f/C3k2/Bottleneck/
+// etc.) because they ultimately leaf into one of these blocks. (#95B.)
+//
+// Coverage:
+//   ConvImpl, DWConvImpl    (yolo8) → v3/v4/v5/v8/v10/v11/v12/v26
+//   ConvBNReLUImpl          (yolo6) → v6
+//   DSConvImpl              (yolo13) → v13 HyperACE/FullPAD blocks
+// RepConv-style blocks (v6 RepConv, v7 Yolo7RepConv, v9 Yolo9RepConv)
+// are already structurally fused at deploy time — single Conv2d,
+// no BN, no fuse() needed.
 void fuse_model(torch::nn::Module& root) {
-  if (auto* c = root.as<ConvImpl>())        { c->fuse(); return; }
-  if (auto* d = root.as<DWConvImpl>())      { d->fuse(); return; }
+  if (auto* c = root.as<ConvImpl>())              { c->fuse(); return; }
+  if (auto* d = root.as<DWConvImpl>())            { d->fuse(); return; }
+  if (auto* c = root.as<ConvBNReLUImpl>())        { c->fuse(); return; }
+  if (auto* d = root.as<DSConvImpl>())            { d->fuse(); return; }
   for (auto& child : root.children()) fuse_model(*child);
 }
 

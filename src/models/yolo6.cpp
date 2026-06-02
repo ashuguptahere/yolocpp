@@ -41,8 +41,39 @@ ConvBNReLUImpl::ConvBNReLUImpl(int c_in, int c_out, int k, int s, int p, int g) 
   use_silu = g_v6_use_silu;   // captured at construction
 }
 torch::Tensor ConvBNReLUImpl::forward(torch::Tensor x) {
-  auto y = bn(conv(x));
+  torch::Tensor y;
+  if (fused) {
+    const auto& s_arr = *conv->options.stride();
+    const auto& p_arr = *std::get<torch::ExpandingArray<2>>(conv->options.padding());
+    const auto& d_arr = *conv->options.dilation();
+    std::vector<int64_t> stride{s_arr[0], s_arr[1]};
+    std::vector<int64_t> padding{p_arr[0], p_arr[1]};
+    std::vector<int64_t> dilation{d_arr[0], d_arr[1]};
+    int groups = (int)conv->options.groups();
+    y = at::conv2d(x, fused_weight, fused_bias,
+                   at::IntArrayRef(stride), at::IntArrayRef(padding),
+                   at::IntArrayRef(dilation), groups);
+  } else {
+    y = bn(conv(x));
+  }
   return use_silu ? torch::silu(y) : torch::relu(y);
+}
+
+void ConvBNReLUImpl::fuse() {
+  if (fused) return;
+  torch::NoGradGuard ng;
+  auto cw = conv->weight.detach();
+  auto cb = conv->bias.defined() ? conv->bias.detach()
+                                 : torch::zeros({cw.size(0)}, cw.options());
+  auto bw = bn->weight.detach();
+  auto bb = bn->bias.detach();
+  auto rm = bn->running_mean.detach();
+  auto rv = bn->running_var.detach();
+  double eps = bn->options.eps();
+  auto scale = bw / torch::sqrt(rv + eps);
+  fused_weight = (cw * scale.view({-1, 1, 1, 1})).contiguous();
+  fused_bias   = ((cb - rm) * scale + bb).contiguous();
+  fused = true;
 }
 
 // ─── RepConv (deploy form) ───────────────────────────────────────────────

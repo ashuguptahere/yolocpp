@@ -92,10 +92,40 @@ DSConvImpl::DSConvImpl(int c_in, int c_out, int k, int s, int p, int d,
 }
 
 torch::Tensor DSConvImpl::forward(torch::Tensor x) {
-  x = pw(dw(x));
-  x = bn(x);
+  x = dw(x);
+  if (fused) {
+    const auto& s_arr = *pw->options.stride();
+    const auto& p_arr = *std::get<torch::ExpandingArray<2>>(pw->options.padding());
+    const auto& d_arr = *pw->options.dilation();
+    std::vector<int64_t> stride{s_arr[0], s_arr[1]};
+    std::vector<int64_t> padding{p_arr[0], p_arr[1]};
+    std::vector<int64_t> dilation{d_arr[0], d_arr[1]};
+    int groups = (int)pw->options.groups();
+    x = at::conv2d(x, fused_pw_weight, fused_pw_bias,
+                   at::IntArrayRef(stride), at::IntArrayRef(padding),
+                   at::IntArrayRef(dilation), groups);
+  } else {
+    x = bn(pw(x));
+  }
   if (act_silu) x = F::silu(x);
   return x;
+}
+
+void DSConvImpl::fuse() {
+  if (fused) return;
+  torch::NoGradGuard ng;
+  auto cw = pw->weight.detach();                              // [c_out, c_in, 1, 1]
+  auto cb = pw->bias.defined() ? pw->bias.detach()
+                               : torch::zeros({cw.size(0)}, cw.options());
+  auto bw = bn->weight.detach();
+  auto bb = bn->bias.detach();
+  auto rm = bn->running_mean.detach();
+  auto rv = bn->running_var.detach();
+  double eps = bn->options.eps();
+  auto scale = bw / torch::sqrt(rv + eps);
+  fused_pw_weight = (cw * scale.view({-1, 1, 1, 1})).contiguous();
+  fused_pw_bias   = ((cb - rm) * scale + bb).contiguous();
+  fused = true;
 }
 
 // ───────── DSBottleneck ──────────────────────────────────────────────────

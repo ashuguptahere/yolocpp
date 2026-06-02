@@ -4,6 +4,43 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.28] — 2026-06-02
+
+### Fixed (perf)
+- **`fuse_model` now covers v6 and v13 block types.** Previously
+  only `ConvImpl` + `DWConvImpl` (yolo8) got Conv+BN folded —
+  full coverage for v3/v4/v5/v8/v10/v11/v12/v26 (they all reuse
+  those blocks). v6's `ConvBNReLUImpl` and v13's `DSConvImpl`
+  fell through to the unfused path. Added `fuse()` methods on
+  both and extended the recursive walker in `yolo8.cpp` to
+  dispatch on them. v6 ConvBNReLU folds bn into conv weight+bias
+  exactly like ConvImpl; v13 DSConv folds bn into pw (depthwise
+  branch stays unchanged since it has no bn).
+- **`fuse_model` documents the coverage explicitly.** RepConv-
+  style blocks (v6 RepConv, v7 Yolo7RepConv, v9 Yolo9RepConv)
+  are already structurally fused at deploy time — single Conv2d,
+  no BN — so they don't need a fuse() method.
+
+### Coverage matrix (after this commit)
+| Version | Block(s) | fuse() applied? |
+|---------|----------|:---------------:|
+| v3, v4, v5 | yolo8 ConvImpl   | ✅ (via inherited block) |
+| v6 | ConvBNReLU, RepConv | ✅ (CBR fused; RepConv already-fused) |
+| v7 | Yolo7RepConv + ConvImpl | ✅ (RepConv already-fused) |
+| v8 | ConvImpl, DWConvImpl | ✅ |
+| v9 | AConv → ConvImpl, Yolo9RepConv | ✅ (RepConv already-fused) |
+| v10/v11/v12/v26 | yolo8 ConvImpl + DWConvImpl | ✅ |
+| v13 | DSConv, AdaHGConv, DownsampleConv | DSConv ✅; others structural |
+
+### Per-variant PT FP32 (RTX 5090 b=1)
+| variant | PT FP32 fps |
+|---------|------------:|
+| yolo6n  | **522** |
+| yolo6s  | 372 |
+| yolo13n | 320 |
+| yolo13s | 263 |
+| yolo3, yolo5n, yolo7-tiny, yolo9c, yolo26n | 132 / 504 / 450 / 204 / 422 |
+
 ## [0.99.27] — 2026-06-02
 
 ### Profile sweep across 9 variants × 3 precisions

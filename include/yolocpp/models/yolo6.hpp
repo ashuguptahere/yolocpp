@@ -68,6 +68,12 @@ struct ConvBNReLUImpl : torch::nn::Module {
   torch::nn::Conv2d      conv{nullptr};
   torch::nn::BatchNorm2d bn{nullptr};
   bool                   use_silu = false;
+  // Inference-time Conv+BN fusion (#95B-extended). Same idea as
+  // yolo8.cpp's ConvImpl::fuse. After fuse(), forward skips BN.
+  bool                   fused = false;
+  torch::Tensor          fused_weight;
+  torch::Tensor          fused_bias;
+  void fuse();
   ConvBNReLUImpl(int c_in, int c_out, int k = 1, int s = 1, int p = -1, int g = 1);
   torch::Tensor forward(torch::Tensor x);
 };

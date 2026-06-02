@@ -103,6 +103,12 @@ struct DSConvImpl : torch::nn::Module {
   torch::nn::Conv2d      pw{nullptr};
   torch::nn::BatchNorm2d bn{nullptr};
   bool                   act_silu = true;
+  // BN is applied AFTER pw (pw → bn) — fuse() folds bn into pw's
+  // weight/bias. dw stays unchanged (no bn on the depthwise branch).
+  bool                   fused = false;
+  torch::Tensor          fused_pw_weight;
+  torch::Tensor          fused_pw_bias;
+  void fuse();
   DSConvImpl(int c_in, int c_out, int k = 3, int s = 1, int p = -1,
              int d = 1, bool act = true);
   torch::Tensor forward(torch::Tensor x);
