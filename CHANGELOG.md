@@ -4,6 +4,73 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.33] — 2026-06-02
+
+### Docs
+- **ONE unified training table** consolidating yolocpp + Ultralytics
+  at 1-epoch AND 5-epoch on screen-dataset. Columns: variant,
+  Y1ep mAP, U1ep mAP, Δ, Y5ep mAP, U5ep mAP, Δ, plus walls for all
+  four cells. 60 variant rows. Replaces the previous two scattered
+  tables ("1 ep vs 5 ep" and "vs reference"). A companion
+  mAP50/P/R/F1 table sits underneath for yolocpp side only
+  (Ultralytics' YOLO API surfaces only mp/mr).
+- **iMoonLab fork v13 partial benchmark.** PT FP32 yolo13n =
+  **203 fps** via the fork's own `ultralytics.YOLO` shim
+  (FP16/INT8 export blocked by externally-managed-environment pip
+  + numpy.trapz removal — tracked as `[iMoon-deps]` marker).
+  yolocpp PT FP32 for v13n: **318 fps** (+57% over iMoon fork).
+
+### Sweep status
+- Ultralytics 1-epoch: 36/36 variants done. Stock Ultralytics can't
+  load v6 (Meituan) or v7 (WKY) so those rows stay empty on the U
+  side; original 5-ep yolocpp-vs-Meituan/WKY data remains in
+  CHANGELOG 0.99.13 + MBLA/P6 follow-ups.
+
+## [0.99.32] — 2026-06-02
+
+### Added
+- **#95C GPU letterbox**, default ON. `gpu_letterbox_batch()`
+  collapses CPU letterbox + image_to_tensor + H2D (~0.46 ms) into
+  a single GPU pass (~0.25 ms): upload raw HWC BGR uint8 → permute
+  → cast float → div 255 → `F::interpolate(bilinear)` → `F::pad`
+  (constant=114/255) → `flip(0)` for BGR→RGB.
+- A/B verified across yolo8n / yolo11n / yolo11x: **+28% / +18% /
+  +9%** TRT FP16 fps. yolo11n: 995 → 1175 fps.
+- `YOLOCPP_GPU_LETTERBOX=0` falls back to CPU pipeline for
+  conservative regression testing.
+
+## [0.99.31] — 2026-06-02
+
+### Added
+- **#97 `inference::Results` wrapper** for Ultralytics-API parity.
+  Wraps `vector<Detection>` + image metadata + speed dict. Methods:
+  `.xyxy() .xyxyn() .xywh() .xywhn() .conf() .cls() .class_name()
+  .plot() .save() .save_txt() .json() .print()`. Matches
+  `ultralytics.engine.results.Results.boxes` shape so downstream
+  consumers can swap backends transparently. Existing `predict()`
+  still returns `vector<Detection>` for back-compat; a future
+  `predict_results()` will return Results.
+
+## [0.99.30] — 2026-06-02
+
+### Added
+- **#98 Global `--profile` CLI flag + Profile singleton.**
+  `yolocpp::core::Profile` with `PROFILE_SCOPE("tag")` RAII macro.
+  Per-phase wall-clock recording across every hot path (predict,
+  benchmark, val, train); atexit hook prints a summary table
+  sorted by total ms. Zero overhead when off (default).
+- Wired into `TrtPredictor::predict_batch` (letterbox /
+  image_to_tensor / stack+H2D / enqueueV3 / nms / postprocess).
+  yolo11n FP16 batch=1 baseline (CPU letterbox):
+  ```
+  enqueueV3       53.9%   0.46 ms  (GPU compute floor)
+  letterbox       17.8%   0.24 ms  → fixed in 0.99.32 (#95C)
+  nms             11.6%   0.13 ms
+  stack+H2D       11.2%   0.14 ms
+  image_to_tensor  4.3%   0.05 ms
+  postprocess      1.2%   0.01 ms
+  ```
+
 ## [0.99.29] — 2026-06-02
 
 ### Docs — consolidated README tables
