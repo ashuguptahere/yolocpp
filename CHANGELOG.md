@@ -4,6 +4,37 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.18] — 2026-06-02
+
+### Added
+- **v6 MBLA × Meituan reference row** (`[MBLA]` footnote in main
+  comparison table). All 4 variants — yolocpp wins by +0.36 to
+  +0.41 mAP@0.5:0.95 (yolocpp 0.39–0.45 vs Meituan 0.025–0.066 at
+  5-ep). Meituan's COCO-tuned recipe needs more epochs on a
+  5-class 2465-image dataset; same pattern as base v6 P5 rows.
+- **v7-w6 row updated** (`yolo7-w6` after canonical rename) — 5-ep
+  yolocpp lands **0.297 mAP@0.5:0.95** (was 0.000), validating the
+  #87C autoanchor fix end-to-end. imgsz=1280 (upstream P6 spec),
+  9 min wall, 30 GB VRAM peak.
+
+### Documented
+- **`[P6-OOM]` footnote for yolo7-e6 / -d6 / -e6e**. With the
+  canonical dashed names now resolving correctly to the P6 scale,
+  the cmd_train adapter forces imgsz=1280 (upstream training spec).
+  At batch=16 / imgsz=1280 the 97–144M-param P6 models exceed 30 GB
+  forward + autograd state and OOM on the 32 GB RTX 5090.
+  Upstream trains these on 8×A100-40GB. Documented as a hardware
+  envelope ceiling, not a code bug. Workaround: batch=8 / 1280 or
+  batch=16 / 960 — both deviate from the published recipe.
+
+### Notes
+- INT8 backfill recovered after a `pkill -STOP/-CONT` mishap broke
+  the `timeout` wrapper on yolo10l (hung 3h48m). v11x and v10l
+  fail INT8 tactic search at the default 1.2 GB workspace ceiling
+  (same UNSUPPORTED_STATE as v7 base/x, v9e, v26x). v12/v13 INT8
+  retry in progress after purging stale ONNX cache files; rows
+  will land in a follow-up commit.
+
 ## [0.99.17] — 2026-05-30
 
 ### Fixed

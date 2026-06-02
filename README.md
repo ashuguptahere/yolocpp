@@ -90,17 +90,17 @@ matches within ~5 %). Bold = win > 0.012 mAP or speedup ≥ 1.10×.
 | yolo6s6[P6]   | 0.009 / 0.083 | −0.074 | 3:47.6 / 1:21.3 | 0.36×    | 274% / 176% | 8.2 / 4.7 | — / — | Meituan v6 |
 | **yolo6m6**[P6] | 0.366 / 0.027 | **+0.339** | 7:46.2 / 2:13.4 | 0.29× | 156% / 159% | 8.3 / 5.0 | — / — | Meituan v6 |
 | yolo6l6[P6]   | **crash** / 0.179 | — | 0:04.2 / 2:20.9 | — | — / — | — / — | — / — | Meituan v6 |
-| yolo6s_mbla[MBLA] | 0.432 / —  | —    | 0:50.2 / —     | —      | 352% / —    | 8.1 / —   | — / —         | Meituan v6 (runner cwd bug)** |
-| yolo6m_mbla[MBLA] | 0.431 / —  | —    | 1:07.7 / —     | —      | 287% / —    | 8.0 / —   | — / —         | Meituan v6 (runner cwd bug)** |
-| yolo6l_mbla[MBLA] | 0.392 / —  | —    | 1:21.7 / —     | —      | 253% / —    | 8.1 / —   | — / —         | Meituan v6 (runner cwd bug)** |
-| yolo6x_mbla[MBLA] | 0.448 / —  | —    | 1:57.7 / —     | —      | 208% / —    | 8.1 / —   | — / —         | Meituan v6 (runner cwd bug)** |
+| **yolo6s_mbla**[MBLA] | 0.432 / 0.025 | **+0.407** | 0:50.2 / 1:08.4 | **1.36×** | 352% / — | 8.1 / — | — / — | Meituan v6 |
+| **yolo6m_mbla**[MBLA] | 0.431 / 0.055 | **+0.376** | 1:07.7 / 1:22.3 | **1.22×** | 287% / — | 8.0 / — | — / — | Meituan v6 |
+| **yolo6l_mbla**[MBLA] | 0.392 / 0.031 | **+0.361** | 1:21.7 / 1:40.9 | **1.23×** | 253% / — | 8.1 / — | — / — | Meituan v6 |
+| **yolo6x_mbla**[MBLA] | 0.448 / 0.066 | **+0.382** | 1:57.7 / 2:24.9 | **1.23×** | 208% / — | 8.1 / — | — / — | Meituan v6 |
 | yolo7      | 0.298 / —     | —      | 4:49.1 / —      | —       | 151% / —    | 8.0 / —   | 16052 / —     | (WKY pipeline broken)* |
 | yolo7-tiny | 0.406 / —     | —      | 5:29.3 / —      | —       | 146% / —    | 7.8 / —   | 5218 / —      | (WKY pipeline broken)* |
 | yolo7x     | 0.368 / —     | —      | 7:02.9 / —      | —       | 135% / —    | 8.0 / —   | 20463 / —     | (WKY pipeline broken)* |
-| yolo7w6[P6]  | **0.000** / — | —    | 5:37.3 / —     | —      | 144% / —    | 8.3 / —   | — / —         | yolocpp P6 train degenerate[w=0-cpp] |
-| yolo7e6[P6]  | **0.000** / — | —    | 6:13.7 / —     | —      | 139% / —    | 8.2 / —   | — / —         | yolocpp P6 train degenerate[w=0-cpp] |
-| yolo7d6[P6]  | **0.000** / — | —    | 6:17.9 / —     | —      | 139% / —    | 8.3 / —   | — / —         | yolocpp P6 train degenerate[w=0-cpp] |
-| yolo7e6e[P6] | **0.000** / — | —    | 6:17.6 / —     | —      | 139% / —    | 8.3 / —   | — / —         | yolocpp P6 train degenerate[w=0-cpp] |
+| yolo7-w6[P6] | 0.297 / —     | —    | 9:03.6 / —     | —      | 105% / —    | 8.4 / —   | 30238 / —     | (WKY pipeline broken)*, imgsz=1280 |
+| yolo7-e6[P6] | **OOM** / —   | —    | 0:10.1 / —     | —      | — / —       | — / —     | — / —         | OOM at imgsz=1280 on 32 GB[P6-OOM] |
+| yolo7-d6[P6] | **OOM** / —   | —    | 0:09.6 / —     | —      | — / —       | — / —     | — / —         | OOM at imgsz=1280 on 32 GB[P6-OOM] |
+| yolo7-e6e[P6]| **OOM** / —   | —    | 0:09.7 / —     | —      | — / —       | — / —     | — / —         | OOM at imgsz=1280 on 32 GB[P6-OOM] |
 | yolo8n     | 0.768 / 0.759 | +0.010 | 0:32.1 / 0:43.8 | **1.36×** | 490% / 297% | 8.1 / 8.3 | 4389 / 4997 | Ultra 8.4.56 |
 | **yolo8s** | 0.806 / 0.739 | **+0.067** | 0:36.4 / 0:51.9 | **1.42×** | 429% / 260% | 8.1 / 8.4 | 6045 / 6899 | Ultra 8.4.56 |
 | yolo8m[avg-3]    | 0.706 / 0.695 | **+0.011** | 0:53.7 / 1:17.4 | **1.44×** | 323% / 202% | 8.1 / 8.7 | 9120 / 10322 | Ultra 8.4.56 |
@@ -173,24 +173,37 @@ Documented in CHANGELOG 0.99.13.
 
 **Footnote `[MBLA]`** — yolo6 MBLA variants (s/m/l/x_mbla) — yolocpp
 trains cleanly in 50 s – 1 m 58 s for 5 epochs, mAP@0.5:0.95 lands
-in 0.39 – 0.45 — comparable to the y6m/l P5 rows above. Meituan
-reference column blank because the runner script at
-`/tmp/bench_all_versions/run_v6_meituan.sh` doesn't `cd
-/tmp/YOLOv6_meituan` before invoking `tools/train.py`, so the
-`Config.fromfile('configs/yolov6{*}_mbla.py')` call fails with
-`FileNotFoundError`. Filed under task #87B; reference comparison
-will land in a follow-up commit once the script's cwd is fixed.
+in 0.39 – 0.45. Meituan reference column lands at 0.025 – 0.066 —
+similar to the base v6 P5 row pattern (yolo6m/l Meituan also low
+at 5-ep on this dataset). Meituan's COCO-style recipe needs more
+epochs to converge on a 5-class 2465-image dataset; at 5 epochs
+yolocpp beats Meituan by +0.36 to +0.41 mAP. Fix for the original
+runner cwd bug (#87B) landed in 0.99.17. Reference: Meituan's
+upstream training recipe (`configs/mbla/yolov6{*}_mbla.py`) — pure
+COCO-tuned hyperparams + 300/400 epoch schedule.
 
-**Footnote `[w=0-cpp]`** — yolocpp's v7 P6 training pipeline
-(`w6/e6/d6/e6e`) currently produces mAP=0 across all 5 epochs.
-Models build cleanly (TRT FP16 fps works once workspace is bumped),
-but the train loop's anchor-decode / loss target wiring is the same
-code path as the base `yolo7` row above — base yolo7 lands a real
-0.298 mAP at 5-ep, so the P6 collapse is a P6-specific assigner /
-anchor-grid bug (4-level head + extra P6/64 anchors). Tracked as
-task #87C; needs the same fix as task #6 (P5 channels_last crash
-on l6) — P6 forward path under our layout still has bugs at high
-scales. Predict + export work; train doesn't yet.
+**Footnote `[w=0-cpp]`** — *resolved in 0.99.17.* yolocpp's v7 P6
+training pipeline now lands a real 0.297 mAP@0.5:0.95 for yolo7-w6
+at 5-ep (vs 0 before). Root cause was the upstream P6 anchors
+(`yolov7-{w6,e6,d6,e6e}.yaml`) being calibrated at imgsz=1280 but
+used at imgsz=640 — every anchor was ~2× too large, GT-to-anchor
+IoU matching collapsed to zero positives per GT, mAP saturated to
+0. Fix: enable `c.autoanchor = true` in the v7 P6 LossTraits —
+K-means reclusters from the actual training GT (w, h) distribution
+and `loss_after_init` syncs the new anchors into the model's
+`anchor_grid` buffer (matches WongKinYiu's `check_anchors()`
+BPR<0.98 reclustering in `autoanchor.py`). See CHANGELOG 0.99.17.
+
+**Footnote `[P6-OOM]`** — yolo7-e6 / -d6 / -e6e are the big P6
+variants (97–144M params) trained at upstream imgsz=1280. At
+batch=16 / imgsz=1280 the forward + autograd state exceeds 30 GB,
+OOM-ing on our 32 GB RTX 5090. Upstream WongKinYiu trains these on
+8×A100-40GB clusters. At batch=8 / imgsz=1280, or batch=16 /
+imgsz=960, they'd fit — both are deviations from the published
+recipe so we don't compare against unreleased numbers. yolo7-w6 is
+smaller (70M) and fits at b=16 / 1280 with 30 GB peak. WongKinYiu
+reference column is blank for all four P6 variants since their
+training pipeline is broken under current torch (see WKY note).
 
 ### Not yet benchmarked
 
