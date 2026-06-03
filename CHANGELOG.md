@@ -4,6 +4,50 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.40] — 2026-06-03
+
+### Added
+- **`docs/data/training_1ep.csv`** and **`docs/data/training_5ep.csv`**
+  — machine-readable consolidated data. One row per variant, both
+  Y (yolocpp) and U (Ultralytics) columns side-by-side, 19 columns
+  total:
+  ```
+  variant,
+  Y_mAP50, Y_mAP, Y_P, Y_R, Y_F1,
+  Y_PT_fps, Y_TRT_FP16_fps, Y_TRT_INT8_fps,
+  U_mAP50, U_mAP, U_P, U_R, U_F1,
+  U_PT_fps, U_TRT_FP16_fps, U_TRT_INT8_fps,
+  params, GFLOPs
+  ```
+- README links to both CSV files in the Training section.
+
+### Coverage (per CSV row count = 60)
+| Field | 1ep filled | 5ep filled |
+|-------|-----------:|-----------:|
+| Y_mAP   | 54 | 56 |
+| U_mAP   | 40 | 40 |
+| Y_TRT_FP16_fps | 52 | 52 |
+| U_TRT_FP16_fps | 14 | 14 |
+| params  | 41 | 41 |
+| GFLOPs  | 41 | 41 |
+
+Empty cells are structural:
+- v6 / v7 U-side: Ultralytics rejects Meituan + WKY formats
+  (Meituan + WKY sweep running in background; will fill on
+  follow-up commit)
+- yolo6l6 Y-side: channels_last P6 crash (TODO #6)
+- yolo7-e6/d6/e6e Y/U: OOM at imgsz=1280 even at b=8 on 32 GB
+- yolo13 U FP16/INT8: iMoonLab fork can't export to TRT
+  ([no-iMoon-TRT] marker)
+- params/GFLOPs for v6/v7: pending Meituan + WKY sweep summary
+  output
+
+Y_FPS for the 52-rows-non-16-variant set reflects 0.99.20 baseline
+(historical per-variant sweep). Current real-world perf is higher
+across the board — see fairness section + CHANGELOG 0.99.22 →
+0.99.32 for the per-version uplifts. Will refresh in a future
+sweep if a full re-bench is requested.
+
 ## [0.99.39] — 2026-06-03
 
 ### Docs
