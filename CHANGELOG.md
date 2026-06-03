@@ -4,6 +4,61 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.45] — 2026-06-03
+
+### Fixed
+- **CSV builder was looking at `cpp_*.json` instead of `cpp_*.log`.**
+  The yolocpp FPS bench writes `.log` (column-aligned output, not
+  JSON), so the previous CSV missed Y FPS for the variants whose
+  benches landed under the new sweep. Glob fixed; now picks up
+  `cpp_yolo7*.log`, `cpp_yolo3.log`, `cpp_yolo9e.log`, etc.
+
+### Added — bench the remaining structurally-tricky variants
+- yolo7-w6/e6/d6/e6e P6 variants
+- yolo6l6 (forward path works for predict — only training crashes
+  on channels_last P6, TODO #6)
+- yolo13x (PT FP32 inference works; only training OOMs at b=16)
+
+All 6 ran cleanly at b=1 imgsz=640 — predict + ONNX + TRT FP16/INT8
+all worked. The training-side bugs don't block inference benching.
+
+### Coverage now (out of 60 variants)
+| Field | Coverage |
+|-------|---------:|
+| Y_PT_fps     | **60/60** |
+| Y_FP16_fps   | **60/60** |
+| Y_INT8_fps   | **60/60** |
+| U_PT_fps     | 40/60 |
+| U_FP16_fps   | 34/60 |
+| U_INT8_fps   | 33/60 |
+
+The remaining U-side gaps are structural — same 3 categories as
+documented in the README marker legend:
+- v6 (12 variants): stock Ultralytics rejects Meituan format
+- v7 (7 variants): WKY pipeline `_pickle.UnpicklingError` under
+  torch 2.12 + cu130
+- v13 (4 variants): iMoonLab fork's TRT export blocked by PEP-668
+
+### Highlights from the new Y FPS rows
+| Variant | Y_PT | Y_FP16 | Y_INT8 |
+|---------|----:|------:|------:|
+| yolo7         | 209  | 727  | 674  |
+| yolo7-tiny    | 461  | 1259 | 1084 |
+| yolo7x        | 149  | 515  | 443  |
+| yolo7-w6 (P6) | 195  | 662  | 684  |
+| yolo7-e6 (P6) | 151  | 500  | 493  |
+| yolo7-d6 (P6) | 122  | 424  | 447  |
+| yolo7-e6e (P6)|  96  | 344  | 345  |
+| yolo6l6       | 114  | 431  | 454  |
+| yolo13x       |  96  | 223  | 239  |
+
+P6 v7 variants run at imgsz=640 b=1 for inference (the OOM was at
+imgsz=1280 b=16 for training — that's CHANGELOG 0.99.18's
+`[P6-OOM]` note, which is training-specific).
+
+Figures regenerated; mAP_vs_fps Pareto now has the full v7 family
+line.
+
 ## [0.99.44] — 2026-06-03
 
 ### Fixed (data accuracy) — Ultralytics workspace config
