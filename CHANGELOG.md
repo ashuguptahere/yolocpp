@@ -4,6 +4,53 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.46] — 2026-06-03
+
+### Added
+- **Resource columns in `docs/data/training.csv`** (7 new columns,
+  41 → **49** total):
+  - `Y_train_CPU_pct`, `U_train_CPU_pct` — peak CPU% from
+    `/usr/bin/time -v`
+  - `Y_train_RSS_GB`, `U_train_RSS_GB` — max resident set size
+    in GB
+  - `Y_train_VRAM_MB`, `U_train_VRAM_MB` — peak GPU memory from
+    `nvidia-smi` polling (100 ms interval)
+  - `batch_train` — actual batch size used per row
+    (16 default; **8 for yolo13x** which OOMs at 16)
+  - 24 of 60 rows filled — same 24 variants where the original
+    5-ep sweep captured `.time` + `.gpu.csv` files.
+- **`docs/data/bench_config.yaml`** — every parameter used to
+  produce the CSV: TRT workspace per stack (yolocpp = 4 GiB pinned
+  since 0.99.19; Ultralytics = 4 GiB after 0.99.44, bumped to 8
+  for yolo12x), warmup + iters, calibration set, image, framework
+  versions, structural-gap legend. Reproducibility audit trail.
+- **`runs/compare/` directory + 24 seeded paired training runs.**
+  Mirror of Ultralytics' `runs/` convention, doubled: each
+  `runs/compare/train/N/` has `yolocpp/` and `ultralytics/`
+  subdirectories with the **same model trained under same hyper-
+  parameters**. Per-stack `args.yaml`, `results.csv`, weights,
+  `time.log`, `gpu.csv`. The numbered `N` is a join key — train/1
+  is the same variant on both sides.
+- `runs/compare/index.csv` — lookup table: `run_id, mode, variant,
+  epochs, batch, imgsz, seed, created`.
+- `runs/compare/README.md` — convention doc. Forward-only —
+  existing `runs/train/`, `runs/predict/`, etc. (yolocpp-only)
+  preserved as documented in CLAUDE.md's output convention.
+
+### TRT export availability — yolocpp covers more
+yolocpp ships TRT export for **all 14 supported versions** via a
+single `yolocpp --mode export -f trt`. Ultralytics ships TRT export
+only for the stock-loadable family (v3/v5/v8-12/v26). For v6/v7/v13:
+- **v6**: Meituan has its own deploy path, not Ultralytics'.
+- **v7**: WongKinYiu's training pipeline checkpoint format is
+  incompatible with torch 2.12 (CHANGELOG 0.99.42), so their
+  export path is broken end-to-end.
+- **v13**: iMoonLab fork's `YOLO.export(format=engine)` blocked
+  by PEP-668 + onnxslim pin (CHANGELOG 0.99.34).
+
+That's documented in `bench_config.yaml`'s `trt_export_availability`
+section.
+
 ## [0.99.45] — 2026-06-03
 
 ### Fixed

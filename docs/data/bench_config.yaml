@@ -1,0 +1,78 @@
+# Benchmark configuration used to generate docs/data/training.csv.
+# Captured here so the numbers in the CSV are reproducible and the
+# parameters each codebase ran with are auditable later.
+
+dataset:
+  name: screen-dataset
+  path: /home/ashu/Desktop/dataset/screen-dataset-yolo
+  train_images: 2465
+  val_images: 308
+  num_classes: 5
+  class_names: [phone, laptop, tablet, tv, computer]
+
+hardware:
+  gpu: NVIDIA RTX 5090
+  vram_gb: 32
+  cuda: "13.0"
+  torch: "2.12.0+cu130"
+  trt: "10.14.1.48"
+
+training:
+  imgsz: 640
+  batch: 16              # overridden per-row in CSV column `batch_train`
+                         # (yolo13x = 8 because both stacks OOM at 16)
+  seed: 42
+  epochs:
+    short: 1
+    long: 5
+  optimizer: auto         # AdamW for batch<64
+
+yolocpp:
+  binary: /home/ashu/Desktop/yolocpp/build/yolocpp
+  version: "0.99.45"      # at time of sweep
+  trt_workspace_gib: 4
+  bench_mode: predict_results
+  preprocess: gpu_letterbox  # 0.99.32+ default
+  nms: gpu_filter + avx2     # 0.99.22+ default
+  inference_mode: c10::InferenceMode  # 0.99.24+
+  conv_bn_fusion: true       # ConvImpl + DWConvImpl + ConvBNReLU + DSConv
+
+ultralytics:
+  version: "8.4.60"
+  iMoonLab_fork_v13: cloned from iMoonLab/yolov13@HEAD
+  meituan_yolov6: cloned from meituan/YOLOv6@HEAD
+  wongkinyiu_yolov7: cloned from WongKinYiu/yolov7@HEAD (incompatible)
+  trt_workspace_gib: 4   # bumped from default ~1 to match yolocpp;
+                         # yolo12x required 8 — its row in the CSV used 8
+  export_format: engine
+  dynamic: true
+  half: true             # for FP16 engine
+  int8: true             # for INT8 engine + calibrator
+
+bench:
+  image: /tmp/bus.jpg
+  imgsz: 640
+  batch: 1
+  warmup_iters: 5
+  timed_iters: 30
+  precisions: [fp32, fp16, int8]
+  trt_int8_calib_set: /home/ashu/Desktop/dataset/screen-dataset-yolo/images/val
+
+resource_capture:
+  cpu_time: /usr/bin/time -v        # CPU%, Max RSS
+  vram: nvidia-smi polling          # 100ms interval; peak memory.used
+  data_source: /tmp/bench_all_versions/out  # 24 variants × 2 sides (5-ep sweep)
+  vram_methodology: 99th-percentile excludes cuDNN-benchmark transient spikes
+
+structurally_missing_cells:
+  v6_U_side: 12 variants — stock Ultralytics rejects Meituan format
+  v7_U_side: 7 variants — WongKinYiu pipeline _pickle.UnpicklingError under torch 2.12
+  v13_U_FP16_INT8: 4 variants — iMoonLab fork TRT export blocked by PEP-668
+  yolo6l6: channels_last P6 forward crash (TODO #6)
+  yolo7-e6/d6/e6e: train OOM at imgsz=1280 b=8 on 32 GB (97-144M params)
+
+trt_export_availability:
+  yolocpp: all 14 supported versions (v1..v13 + v26) — single `--mode export -f trt`
+  ultralytics: only stock-loadable formats — v6/v7/v13 require their respective
+               framework's export path, which is broken for v7 (WKY) and
+               blocked for v13 (iMoonLab PEP-668)

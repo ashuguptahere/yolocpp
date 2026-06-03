@@ -63,10 +63,26 @@ nc=5), batch=16, imgsz=640, seed=42, RTX 5090 32 GB. All numbers
 live in one machine-readable CSV — no scattered tables in this
 README. Read directly or join into your own analysis pipeline.
 
-- **`docs/data/training.csv`** — 60 rows × 41 columns. Each metric
+- **`docs/data/training.csv`** — 60 rows × 49 columns. Each metric
   is a `(Y, U, Δ)` triple for both 1-epoch and 5-epoch sweeps,
-  plus FPS triples (PT / TRT FP16 / TRT INT8) and `params_M`
-  and `GFLOPs`. Δ is signed: `+` = yolocpp wins.
+  plus FPS triples (PT / TRT FP16 / TRT INT8), `params_M`,
+  `GFLOPs`, **per-side training-time resource usage**
+  (`{Y,U}_train_{CPU_pct, RSS_GB, VRAM_MB}`), and `batch_train`
+  (the actual batch size used for that variant — usually 16, but
+  yolo13x = 8 due to OOM at 16). Δ is signed: `+` = yolocpp wins.
+- **`docs/data/bench_config.yaml`** — every benchmark knob
+  used to produce the CSV: TRT workspace per stack (yolocpp = 4
+  GiB pinned since 0.99.19; Ultralytics = 4 GiB after 0.99.44 fix,
+  bumped to 8 for yolo12x), warmup + iters, calibration set,
+  image, framework versions, structural-gap legend.
+  Reproducible without guessing what we ran.
+- **`runs/compare/`** — paired training output. Each
+  `runs/compare/train/N/` has `yolocpp/` and `ultralytics/`
+  sub-directories with `args.yaml`, `results.csv`, weights,
+  `time.log` (CPU%, RSS from `/usr/bin/time -v`), `gpu.csv`
+  (VRAM polling). 24 paired runs seeded from the 5-ep sweep.
+  See [`runs/compare/README.md`](runs/compare/README.md) for the
+  convention.
 
 ### Figures (all generated from training.csv)
 

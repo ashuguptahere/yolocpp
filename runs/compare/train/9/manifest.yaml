@@ -1,0 +1,14 @@
+variant:   yolo12s
+mode:      train
+epochs:    5
+batch:     16
+imgsz:     640
+seed:      42
+dataset:   screen-dataset
+created:   2026-06-03
+yolocpp_version: 0.99.45
+ultralytics_version: 8.4.60
+common_args:
+  optimizer: auto
+  workers:   0
+note: 'imported from /tmp/bench_all_versions/out 5-ep sweep'
