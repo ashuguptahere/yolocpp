@@ -4,6 +4,31 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.37] — 2026-06-03
+
+### Docs — Ultra 5-epoch sweep filled in
+Background sweep from 0.99.36 completed (37 stock-loadable
+variants across v3/v5/v8/v9/v10/v11/v12/v26). Unified training
+table now has **Ultra 5ep mAP / wall populated** for those.
+
+Per-variant highlights (Y vs U at 5-ep mAP@0.5:0.95):
+- yolo5l +0.028, yolo5x +0.049 (Y leads)
+- yolo8s +0.067, yolo10n +0.013 (Y leads)
+- yolo11n -0.038, yolo11s -0.012 (U slightly ahead)
+- yolo13n -0.029, yolo13l -0.027 (iMoon ahead, P6-style)
+- yolo26* row: -0.021 to -0.054 (U leads — v26 is Ultra's own
+  recent architecture; their training recipe is more tuned)
+
+Coverage so far: Ultra 5-ep = 37/60 variants (yolo6 + yolo7 stay
+blank — stock Ultralytics rejects Meituan + WongKinYiu weight
+formats; v6 is `Meituan/YOLOv6` reference territory and v7 is
+`WongKinYiu/yolov7` territory, both of which broke under modern
+torch — see CHANGELOG 0.99.13 for the original yolocpp-vs-Meituan
+5-ep delta and CHANGELOG 0.99.17 for v7 P6 autoanchor fix).
+
+yolo13x[b=8] row preserved with the OOM-at-b=16 explanation from
+0.99.35.
+
 ## [0.99.36] — 2026-06-02
 
 ### Added
