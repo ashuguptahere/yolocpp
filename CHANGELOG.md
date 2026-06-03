@@ -4,6 +4,39 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.38] — 2026-06-03
+
+### Docs — yolocpp 5-epoch sweep filled in
+Background sweep finished — 28 variants ran fresh on screen-dataset
+at b=16 / imgsz=640 / seed=42 (yolo13x dropped to b=8 to avoid OOM).
+Unified training table now has **Y5ep mAP + wall populated for 56/60
+variants**. Remaining gaps:
+
+- **yolo6l6**: known channels_last P6 crash (TODO #6)
+- **yolo7 e6 / d6 / e6e**: OOM at imgsz=1280 even at b=8 (97-144M
+  params on 32 GB; upstream WongKinYiu trains on 8×A100-40GB)
+
+Coverage matrix now:
+- Y5ep filled: **56/60** variants
+- U5ep filled: **37/60** (v6 + v7 stay blank — stock Ultralytics
+  rejects Meituan + WKY weight formats; those references live in
+  Meituan/YOLOv6 + WongKinYiu/yolov7 repos, both broken under
+  modern torch — see CHANGELOG 0.99.13 for the yolocpp-vs-Meituan
+  5-ep deltas captured back then)
+
+Selected highlights from this sweep (Y 5-ep mAP@0.5:0.95):
+- yolo3: 0.647
+- yolo6m: 0.389 (P5, b=16)
+- yolo6m6: 0.358 (P6, b=16) — under-converges at imgsz=640
+- yolo7: 0.328, yolo7-tiny: 0.342, yolo7x: 0.357
+- yolo9c: 0.676, yolo9e: 0.646
+- yolo10n: 0.753 (best), yolo10x: 0.679
+- yolo13x[b=8]: 0.668
+- yolo26m: 0.758, yolo26l: 0.744
+
+yolo13x[b=8] 1-ep data preserved from 0.99.35 (mAP=0.406 vs iMoon
+0.093, +0.313 lead).
+
 ## [0.99.37] — 2026-06-03
 
 ### Docs — Ultra 5-epoch sweep filled in
