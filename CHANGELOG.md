@@ -4,6 +4,40 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.47] — 2026-06-03
+
+### Added
+- **yolo13x b=8 train cells filled** in `docs/data/training.csv`.
+  Both Y and U sides OOMed at b=16 on 32 GB; re-ran at b=8 →
+  yolocpp 1ep mAP=0.442 / 5ep mAP=0.668; iMoonLab 1ep mAP=0.093.
+  Row's `batch_train` column = 8 to make the asymmetry auditable.
+- **Ultralytics-from-YAML v6 baseline** replaces Meituan on the
+  U-side of v6n/s/m/l. Stock Ultralytics ships
+  `cfg/models/v6/yolov6.yaml` with a scales mechanism; it can
+  *train* v6 from YAML even though it can't *load* Meituan's
+  `.pt` checkpoints. User asked "why can't you train v6 from
+  Ultralytics directly?" — answer is "we can, just not from
+  Meituan weights"; switched to the YAML path so the U-side
+  numbers reflect Ultralytics' codebase the way every other
+  variant does. 5-ep results: yolov6n mAP=0.228, yolov6s 0.279,
+  yolov6m 0.170, yolov6l 0.001. Meituan logs stay in
+  `/tmp/ultra_bench/meituan_train/` for historical reference;
+  the gap is documented in CHANGELOG 0.99.18.
+
+### Changed
+- `build_csv_v2.py` glob bug fix landed in 0.99.46 (`cpp_*.json`
+  → `cpp_*.log`); follow-up here: precedence flip so
+  Ultralytics-from-YAML overwrites Meituan instead of the other
+  way around. Block moved after the Meituan reader so it writes
+  last.
+
+### Deferred
+- **v7 U-side stays blank** (7 variants). Ultralytics ships no
+  `yolov7.yaml`; WongKinYiu's pipeline fails with
+  `_pickle.UnpicklingError: unpickling stack underflow` under
+  torch 2.12 (2022 checkpoint format incompatible). Structural,
+  documented in `bench_config.yaml::structurally_missing_cells`.
+
 ## [0.99.46] — 2026-06-03
 
 ### Added
