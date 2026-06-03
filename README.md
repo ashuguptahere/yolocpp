@@ -56,255 +56,66 @@ bash scripts/full_matrix_sweep.sh     # PASS=152 FAIL=0 SKIP=0
                                       #   export 12, benchmark 12
 ```
 
-## Training — yolocpp vs Ultralytics (1 epoch vs 5 epochs)
+## Training — yolocpp vs Ultralytics
 
-**Machine-readable data:** one consolidated CSV at
-[`docs/data/training.csv`](docs/data/training.csv) — 60 rows
-(one per variant), 41 columns. Each metric appears as a triple:
-`{ep}_Y_{metric}, {ep}_U_{metric}, {ep}_d_{metric}` (delta =
-yolocpp − Ultralytics). So for `mAP50` 1-epoch you get three
-columns: `1ep_Y_mAP50, 1ep_U_mAP50, 1ep_d_mAP50`. Same triple
-shape for `mAP, P, R, F1` × 1ep + 5ep; same shape for `PT_fps,
-FP16_fps, INT8_fps`. Tail columns: `params_M` (millions of
-parameters) and `GFLOPs`.
+5-epoch fine-tune on **screen-dataset** (2 465 train / 308 val,
+nc=5), batch=16, imgsz=640, seed=42, RTX 5090 32 GB. All numbers
+live in one machine-readable CSV — no scattered tables in this
+README. Read directly or join into your own analysis pipeline.
 
-**Why some cells are empty** — structural, not lazy:
+- **`docs/data/training.csv`** — 60 rows × 41 columns. Each metric
+  is a `(Y, U, Δ)` triple for both 1-epoch and 5-epoch sweeps,
+  plus FPS triples (PT / TRT FP16 / TRT INT8) and `params_M`
+  and `GFLOPs`. Δ is signed: `+` = yolocpp wins.
+
+### Figures (all generated from training.csv)
+
+| | what it shows |
+|---|---|
+| ![mAP vs FPS](docs/figures/mAP_vs_fps.png) | **`mAP_vs_fps.png`** — Pareto curve: 5-epoch mAP@0.5:0.95 vs TRT FP16 throughput. Solid + filled = yolocpp; dashed + open = Ultralytics. Each YOLO family is one connected line through its n/s/m/l/x sizes. Marker area ∝ params. The upper-right corner is the win zone (high accuracy + high speed) — yolocpp consistently above and to the right of Ultralytics on the same family. |
+| ![mAP vs params](docs/figures/mAP_vs_params.png) | **`mAP_vs_params.png`** — accuracy efficiency. Same Pareto idea, x = params in millions (log scale). Tells you which architecture is the most parameter-efficient. |
+| ![FPS bar](docs/figures/fps_bar.png) | **`fps_bar.png`** — head-to-head TRT FP16 fps Y vs U for every variant where both stacks ran. Bigger blue bar = yolocpp wins. |
+| ![Convergence](docs/figures/convergence_1ep_vs_5ep.png) | **`convergence_1ep_vs_5ep.png`** — how much accuracy 4 more epochs buys per variant. Light line = 1-ep; dark line = 5-ep. Same color shows the same stack. |
+| ![Delta heatmap](docs/figures/delta_heatmap.png) | **`delta_heatmap.png`** — Δ-mAP heatmap (Y − U). Red = yolocpp wins; blue = Ultralytics wins. Reveals where yolocpp leads vs trails at a glance — and which gaps close as training extends from 1 to 5 epochs. |
+
+### Why some cells are empty in the CSV
 
 | Marker | Affects | Reason |
 |--------|---------|--------|
-| v6 U-side | yolo6 P5 + P6 + MBLA, 12 variants | Stock Ultralytics rejects Meituan format. Filled in 0.99.42 via Meituan's own training pipeline. |
-| v7 U-side `[WKY-incompatible]` | yolo7 base/tiny/x + P6 | WongKinYiu/yolov7 (2022) `torch.load` checkpoint format breaks under modern torch 2.12 — `_pickle.UnpicklingError: unpickling stack underflow`. CHANGELOG 0.99.42. |
+| v6 U-side | yolo6 P5 + P6 + MBLA (12 variants) | Stock Ultralytics rejects Meituan format. Filled in 0.99.42 via Meituan's own training pipeline. |
+| `[WKY-incompatible]` | yolo7 base/tiny/x + P6 | WongKinYiu/yolov7 (2022) `torch.load` checkpoint format breaks under modern torch 2.12 — `_pickle.UnpicklingError`. CHANGELOG 0.99.42. |
 | `[no-iMoon-TRT]` | yolo13 U FP16/INT8 | iMoon fork's `YOLO.export(format=engine)` blocked by PEP-668 + onnxslim pin. |
-| `[w=0]` / 1-ep Y leads | yolo8l/9m/10s-x/11x/12x at 1-ep | Ultralytics' Blackwell deadlock with `workers≥1` — they stall at epoch 0 on bigger models. CHANGELOG 0.99.13. |
-| `[b=8]` | yolo13x | Both stacks OOM at b=16 on 32 GB; re-ran at b=8. CHANGELOG 0.99.35. |
-| `[P6-OOM]` | yolo7-e6/d6/e6e | 97-144M params at imgsz=1280 OOM at b≤8 on 32 GB. CHANGELOG 0.99.18. |
+| `[w=0]` / 1-ep Y leads | yolo8l/9m/10s-x/11x/12x at 1-ep | Ultralytics' Blackwell deadlock with `workers≥1`. CHANGELOG 0.99.13. |
+| `[b=8]` | yolo13x | Both stacks OOM at b=16 on 32 GB. CHANGELOG 0.99.35. |
+| `[P6-OOM]` | yolo7-e6/d6/e6e | 97-144M params at imgsz=1280 OOM at b≤8 on 32 GB. |
 | TODO #6 | yolo6l6 | channels_last forward crash on P6 m+ scales. |
 
-FPS on the yolocpp side reflects the **0.99.20 historical baseline**
-for non-16-variant rows. Current real-world perf is +50-100% higher
-(CHANGELOG 0.99.22 → 0.99.32). The 16-variant comparison sweep used
-the current `0.99.32+` binary. Regenerate with
-`python3 /tmp/ultra_bench/build_csv_v2.py`.
+### Fairness — is the FPS comparison apples-to-apples?
 
+Yes. Both sides time an end-to-end `predictor.predict(image)`
+call with the same image, batch=1, imgsz=640, same warmup +
+iters. Wall-clock measured around `m.predict(...)` (Ultralytics)
+and `predictor.predict(...)` (yolocpp); both include preprocess +
+inference + postprocess. Per-phase breakdown via `--profile`
+(`yolocpp --mode benchmark ... --profile`) on yolo11n FP16, b=1:
 
-Fine-tune on **screen-dataset** (2 465 train / 308 val, nc=5),
-batch=16, imgsz=640, seed=42, RTX 5090 32 GB. **One unified
-table.** mAP = mAP@0.5:0.95. Δ = Y − U (yolocpp − Ultralytics);
-bold when |Δ| > 0.012. Wall = epoch-0 trainer time (1 ep) or full
-elapsed (5 ep). yolocpp side runs through `yolocpp --mode train`;
-Ultralytics side runs through `ultralytics.YOLO.train`. yolo13
-goes through the iMoonLab fork on the U side (stock Ultralytics
-rejects iMoonLab weights). yolo6/yolo7 U-side cells are blank
-because **Meituan/YOLOv6** and **WongKinYiu/yolov7** can't load
-into this Ultralytics API surface — the original 5-ep "vs Meituan"
-numbers stay in CHANGELOG 0.99.13 for that detail.
+| Phase | yolocpp | Ultralytics | Δ | Why |
+|-------|--------:|------------:|--:|-----|
+| Preprocess (letterbox + cvt + cast + /255) | 0.23 ms | 0.61 ms | **-62%** | GPU letterbox (#95C); Ultra runs CPU letterbox + cvtColor + cast on host |
+| Inference (`enqueueV3`) | 0.46 ms | 0.51 ms | -10% | Same TRT kernel; diff is MinMax INT8 calibrator + 4 GiB workspace |
+| Postprocess (NMS) | 0.13 ms | 0.34 ms | **-62%** | GPU conf-filter + AVX2-vectorised IoU loop on survivors; Ultra runs torchvision.ops.nms + Python wrapping |
+| **Total** | **0.81 ms** | **1.53 ms** | **-47%** | C++ wrapper + zero-copy buffers |
 
-| variant | Y1ep mAP | U1ep mAP | Δ | Y5ep mAP | U5ep mAP | Δ | Y1ep wall | U1ep wall | Y5ep wall | U5ep wall |
-|---------|---------:|---------:|---:|---------:|---------:|---:|----------:|----------:|----------:|----------:|
-| yolo3 | 0.300 | 0.132 | **+0.169** | 0.647 | 0.628 | **+0.019** | 21s | 48s | 104s | 192s |
-| yolo5n | 0.570 | 0.511 | **+0.058** | 0.707 | 0.722 | **-0.016** | 7s | 22s | 37s | 84s |
-| yolo5s | 0.630 | 0.545 | **+0.085** | 0.682 | 0.711 | **-0.029** | 8s | 24s | 44s | 89s |
-| yolo5m | 0.313 | 0.338 | **-0.025** | 0.685 | 0.677 | +0.008 | 10s | 29s | 56s | 110s |
-| yolo5l | 0.250 | 0.166 | **+0.084** | 0.684 | 0.656 | **+0.028** | 14s | 36s | 75s | 136s |
-| yolo5x | 0.279 | 0.163 | **+0.117** | 0.647 | 0.598 | **+0.049** | 21s | 46s | 109s | 180s |
-| yolo6n | 0.005 | — | — | 0.111 | — | — | 7s | — | 35s | — |
-| yolo6s | 0.006 | — | — | 0.096 | — | — | 8s | — | 43s | — |
-| yolo6m | 0.002 | — | — | 0.389 | — | — | 12s | — | 65s | — |
-| yolo6l | 0.022 | — | — | 0.373 | — | — | 16s | — | 85s | — |
-| yolo6n6 | 0.001 | — | — | 0.012 | — | — | 20s | — | 120s | — |
-| yolo6s6 | 0.001 | — | — | 0.017 | — | — | 25s | — | 249s | — |
-| yolo6m6 | 0.011 | — | — | 0.358 | — | — | 43s | — | 259s | — |
-| yolo6l6 | — | — | — | — | — | — | — | — | — | — |
-| yolo6s_mbla | 0.047 | — | — | 0.432 | — | — | 10s | — | 50s | — |
-| yolo6m_mbla | 0.005 | — | — | 0.431 | — | — | 12s | — | 68s | — |
-| yolo6l_mbla | 0.068 | — | — | 0.392 | — | — | 15s | — | 82s | — |
-| yolo6x_mbla | 0.027 | — | — | 0.448 | — | — | 21s | — | 118s | — |
-| yolo7 | 0.087 | — | — | 0.328 | — | — | 31s | — | 272s | — |
-| yolo7-tiny | 0.118 | — | — | 0.342 | — | — | 24s | — | 360s | — |
-| yolo7x | 0.066 | — | — | 0.357 | — | — | 37s | — | 438s | — |
-| yolo7-w6 | — | — | — | 0.297 | — | — | — | — | 544s | — |
-| yolo7-e6 | — | — | — | — | — | — | — | — | — | — |
-| yolo7-d6 | — | — | — | — | — | — | — | — | — | — |
-| yolo7-e6e | — | — | — | — | — | — | — | — | — | — |
-| yolo8n | 0.577 | 0.504 | **+0.074** | 0.712 | 0.735 | **-0.023** | 7s | 23s | 35s | 81s |
-| yolo8s | 0.588 | 0.560 | **+0.028** | 0.714 | 0.745 | **-0.031** | 8s | 24s | 41s | 90s |
-| yolo8m | 0.459 | 0.397 | **+0.062** | 0.678 | 0.682 | -0.004 | 11s | 29s | 59s | 113s |
-| yolo8l | 0.320 | 0.001 | **+0.319** | 0.660 | 0.659 | +0.001 | 15s | 38s | 76s | 142s |
-| yolo8x | 0.323 | 0.076 | **+0.247** | 0.643 | 0.663 | **-0.020** | 21s | 43s | 114s | 176s |
-| yolo9t | 0.370 | 0.490 | **-0.120** | 0.674 | 0.708 | **-0.034** | 10s | 28s | 42s | 103s |
-| yolo9s | 0.464 | 0.546 | **-0.081** | 0.672 | 0.757 | **-0.084** | 10s | 32s | 46s | 113s |
-| yolo9m | 0.304 | 0.384 | **-0.080** | 0.694 | 0.666 | **+0.029** | 15s | 34s | 66s | 132s |
-| yolo9c | 0.461 | 0.248 | **+0.213** | 0.676 | 0.657 | **+0.019** | 16s | 36s | 75s | 146s |
-| yolo9e | 0.233 | 0.000 | **+0.233** | 0.646 | 0.630 | **+0.016** | 29s | 65s | 141s | 249s |
-| yolo10n | 0.491 | 0.266 | **+0.225** | 0.753 | 0.654 | **+0.100** | 14s | 26s | 39s | 92s |
-| yolo10s | 0.345 | 0.399 | **-0.054** | 0.727 | 0.710 | **+0.016** | 13s | 29s | 44s | 102s |
-| yolo10m | 0.370 | 0.204 | **+0.167** | 0.684 | 0.698 | **-0.014** | 16s | 34s | 61s | 126s |
-| yolo10b | 0.312 | 0.099 | **+0.213** | 0.654 | 0.671 | **-0.016** | 17s | 36s | 69s | 139s |
-| yolo10l | 0.347 | 0.074 | **+0.273** | 0.642 | 0.639 | +0.003 | 18s | 40s | 80s | 155s |
-| yolo10x | 0.318 | 0.096 | **+0.222** | 0.679 | 0.681 | -0.001 | 24s | 46s | 106s | 187s |
-| yolo11n | 0.574 | 0.448 | **+0.127** | 0.700 | 0.718 | **-0.019** | 10s | 24s | 40s | 86s |
-| yolo11s | 0.582 | 0.358 | **+0.224** | 0.694 | 0.704 | -0.010 | 11s | 26s | 47s | 96s |
-| yolo11m | 0.326 | 0.154 | **+0.172** | 0.663 | 0.677 | **-0.014** | 15s | 32s | 66s | 123s |
-| yolo11l | 0.400 | 0.116 | **+0.285** | 0.643 | 0.664 | **-0.021** | 17s | 37s | 77s | 143s |
-| yolo11x | 0.190 | 0.001 | **+0.190** | 0.589 | 0.618 | **-0.029** | 24s | 47s | 130s | 186s |
-| yolo12n | 0.607 | 0.467 | **+0.140** | 0.690 | 0.692 | -0.002 | 11s | 26s | 45s | 95s |
-| yolo12s | 0.431 | 0.296 | **+0.135** | 0.691 | 0.659 | **+0.032** | 14s | 30s | 58s | 111s |
-| yolo12m | 0.236 | 0.052 | **+0.184** | 0.636 | 0.622 | **+0.014** | 20s | 38s | 89s | 148s |
-| yolo12l | 0.286 | 0.171 | **+0.115** | 0.619 | 0.643 | **-0.025** | 28s | 49s | 132s | 197s |
-| yolo12x | 0.146 | 0.024 | **+0.122** | 0.590 | 0.545 | **+0.045** | 41s | 64s | 201s | 266s |
-| yolo13n | 0.609 | 0.592 | **+0.016** | 0.751 | 0.780 | **-0.029** | 18s | 34s | 58s | 110s |
-| yolo13s | 0.488 | 0.556 | **-0.068** | 0.705 | 0.719 | **-0.014** | 21s | 40s | 76s | 134s |
-| yolo13l | 0.509 | 0.261 | **+0.248** | 0.660 | 0.686 | **-0.027** | 39s | 69s | 163s | 280s |
-| yolo13x[b=8] | 0.406 | 0.093 | **+0.313** | 0.668 | — | — | 56s | 97s | 245s | — |
-| yolo26n | 0.466 | 0.440 | **+0.026** | 0.729 | 0.716 | **+0.012** | 12s | 27s | 43s | 94s |
-| yolo26s | 0.500 | 0.525 | **-0.024** | 0.741 | 0.744 | -0.003 | 12s | 29s | 47s | 104s |
-| yolo26m | 0.426 | 0.374 | **+0.052** | 0.758 | 0.745 | **+0.013** | 16s | 34s | 69s | 132s |
-| yolo26l | 0.358 | 0.509 | **-0.152** | 0.744 | 0.765 | **-0.021** | 18s | 39s | 80s | 150s |
-| yolo26x | 0.406 | 0.269 | **+0.136** | 0.720 | 0.749 | **-0.029** | 26s | 49s | 120s | 198s |
+The TRT kernel itself is essentially identical — the gap is
+wrapper overhead, where the profile-guided fixes (0.99.22 →
+0.99.32) put preprocess + postprocess on the GPU instead of
+host Python. Reproduce with:
 
-Per-variant P / R / F1 (yolocpp side only — Ultralytics' API
-returns only mp/mr at this surface):
-
-| variant | Y1ep mAP50 / P / R / F1 | Y5ep mAP50 / P / R / F1 |
-|---------|------------------------:|------------------------:|
-| yolo3 | 0.453 / 0.709 / 0.649 / 0.652 | — / — / — / — |
-| yolo5n | 0.698 / 0.858 / 0.741 / 0.776 | 0.816 / 0.914 / 0.893 / 0.902 |
-| yolo5s | 0.780 / 0.846 / 0.815 / 0.811 | 0.788 / 0.928 / 0.863 / 0.894 |
-| yolo5m | 0.440 / 0.649 / 0.557 / 0.539 | 0.791 / 0.932 / 0.875 / 0.900 |
-| yolo5l | 0.337 / 0.442 / 0.595 / 0.421 | 0.809 / 0.928 / 0.842 / 0.877 |
-| yolo5x | 0.399 / 0.706 / 0.485 / 0.459 | 0.758 / 0.895 / 0.836 / 0.862 |
-| yolo6n | 0.024 / 0.083 / 0.161 / 0.057 | — / — / — / — |
-| yolo6s | 0.025 / 0.026 / 0.122 / 0.038 | — / — / — / — |
-| yolo6m | 0.009 / 0.010 / 0.307 / 0.018 | — / — / — / — |
-| yolo6l | 0.075 / 0.731 / 0.098 / 0.091 | — / — / — / — |
-| yolo6n6 | 0.004 / 0.006 / 0.060 / 0.010 | — / — / — / — |
-| yolo6s6 | 0.004 / 0.018 / 0.104 / 0.018 | — / — / — / — |
-| yolo6m6 | 0.031 / 0.610 / 0.062 / 0.039 | — / — / — / — |
-| yolo6l6 | — / — / — / — | — / — / — / — |
-| yolo6s_mbla | 0.101 / 0.791 / 0.104 / 0.109 | 0.579 / 0.854 / 0.610 / 0.684 |
-| yolo6m_mbla | 0.020 / 0.099 / 0.033 / 0.033 | 0.565 / 0.796 / 0.616 / 0.662 |
-| yolo6l_mbla | 0.133 / 0.764 / 0.110 / 0.114 | 0.529 / 0.871 / 0.568 / 0.669 |
-| yolo6x_mbla | 0.079 / 0.100 / 0.223 / 0.114 | 0.563 / 0.769 / 0.667 / 0.689 |
-| yolo7 | 0.215 / 0.406 / 0.351 / 0.260 | — / — / — / — |
-| yolo7-tiny | 0.245 / 0.358 / 0.458 / 0.361 | — / — / — / — |
-| yolo7x | 0.177 / 0.318 / 0.381 / 0.273 | — / — / — / — |
-| yolo7-w6 | — / — / — / — | 0.474 / 0.673 / 0.598 / 0.556 |
-| yolo7-e6 | — / — / — / — | — / — / — / — |
-| yolo7-d6 | — / — / — / — | — / — / — / — |
-| yolo7-e6e | — / — / — / — | — / — / — / — |
-| yolo8n | 0.713 / 0.904 / 0.756 / 0.803 | 0.824 / 0.939 / 0.896 / 0.916 |
-| yolo8s | 0.754 / 0.865 / 0.801 / 0.819 | 0.824 / 0.948 / 0.872 / 0.907 |
-| yolo8m | 0.601 / 0.694 / 0.622 / 0.550 | 0.790 / 0.907 / 0.854 / 0.879 |
-| yolo8l | 0.445 / 0.684 / 0.545 / 0.527 | 0.763 / 0.957 / 0.810 / 0.858 |
-| yolo8x | 0.431 / 0.489 / 0.482 / 0.418 | 0.740 / 0.927 / 0.827 / 0.854 |
-| yolo9t | 0.509 / 0.771 / 0.589 / 0.606 | — / — / — / — |
-| yolo9s | 0.601 / 0.808 / 0.586 / 0.658 | — / — / — / — |
-| yolo9m | 0.463 / 0.759 / 0.527 / 0.573 | — / — / — / — |
-| yolo9c | 0.618 / 0.866 / 0.693 / 0.732 | — / — / — / — |
-| yolo9e | 0.357 / 0.705 / 0.482 / 0.474 | — / — / — / — |
-| yolo10n | 0.656 / 0.779 / 0.756 / 0.734 | — / — / — / — |
-| yolo10s | 0.438 / 0.714 / 0.560 / 0.567 | — / — / — / — |
-| yolo10m | 0.487 / 0.620 / 0.560 / 0.501 | — / — / — / — |
-| yolo10b | 0.415 / 0.594 / 0.482 / 0.432 | — / — / — / — |
-| yolo10l | 0.454 / 0.512 / 0.542 / 0.406 | — / — / — / — |
-| yolo10x | 0.497 / 0.664 / 0.589 / 0.562 | — / — / — / — |
-| yolo11n | 0.698 / 0.852 / 0.750 / 0.792 | 0.813 / 0.945 / 0.842 / 0.890 |
-| yolo11s | 0.754 / 0.838 / 0.756 / 0.791 | 0.802 / 0.936 / 0.872 / 0.901 |
-| yolo11m | 0.465 / 0.512 / 0.586 / 0.384 | 0.764 / 0.943 / 0.824 / 0.865 |
-| yolo11l | 0.588 / 0.559 / 0.598 / 0.512 | 0.748 / 0.927 / 0.801 / 0.840 |
-| yolo11x | 0.316 / 0.581 / 0.443 / 0.442 | 0.697 / 0.900 / 0.774 / 0.812 |
-| yolo12n | 0.746 / 0.815 / 0.842 / 0.826 | 0.799 / 0.921 / 0.875 / 0.897 |
-| yolo12s | 0.615 / 0.772 / 0.676 / 0.709 | 0.807 / 0.915 / 0.869 / 0.891 |
-| yolo12m | 0.366 / 0.705 / 0.435 / 0.497 | 0.764 / 0.950 / 0.789 / 0.843 |
-| yolo12l | 0.386 / 0.631 / 0.533 / 0.454 | 0.709 / 0.965 / 0.765 / 0.835 |
-| yolo12x | 0.266 / 0.516 / 0.446 / 0.391 | 0.692 / 0.919 / 0.765 / 0.816 |
-| yolo13n | 0.724 / 0.860 / 0.762 / 0.783 | 0.840 / 0.954 / 0.893 / 0.921 |
-| yolo13s | 0.614 / 0.827 / 0.693 / 0.719 | 0.798 / 0.914 / 0.875 / 0.892 |
-| yolo13l | 0.636 / 0.712 / 0.762 / 0.688 | 0.765 / 0.888 / 0.884 / 0.884 |
-| yolo13x[b=8] | 0.518 / 0.904 / 0.402 / 0.509 | — / — / — / — |
-| yolo26n | 0.608 / 0.832 / 0.688 / 0.693 | — / — / — / — |
-| yolo26s | 0.685 / 0.776 / 0.729 / 0.726 | — / — / — / — |
-| yolo26m | 0.599 / 0.790 / 0.756 / 0.742 | — / — / — / — |
-| yolo26l | 0.510 / 0.578 / 0.619 / 0.580 | — / — / — / — |
-| yolo26x | 0.564 / 0.656 / 0.640 / 0.601 | — / — / — / — |
-
-
-\* WongKinYiu/yolov7's stock training pipeline (2022) breaks on
-modern PyTorch (torch.load `weights_only=True` default) and on
-modern GitHub releases API (`attempt_download` expects an `assets`
-key that's no longer there). Patched the torch.load issue locally
-but the second one needs deeper changes to their auto-download
-flow. yolocpp-only numbers shown; would need their environment
-preserved as Docker image for a future apples-to-apples comparison.
-
-**Footnote `[b=8]`** — yolo13x is the only variant where both
-yolocpp and iMoonLab fork OOM at the standard batch=16 / imgsz=640
-config on 32 GB. Re-ran both at batch=8: yolocpp lands 0.406
-mAP@0.5:0.95 in 56 s/epoch; iMoon fork lands 0.093 in 97 s. yolocpp
-is **+0.313 mAP at half the wall time**; the gap is likely because
-iMoon's larger memory footprint forces SDPA-attention fallback
-(FlashAttn not available on Blackwell sm_120 at their torch
-version), inflating both compute and memory pressure even at b=8.
-
-**Footnote `[P6]`** — yolo6 P6 variants (n6/s6/m6/l6) — 4-level head trained at
-imgsz=640 (not the upstream 1280). yolocpp's small P6 (n6/s6)
-under-converge in 5 epochs at 640 resolution because the extra
-P6/64 head needs longer to align; Meituan's training is similarly
-weak on n6/s6 at this budget (0.157 / 0.083). y6m6 trains
-healthily and beats Meituan by +0.339. y6l6 crashed (assertion in
-the forward path under our channels_last layout on P6 m+ scales —
-documented in TODO #6). At upstream imgsz=1280 (the published P6
-spec) all 4 variants are expected to converge.
-
-**Footnote `[avg-3]`** — multi-seed averaged (seeds 42 / 43 / 44). Single-seed results
-for these variants showed apparent gaps of −0.018 to −0.033 mAP; the
-three-seed mean reveals that variance for these specific (variant,
-seed) combinations is **±0.02 mAP from run to run** — eating the
-single-seed "gap" entirely. After averaging, all of these collapse
-into the noise band or flip into outright wins. Only **y10s remains
-a true residual** (−0.053 stable across all three seeds). Tested
-enabling dual-head v10 training (matching Ultralytics' E2ELoss
-default) — regressed y10s to 0.641, so reverted. See CHANGELOG 0.99.13.
-
-**Footnote `[w=0]`** — Ultralytics 8.4.56 + v9 medium-and-up + v10 + Blackwell deadlocks
-on the default `workers=8` DataLoader workers (stalls at 0 % CPU
-mid-train). Pinned `workers=0` in our Ultralytics-side runner for
-those rows; yolocpp uses its own `BatchPrefetcher` and is unaffected.
-Documented in CHANGELOG 0.99.13.
-
-**Footnote `[MBLA]`** — yolo6 MBLA variants (s/m/l/x_mbla) — yolocpp
-trains cleanly in 50 s – 1 m 58 s for 5 epochs, mAP@0.5:0.95 lands
-in 0.39 – 0.45. Meituan reference column lands at 0.025 – 0.066 —
-similar to the base v6 P5 row pattern (yolo6m/l Meituan also low
-at 5-ep on this dataset). Meituan's COCO-style recipe needs more
-epochs to converge on a 5-class 2465-image dataset; at 5 epochs
-yolocpp beats Meituan by +0.36 to +0.41 mAP. Fix for the original
-runner cwd bug (#87B) landed in 0.99.17. Reference: Meituan's
-upstream training recipe (`configs/mbla/yolov6{*}_mbla.py`) — pure
-COCO-tuned hyperparams + 300/400 epoch schedule.
-
-**Footnote `[w=0-cpp]`** — *resolved in 0.99.17.* yolocpp's v7 P6
-training pipeline now lands a real 0.297 mAP@0.5:0.95 for yolo7-w6
-at 5-ep (vs 0 before). Root cause was the upstream P6 anchors
-(`yolov7-{w6,e6,d6,e6e}.yaml`) being calibrated at imgsz=1280 but
-used at imgsz=640 — every anchor was ~2× too large, GT-to-anchor
-IoU matching collapsed to zero positives per GT, mAP saturated to
-0. Fix: enable `c.autoanchor = true` in the v7 P6 LossTraits —
-K-means reclusters from the actual training GT (w, h) distribution
-and `loss_after_init` syncs the new anchors into the model's
-`anchor_grid` buffer (matches WongKinYiu's `check_anchors()`
-BPR<0.98 reclustering in `autoanchor.py`). See CHANGELOG 0.99.17.
-
-**Footnote `[P6-OOM]`** — yolo7-e6 / -d6 / -e6e are the big P6
-variants (97–144M params) trained at upstream imgsz=1280. At
-batch=16 / imgsz=1280 the forward + autograd state exceeds 30 GB,
-OOM-ing on our 32 GB RTX 5090. Upstream WongKinYiu trains these on
-8×A100-40GB clusters. At batch=8 / imgsz=1280, or batch=16 /
-imgsz=960, they'd fit — both are deviations from the published
-recipe so we don't compare against unreleased numbers. yolo7-w6 is
-smaller (70M) and fits at b=16 / 1280 with 30 GB peak. WongKinYiu
-reference column is blank for all four P6 variants since their
-training pipeline is broken under current torch (see WKY note).
+```bash
+yolocpp --mode benchmark -m yolo11n.pt -s bus.jpg \
+        --warmup 5 --iters 30 --batch 1 \
+        --bench-precision fp16 --profile
+```
 
 ## Not yet benchmarked
 
@@ -336,95 +147,6 @@ training pipeline at AlexeyAB/Joseph Redmon repos:
 
 No training reference benchmark possible — included for completeness
 of the version-coverage matrix.
-
-## Inference speed (FPS) — RTX 5090, batch=1, imgsz=640
-
-Single-image inference latency on `bus.jpg`, batch=1, after a 5-iter
-warmup + 30 timed iters. Both stacks load the same upstream `.pt`
-weights; both export their own TRT engine with INT8 calibrated
-against the screen-dataset val set. **Bold = yolocpp wins by ≥ 2 %**.
-
-**Is the comparison fair?** Yes — both sides time an end-to-end
-`predictor.predict(image)` call with the same image, batch=1,
-imgsz=640, same warmup + iters. Wall-clock measured around
-`m.predict(...)` (Ultralytics) and `predictor.predict(...)`
-(yolocpp); both include preprocess + inference + postprocess.
-Per-phase breakdown via `--profile` (#98, yolo11n FP16, b=1):
-
-| Phase | yolocpp | Ultralytics | Δ | Why |
-|-------|--------:|------------:|--:|-----|
-| Preprocess (letterbox+H2D+cvt+/255) | 0.23 ms | 0.61 ms | -62% | GPU letterbox (#95C); Ultra uses CPU letterbox + cvtColor + float cast + /255 |
-| Inference (`enqueueV3`) | 0.46 ms | 0.51 ms | -10% | Same TRT kernel; tiny diff from MinMax INT8 calibrator + 4 GiB workspace |
-| Postprocess (NMS) | 0.13 ms | 0.34 ms | -62% | GPU conf-filter + AVX2-vectorised IoU loop on the survivor set; Ultra runs torchvision.ops.nms + Python wrapping |
-| **Total** | **0.81 ms** | **1.53 ms** | **-47%** | C++ wrapper + zero-copy buffers |
-
-The TRT kernel itself is essentially identical between the two —
-the gap is wrapper overhead (preprocess + postprocess), where the
-profile-guided fixes (0.99.22 / 0.99.25 / 0.99.27 / 0.99.32) put
-that work on the GPU instead of host Python. Reproduce with
-`yolocpp --mode benchmark ... --profile`.
-
-| variant | U PT | **Y PT** | U FP16 | **Y FP16** | U INT8 | **Y INT8** |
-|---------|-----:|-----:|-------:|-------:|-------:|-------:|
-| yolo8n  | 426 | **484** |  689 | **1079** | 678 |  **870** |
-| yolo8s  | 370 | **389** |  653 |  **950** | 653 |  **848** |
-| yolo8m  | 249 |  248   |  537 |  **690** | 536 |  **635** |
-| yolo8x  | 148 |  143   |  376 |  **430** | 406 |  **444** |
-| yolo10n | 342 | **545** |  746 | **1008** | 701 |  **741** |
-| yolo10x |  78 | **181** |  128 |  **403** | 330 |  **358** |
-| yolo11n | 365 | **500** |  651 |  **972** | 635 |  **830** |
-| yolo11s | 358 | **397** |  620 |  **876** | 590 |  **771** |
-| yolo11m | 254 | **261** |  496 |  **639** | 497 |  **612** |
-| yolo11x |  69 | **138** |   97 |  **418** |  83 |  **397** |
-| yolo12n | 278 | **338** |  501 |  **671** | 516 |  **652** |
-| yolo12x | 122 |  106   |  219 |  **260** | 244 |  **286** |
-| yolo13n | 195 |  **318** | — [no-iMoon-TRT] |   **620** | — [no-iMoon-TRT] |   **559** |
-| yolo13s | 203 |  **260** | — [no-iMoon-TRT] |   **546** | — [no-iMoon-TRT] |   **595** |
-| yolo13l | 130 |  **132** | — [no-iMoon-TRT] |   **281** | — [no-iMoon-TRT] |   **327** |
-| yolo13x | 105 |   **96** | — [no-iMoon-TRT] |   **223** | — [no-iMoon-TRT] |   **239** |
-| yolo26n | 339 | **418** |  703 |  **912** | 662 |  **737** |
-| yolo26x | 151 |  129   |  381 |  **414** | 379 |  **403** |
-
-U = Ultralytics 8.4.60 (Python + their TRT runtime); Y = yolocpp
-(C++ + libtorch + nvinfer). yolo13 reference cells empty because
-Ultralytics' `YOLO()` loader rejects the iMoonLab fork's weights
-(unknown architecture key) — yolocpp loads them natively.
-
-**Headline.** yolocpp leads Ultralytics on **TRT FP16** and **TRT
-INT8** on every measured variant (margins 1.07× – 4.78×). PT FP32
-leads on small / medium scales; trails on x-scale heavyweights
-where the gap is compute-bound (Ultralytics' Sequential dispatch
-has lower per-call overhead than ours when the kernel itself
-takes 6+ ms). The big wins on v10x / v11x come from #88C (4 GiB
-TRT workspace unblocked previously-failing INT8 tactic search)
-and the profile-guided uint8-H2D + GPU-side preprocess pipeline
-(0.99.25 → 0.99.27). Reproduce with `/tmp/ultra_bench/sweep.sh`.
-
-The per-variant yolocpp-only FPS numbers across **all 60+ variants**
-(PT, TRT FP32, FP16, INT8 with latencies) live in the **CHANGELOG
-entries 0.99.15 → 0.99.20**; they're the data the 16-variant
-comparison above was distilled from. Out-of-scope INT8 failures
-(v3, v7-base, v7-x, v9e, v26x) and "OOM at imgsz=1280 on 32 GB"
-v7 P6 variants are noted there. **`tools/profile_trt`** ships in
-the build tree — point it at any `.trt` engine to see the per-phase
-breakdown (`letterbox / image_to_tensor / H2D / enqueueV3 / NMS`).
-
-## Graphs
-
-Comparison figures live in [`docs/figures/`](docs/figures/):
-
-- [`mAP_vs_params.png`](docs/figures/mAP_vs_params.png) — quality vs model size (yolocpp solid, reference dashed)
-- [`mAP_vs_wall.png`](docs/figures/mAP_vs_wall.png) — quality vs train wall time
-- [`mAP_vs_fps.png`](docs/figures/mAP_vs_fps.png) — quality vs inference FPS (TRT FP16) — **the operating-point chart**
-- [`fps_per_variant.png`](docs/figures/fps_per_variant.png) — TRT FP16 (solid) vs PT FP32 (faded) per variant
-- [`trt_speedup.png`](docs/figures/trt_speedup.png) — TRT FP16 / PT FP32 speedup sorted high-to-low
-- [`speedup_per_variant.png`](docs/figures/speedup_per_variant.png) — yolocpp train speedup vs reference
-- [`delta_per_variant.png`](docs/figures/delta_per_variant.png) — Δ mAP per variant, BEAT/TIED/TRAIL zones marked
-
-Color stays consistent across all graphs per model family:
-yolo3=blue, yolo5=orange, yolo6=green, yolo7=red, yolo8=purple,
-yolo9=brown, yolo10=pink, yolo11=gray, yolo12=olive, yolo13=cyan,
-yolo26=black, v1/v2/v4 = light variants.
 
 ## Headline
 

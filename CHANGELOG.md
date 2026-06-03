@@ -4,6 +4,45 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.43] — 2026-06-03
+
+### Changed
+- **Removed all per-variant metric tables from README** (214 →
+  79 table rows). The unified training table, the FPS comparison
+  table, and the mAP50/P/R/F1 detail table all replaced by a
+  pointer to `docs/data/training.csv` plus five figures rendered
+  from it. The remaining tables are reference catalogues, not
+  measurement data (capability matrix, version roadmap, marker
+  legend, fairness phase breakdown).
+
+### Added — Ultralytics-style figures
+All generated from `docs/data/training.csv` by
+`/tmp/ultra_bench/make_figures.py`:
+
+- **`docs/figures/mAP_vs_fps.png`** — Pareto: mAP@0.5:0.95 vs TRT
+  FP16 fps. One line per family (yolo3/5/6/...), connected through
+  n→s→m→l→x. Solid + filled = yolocpp; dashed + open = Ultralytics.
+  Marker area ∝ params. Upper-right = win zone.
+- **`docs/figures/mAP_vs_params.png`** — accuracy efficiency. Same
+  shape but x = params in millions, log scale. Identifies the most
+  parameter-efficient architectures.
+- **`docs/figures/fps_bar.png`** — head-to-head TRT FP16 bar chart
+  for every variant where both stacks ran.
+- **`docs/figures/convergence_1ep_vs_5ep.png`** — line plot showing
+  Y 1-ep / Y 5-ep / U 1-ep / U 5-ep mAP per variant. Shows what
+  4 more epochs buys.
+- **`docs/figures/delta_heatmap.png`** — Δ mAP heatmap (Y − U)
+  across all variants × {1ep, 5ep}. Red = yolocpp wins; blue = Ultra
+  wins.
+
+Old figures (`delta_per_variant.png`, `fps_per_variant.png`,
+`mAP_vs_wall.png`, `speedup_per_variant.png`, `trt_speedup.png`)
+removed — they were based on the pre-CSV scattered data and the
+naming overlapped confusingly with the new set.
+
+Style matches Ultralytics' published plots (their YOLO11 docs page
+uses mAP-vs-latency Pareto curves with family-coloured lines).
+
 ## [0.99.42] — 2026-06-03
 
 ### Sweep — Meituan v6 + WKY v7 attempts
