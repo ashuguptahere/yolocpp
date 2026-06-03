@@ -58,20 +58,19 @@ bash scripts/full_matrix_sweep.sh     # PASS=152 FAIL=0 SKIP=0
 
 ## Training — yolocpp vs Ultralytics (1 epoch vs 5 epochs)
 
-**Machine-readable data:** the same metrics live in two CSVs with
-both sides on each row (Y_* + U_* prefixes):
-
-- [`docs/data/training_1ep.csv`](docs/data/training_1ep.csv) — 1-epoch
-- [`docs/data/training_5ep.csv`](docs/data/training_5ep.csv) — 5-epoch
-
-Columns per row: `variant, Y_mAP50, Y_mAP, Y_P, Y_R, Y_F1,
-Y_PT_fps, Y_TRT_FP16_fps, Y_TRT_INT8_fps, U_mAP50, U_mAP, U_P,
-U_R, U_F1, U_PT_fps, U_TRT_FP16_fps, U_TRT_INT8_fps, params,
-GFLOPs`. Empty cells = structurally missing (Ultralytics format
-rejection, OOM on 32 GB, or sweep-not-run). FPS data on the
-yolocpp side reflects the 0.99.20 baseline for the non-16-variant
-rows — current real-world perf is higher (see CHANGELOG 0.99.22 →
-0.99.32). Regenerate with `python3 /tmp/ultra_bench/build_csv.py`.
+**Machine-readable data:** one consolidated CSV at
+[`docs/data/training.csv`](docs/data/training.csv) — 60 rows
+(one per variant), 41 columns. Each metric appears as a triple:
+`{ep}_Y_{metric}, {ep}_U_{metric}, {ep}_d_{metric}` (delta =
+yolocpp − Ultralytics). So for `mAP50` 1-epoch you get three
+columns: `1ep_Y_mAP50, 1ep_U_mAP50, 1ep_d_mAP50`. Same triple
+shape for `mAP, P, R, F1` × 1ep + 5ep; same shape for `PT_fps,
+FP16_fps, INT8_fps`. Tail columns: `params_M` (millions of
+parameters) and `GFLOPs`. Empty cells = structurally missing
+(Ultralytics format rejection, OOM, or sweep-not-run). FPS on the
+yolocpp side reflects 0.99.20 baseline for non-16-variant rows —
+current real-world perf is higher (CHANGELOG 0.99.22 → 0.99.32).
+Regenerate with `python3 /tmp/ultra_bench/build_csv_v2.py`.
 
 
 Fine-tune on **screen-dataset** (2 465 train / 308 val, nc=5),

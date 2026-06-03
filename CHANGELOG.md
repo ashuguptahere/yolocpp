@@ -4,6 +4,43 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.41] — 2026-06-03
+
+### Changed
+- **Consolidated to ONE CSV** at `docs/data/training.csv`. Drops
+  the previous two-file split (`training_1ep.csv` + `training_5ep.csv`).
+- **Params now in millions** (`params_M` column) — `2.59` not
+  `2,590,815`. GFLOPs stays as-is (`6.40`).
+- **Pair-wise Y/U/Δ triples** for every metric. Each metric
+  becomes three columns: `{ep}_Y_{metric}, {ep}_U_{metric},
+  {ep}_d_{metric}` where d = Y − U signed. Same shape for FPS
+  (`Y_PT_fps, U_PT_fps, d_PT_fps`, etc.).
+
+### Schema (41 columns)
+```
+variant,
+1ep_Y_mAP50, 1ep_U_mAP50, 1ep_d_mAP50,
+1ep_Y_mAP,   1ep_U_mAP,   1ep_d_mAP,
+1ep_Y_P,     1ep_U_P,     1ep_d_P,
+1ep_Y_R,     1ep_U_R,     1ep_d_R,
+1ep_Y_F1,    1ep_U_F1,    1ep_d_F1,
+5ep_Y_mAP50, 5ep_U_mAP50, 5ep_d_mAP50,
+5ep_Y_mAP,   5ep_U_mAP,   5ep_d_mAP,
+5ep_Y_P,     5ep_U_P,     5ep_d_P,
+5ep_Y_R,     5ep_U_R,     5ep_d_R,
+5ep_Y_F1,    5ep_U_F1,    5ep_d_F1,
+Y_PT_fps,    U_PT_fps,    d_PT_fps,
+Y_FP16_fps,  U_FP16_fps,  d_FP16_fps,
+Y_INT8_fps,  U_INT8_fps,  d_INT8_fps,
+params_M,    GFLOPs
+```
+
+Sample row (yolo11n):
+- 1ep_Y_mAP=0.5743, 1ep_U_mAP=0.4476, **1ep_d_mAP=+0.1267**
+- 5ep_Y_mAP=0.6996, 5ep_U_mAP=0.7182, 5ep_d_mAP=−0.0186
+- Y_FP16_fps=972.1, U_FP16_fps=650.9, **d_FP16_fps=+321.2**
+- params_M=2.59, GFLOPs=6.40
+
 ## [0.99.40] — 2026-06-03
 
 ### Added
