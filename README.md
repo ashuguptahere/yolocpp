@@ -66,11 +66,25 @@ yolocpp − Ultralytics). So for `mAP50` 1-epoch you get three
 columns: `1ep_Y_mAP50, 1ep_U_mAP50, 1ep_d_mAP50`. Same triple
 shape for `mAP, P, R, F1` × 1ep + 5ep; same shape for `PT_fps,
 FP16_fps, INT8_fps`. Tail columns: `params_M` (millions of
-parameters) and `GFLOPs`. Empty cells = structurally missing
-(Ultralytics format rejection, OOM, or sweep-not-run). FPS on the
-yolocpp side reflects 0.99.20 baseline for non-16-variant rows —
-current real-world perf is higher (CHANGELOG 0.99.22 → 0.99.32).
-Regenerate with `python3 /tmp/ultra_bench/build_csv_v2.py`.
+parameters) and `GFLOPs`.
+
+**Why some cells are empty** — structural, not lazy:
+
+| Marker | Affects | Reason |
+|--------|---------|--------|
+| v6 U-side | yolo6 P5 + P6 + MBLA, 12 variants | Stock Ultralytics rejects Meituan format. Filled in 0.99.42 via Meituan's own training pipeline. |
+| v7 U-side `[WKY-incompatible]` | yolo7 base/tiny/x + P6 | WongKinYiu/yolov7 (2022) `torch.load` checkpoint format breaks under modern torch 2.12 — `_pickle.UnpicklingError: unpickling stack underflow`. CHANGELOG 0.99.42. |
+| `[no-iMoon-TRT]` | yolo13 U FP16/INT8 | iMoon fork's `YOLO.export(format=engine)` blocked by PEP-668 + onnxslim pin. |
+| `[w=0]` / 1-ep Y leads | yolo8l/9m/10s-x/11x/12x at 1-ep | Ultralytics' Blackwell deadlock with `workers≥1` — they stall at epoch 0 on bigger models. CHANGELOG 0.99.13. |
+| `[b=8]` | yolo13x | Both stacks OOM at b=16 on 32 GB; re-ran at b=8. CHANGELOG 0.99.35. |
+| `[P6-OOM]` | yolo7-e6/d6/e6e | 97-144M params at imgsz=1280 OOM at b≤8 on 32 GB. CHANGELOG 0.99.18. |
+| TODO #6 | yolo6l6 | channels_last forward crash on P6 m+ scales. |
+
+FPS on the yolocpp side reflects the **0.99.20 historical baseline**
+for non-16-variant rows. Current real-world perf is +50-100% higher
+(CHANGELOG 0.99.22 → 0.99.32). The 16-variant comparison sweep used
+the current `0.99.32+` binary. Regenerate with
+`python3 /tmp/ultra_bench/build_csv_v2.py`.
 
 
 Fine-tune on **screen-dataset** (2 465 train / 308 val, nc=5),

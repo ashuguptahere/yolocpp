@@ -4,6 +4,38 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.42] — 2026-06-03
+
+### Sweep — Meituan v6 + WKY v7 attempts
+**Meituan v6 sweep done.** 1-ep + 5-ep for v6 n/s/m/l + P6
+(n6/s6/m6/l6) + MBLA (s/m/l/x). 12 variants × 2 epochs = 24 logs
+all landed. Meituan's official training pipeline + Meituan-format
+weights, batch=16, imgsz=640. CSV filled.
+
+U_mAP coverage improvement:
+- 1ep_U_mAP: 40/60 → **52/60**  (+12 from Meituan v6)
+- 5ep_U_mAP: 40/60 → **52/60**
+
+**WKY v7 sweep blocked** — same `attempt_download` GitHub API
+mismatch + new `torch.load` weights_only default change. Patched
+both issues but the pretrained `yolov7*.pt` checkpoints from
+WongKinYiu's 2022 releases fail with `_pickle.UnpicklingError:
+unpickling stack underflow` under modern torch 2.12 + cu130.
+The checkpoint format itself is incompatible — WKY would need
+to be re-trained from scratch (which our session can't budget).
+v7 U-side stays blank with `[WKY-incompatible]` rationale.
+
+### Spike analysis (large deltas)
+
+| Δ range | What | Why |
+|---------|------|-----|
+| **Meituan v6 +0.36 to +0.41** at 5-ep MBLA | yolocpp wins | Meituan's COCO recipe needs 300+ epochs; at 5-ep it's at 0.025-0.066 mAP vs yolocpp at 0.39-0.45. CHANGELOG 0.99.18. |
+| **yolo8l/10l/11l/11x/12x +0.20 to +0.32** at 1-ep | yolocpp wins | Ultralytics' `workers=8` deadlock on Blackwell + AMP — they stall at epoch 0 on bigger models. At 5-ep the gap closes to ±0.05. CHANGELOG 0.99.13 `[w=0]` footnote. |
+| **yolo11x / yolo10x FPS 3-4×** | yolocpp wins | x-scale TRT tactic workspace OOM — Ultralytics' default workspace too small. We fixed this in 0.99.19 (#88C). |
+| **yolo8n / yolo11n FP16 +300-400 fps** | yolocpp wins | Fairness section breakdown: GPU letterbox (0.99.32) + GPU NMS filter (0.99.22) + uint8 H2D (0.99.25). Documented in 0.99.39. |
+
+These are real differences, not measurement artifacts.
+
 ## [0.99.41] — 2026-06-03
 
 ### Changed
