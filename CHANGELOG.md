@@ -4,6 +4,64 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.44] — 2026-06-03
+
+### Fixed (data accuracy) — Ultralytics workspace config
+The huge yolo10x / yolo11x / yolo12x FPS spikes (3-4× Y > U) were
+**not architectural** — they were Ultralytics' default TRT
+workspace being too small (≈1 GiB) for x-scale tactic search.
+The tactic OOM cascaded into INT8-fallback failures during their
+engine build.
+
+A/B verified on yolo11x:
+| Workspace | Ultra FP16 fps | vs yolocpp 418 fps |
+|-----------|---------------:|-------------------:|
+| default   |  97 fps | 4.31× spike |
+| 4 GiB     | 338 fps | 1.24× |
+| 8 GiB (needed for yolo12x) | 343 fps | 1.22× |
+
+Re-ran the **entire Ultralytics FPS sweep** with `workspace=4`
+(bumped to `workspace=8` for yolo12x where 4 still failed).
+yolocpp already pinned `workspace=4` since 0.99.19 (#88C) so the
+two stacks are now matched.
+
+### Coverage after sweep (out of 60 variants)
+| Field | before | after |
+|-------|------:|------:|
+| U_FP16_fps | 14 | **34** |
+| U_INT8_fps | 14 | **33** |
+| U_PT_fps   | 18 | **40** |
+| Y_FP16_fps | 52 | 54 (added yolo3 + yolo9e) |
+| Y_INT8_fps | 52 | 54 |
+
+### Spike fix in delta column — before/after
+| Variant | d_FP16 before | d_FP16 after | Y/U ratio after |
+|---------|--------------:|-------------:|----------------:|
+| yolo10x | +276 fps | **+14** | 1.04× |
+| yolo11x | +321 fps | **+76** | 1.22× |
+| yolo26x | +33 fps  | +44       | 1.12× |
+
+x-scale spikes effectively eliminated. The remaining +14 to +76
+delta is the real wrapper-overhead win (GPU letterbox + GPU NMS
+filter + uint8 H2D) consistent with the fairness section
+breakdown (0.99.39). n/s scale still shows +250 to +460 fps
+because those models are preprocess-dominated.
+
+### 1-epoch large-model mAP spikes — investigated, not fixable
+yolo11x 1ep_U_mAP = 0.001 is a **genuine convergence failure**:
+cls_loss starts at 4.066, drops to 2.106 after 155 batches — but
+2.106 is still HIGH (random ≈ ln(5) = 1.61 for 5 classes), the
+classification head hasn't learned. P = 0.23, R = 0.05.
+56.8M params + 1 epoch + 5-class fine-tune from 80-class COCO
+prior just doesn't converge. By 5-epoch the same model reaches
+mAP = 0.618 — fine. Not a config bug.
+
+### Figures regenerated
+All 5 PNGs in `docs/figures/` rebuilt from the updated
+`training.csv`. The x-scale spike compression is visible in
+`fps_bar.png` (bars now sane-sized) and `delta_heatmap.png`
+(no more deep-red x-scale columns).
+
 ## [0.99.43] — 2026-06-03
 
 ### Changed
