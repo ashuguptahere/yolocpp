@@ -4,6 +4,42 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.39] — 2026-06-03
+
+### Docs
+- **Wall-time column normalised to seconds** across the unified
+  training table. Was a mix of `0:43.80`, `1:43.60`, `84s` formats
+  — now all `Ns` where N is rounded integer seconds. Makes the
+  Y vs U wall comparison eyeball-able without mental conversion.
+- **Fairness section** under "Inference speed (FPS)" — answers
+  "why is yolocpp so much faster than Ultralytics on TRT FP16/INT8".
+  Side-by-side `--profile` (#98) breakdown on yolo11n FP16 b=1:
+
+  | Phase | yolocpp | Ultralytics | Δ |
+  |-------|--------:|------------:|--:|
+  | Preprocess | 0.23 ms | 0.61 ms | -62% (GPU letterbox #95C) |
+  | enqueueV3  | 0.46 ms | 0.51 ms | -10% (~identical TRT kernel) |
+  | NMS        | 0.13 ms | 0.34 ms | -62% (GPU filter + AVX2 IoU) |
+  | Total      | 0.81 ms | 1.53 ms | -47% |
+
+  Both sides time `m.predict(image)` end-to-end with same image,
+  batch=1, imgsz=640, warmup+iters. TRT inference itself is
+  essentially identical — the speedup is preprocess + postprocess
+  on GPU instead of host Python.
+
+### Sweeps in flight (background)
+- **Meituan v6 sweep** for U-side v6 1ep + 5ep training cells
+  (currently empty because stock Ultralytics can't load Meituan
+  weight format). 12 variants — n/s/m/l + n6/s6/m6/l6 + 4× MBLA.
+  Phase 1 = 1ep across all; Phase 2 = 5ep. Started on yolo6n.
+- **WongKinYiu v7 sweep** for U-side v7 1ep + 5ep training cells.
+  3 variants — base/tiny/x (P6 e6/d6/e6e skipped — OOM at
+  imgsz=1280 even at b=8 on 32 GB).
+
+Both run sequentially against the GPU (no contention with each
+other; GPU-train+train concurrent isn't safe). Results land in
+/tmp/ultra_bench/{meituan_train,wky_train}/.
+
 ## [0.99.38] — 2026-06-03
 
 ### Docs — yolocpp 5-epoch sweep filled in
