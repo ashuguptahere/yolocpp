@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.66] — 2026-06-05
+
+### Fixed
+- **Version stamp no longer lags a bump** (`CMakeLists.txt`). Added `./VERSION`
+  to `CMAKE_CONFIGURE_DEPENDS` so editing it re-runs CMake configure and
+  re-stamps `YOLOCPP_VERSION_STRING` / `yolocpp --version` (previously the file
+  was only read at configure time, so the binary kept reporting the version
+  from the last reconfigure).
+- **4 sweep scripts ported off the removed kv-style CLI** (#15) —
+  `task_predict_sweep.sh`, `convergence_sweep.sh`, `parity_check.sh`,
+  `launch_ddp.sh` used the `task=… mode=… model=…` parser removed in #51K, so
+  they errored on every invocation. Converted to the canonical flag-style
+  (`--mode`/`--task`/`-m`/`-s`/`-d`/`-e`/`-b`/`-i`/`--save`/`--patience`/
+  `--device`). Smoke-tested `task_predict_sweep.sh` (v8 n–x detect all ok).
+
 ## [0.99.65] — 2026-06-05
 
 ### Fixed

@@ -18,7 +18,7 @@ run_one() {
   local tag="${version}_${scale}"
   local log="${ROOT}/${tag}.log"
   set +e
-  ./build/yolocpp task=detect mode=val model="${weight}" data="${DATA}" \
+  ./build/yolocpp --mode val --task detect -m "${weight}" -d "${DATA}" \
       > "${log}" 2>&1
   local rc=$?
   set -e

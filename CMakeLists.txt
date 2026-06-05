@@ -7,6 +7,10 @@ cmake_minimum_required(VERSION 3.24)
 # consumer (the CLI's `--version` flag, `yolocpp info`, docs, release
 # tooling) reads YOLOCPP_VERSION_STRING from that header — never a
 # duplicate literal. To bump the version, edit ./VERSION only.
+# Re-run CMake configure whenever ./VERSION changes, so the stamped
+# YOLOCPP_VERSION_STRING (and `yolocpp --version`) never lag a bump.
+set_property(DIRECTORY APPEND PROPERTY
+  CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/VERSION")
 file(READ "${CMAKE_SOURCE_DIR}/VERSION" YOLOCPP_VERSION_RAW)
 string(STRIP "${YOLOCPP_VERSION_RAW}" YOLOCPP_VERSION)
 if(NOT YOLOCPP_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")

@@ -43,9 +43,9 @@ for v in "${versions[@]}"; do
     echo ">>> [${tag}] training: model=${weight} epochs=${EPOCHS} batch=${BATCH}"
 
     set +e
-    ./build/yolocpp task=detect mode=train model="${weight}" \
-      data="${DATA}" epochs=${EPOCHS} batch=${BATCH} imgsz=${IMGSZ} \
-      save="${out}/run" patience=0 \
+    ./build/yolocpp --mode train --task detect -m "${weight}" \
+      -d "${DATA}" -e ${EPOCHS} -b ${BATCH} -i ${IMGSZ} \
+      --save "${out}/run" --patience 0 \
       > "${log}" 2>&1
     rc=$?
     set -e

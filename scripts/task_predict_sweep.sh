@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Predict-path smoke test for every (version, task, scale) combination.
-# Just runs `./build/yolocpp ... mode=predict source=data/bus.jpg`
+# Just runs `./build/yolocpp --mode predict -s data/bus.jpg ...`
 # and records exit code + a short status line per run. Failures are
 # either weight-load mismatches or runtime forward errors.
 
@@ -19,8 +19,8 @@ run_one() {
   local tag="yolo${v}${s}-${t}"
   local log="${ROOT}/${tag}.log"
   set +e
-  ./build/yolocpp task="${t}" mode=predict model="${weight}" \
-      source="${img}" out="${ROOT}/${tag}.jpg" \
+  ./build/yolocpp --mode predict --task "${t}" -m "${weight}" \
+      -s "${img}" -o "${ROOT}/${tag}.jpg" \
       > "${log}" 2>&1
   local rc=$?
   set -e

@@ -5,8 +5,8 @@
 #   scripts/launch_ddp.sh <num_gpus> <yolocpp args...>
 #
 # Examples:
-#   scripts/launch_ddp.sh 2 task=detect mode=train data=coco model=yolo8n.pt epochs=50
-#   scripts/launch_ddp.sh 4 task=detect mode=train data=coco model=yolo8x.pt batch=64
+#   scripts/launch_ddp.sh 2 --mode train --task detect -d coco -m yolo8n.pt -e 50
+#   scripts/launch_ddp.sh 4 --mode train --task detect -d coco -m yolo8x.pt -b 64
 #
 # The launcher sets WORLD_SIZE / RANK / LOCAL_RANK / MASTER_ADDR / MASTER_PORT
 # in each child process. The trainer's init_ddp_from_env() picks them up and
@@ -46,7 +46,7 @@ for ((rank = 0; rank < NGPUS; rank++)); do
   MASTER_ADDR="$MASTER_ADDR" \
   MASTER_PORT="$MASTER_PORT" \
   CUDA_VISIBLE_DEVICES="$rank" \
-  "$BIN" "${ARGS[@]}" device=cuda:0 \
+  "$BIN" "${ARGS[@]}" --device cuda:0 \
       > "$LOG_DIR/rank${rank}.log" 2>&1 &
   PIDS+=("$!")
   echo "[launch_ddp] rank=$rank pid=${PIDS[-1]} log=$LOG_DIR/rank${rank}.log"
