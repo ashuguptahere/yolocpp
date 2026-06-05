@@ -4,6 +4,31 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.61] — 2026-06-05
+
+### Fixed
+- **v9 loads raw Ultralytics `.pt` directly (load-time RepConv fusion)**
+  (`yolov9_weights.{hpp,cpp}`, `yolo9.cpp`). The canonical Ultralytics
+  `yolov9c.pt` ships RepConv in **training form** (`conv1` 3×3 + `conv2` 1×1,
+  each with BN); our `Yolo9Impl` is deploy-form (single fused conv). Loading
+  the raw file matched only 745/937 keys → 32 model params stayed at unseeded
+  random init → **0 detections + nondeterministic ONNX export**. Extracted the
+  converter's reparam into an in-memory `reparam_yolov9()` and call it from
+  `Yolo9Impl::load_from_state_dict` when a training-form checkpoint is detected
+  (`.conv1.` keys) — the same fold Ultralytics does at `model.fuse()`. The raw
+  `yolov9c.pt` now loads (655 tensors) → **5 detections** and **byte-identical
+  ONNX export**. No-op pass-through for already-deploy checkpoints; no custom
+  weights, no offline conversion step.
+- Added read-only diagnostics `tests/diff_model_pt` (model-param vs `.pt`-key
+  diff) and `tests/run_convert` (invoke a version's reparam converter).
+
+### Note
+- Root cause of the broken v6/v7/v9/v10: their `data/*.pt` were re-downloaded
+  as **raw upstream training-form** checkpoints on 2026-05-29 (file mtimes
+  cluster in one 6-min window; resolver pulls v6←meituan, v7←WongKinYiu,
+  v9/v10←ultralytics/assets). Same load-time fusion is being extended to
+  v6/v7/v10.
+
 ## [0.99.60] — 2026-06-05
 
 ### Fixed

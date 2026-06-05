@@ -18,11 +18,23 @@
 //
 
 #include <string>
+#include <utility>
+#include <vector>
+
+#include <torch/torch.h>
 
 namespace yolocpp::serialization {
 
 int convert_yolov9_pt(const std::string& src_pt_path,
                       const std::string& out_pt_path,
                       int                nc = 80);
+
+// In-memory reparameterization: transform a raw upstream/Ultralytics
+// training-form state-dict (RepConv conv1/conv2 + BN) into the deploy form
+// our Yolo9Impl loads (`<prefix>.conv.weight` / `.conv.bias`). Used both by
+// the offline converter above and by Yolo9Impl::load_from_state_dict, so the
+// original `.pt` loads directly. Pass-through for already-deploy checkpoints.
+std::vector<std::pair<std::string, at::Tensor>>
+reparam_yolov9(const std::vector<std::pair<std::string, at::Tensor>>& src);
 
 }  // namespace yolocpp::serialization

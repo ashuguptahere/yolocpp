@@ -1,6 +1,9 @@
 #include "yolocpp/models/yolo9.hpp"
 
 #include <stdexcept>
+#include <string>
+
+#include "yolocpp/serialization/yolov9_weights.hpp"
 
 namespace yolocpp::models {
 
@@ -595,7 +598,18 @@ std::vector<torch::Tensor> Yolo9Impl::forward_train(torch::Tensor x) {
 }
 
 int Yolo9Impl::load_from_state_dict(
-    const std::vector<std::pair<std::string, at::Tensor>>& entries) {
+    const std::vector<std::pair<std::string, at::Tensor>>& entries_in) {
+  // Accept a raw upstream/Ultralytics training-form checkpoint directly: if it
+  // carries RepConv branches (`.conv1.`/`.conv2.` + BN), reparameterize to
+  // deploy form in-memory before matching — the same fold Ultralytics does at
+  // `model.fuse()`. No-op (pass-through) for already-deploy checkpoints.
+  bool training_form = false;
+  for (const auto& e : entries_in)
+    if (e.first.find(".conv1.") != std::string::npos) { training_form = true; break; }
+  std::vector<std::pair<std::string, at::Tensor>> reparamed;
+  if (training_form) reparamed = serialization::reparam_yolov9(entries_in);
+  const auto& entries = training_form ? reparamed : entries_in;
+
   auto params  = this->named_parameters(true);
   auto buffers = this->named_buffers(true);
   int n = 0, skipped_shape = 0;

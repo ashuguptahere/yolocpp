@@ -130,28 +130,14 @@ fuse_all_repconv(const std::vector<std::pair<std::string, at::Tensor>>& src) {
 
 }  // namespace
 
-int convert_yolov9_pt(const std::string& src_pt_path,
-                      const std::string& out_pt_path, int /*nc*/) {
-  std::vector<std::pair<std::string, at::Tensor>> src;
-  for (const std::string& root : {"model", "ema", ""}) {
-    try {
-      auto sd = load_state_dict(src_pt_path, root);
-      if (!sd.entries.empty()) { src = std::move(sd.entries); break; }
-    } catch (...) {}
-  }
-  TORCH_CHECK(!src.empty(), "yolov9: empty state-dict (tried model/ema/'')");
-
+std::vector<std::pair<std::string, at::Tensor>>
+reparam_yolov9(const std::vector<std::pair<std::string, at::Tensor>>& src) {
   auto fused = fuse_all_repconv(src);
-  std::cerr << "[yolov9] fused " << fused.size() << " RepConv blocks\n";
 
-  // Pre-compute the set of prefixes that have an identity-BN branch so we
-  // can skip its keys in the pass-through stage below.
+  // Prefixes that carry a fused RepConv (their `.bn.*` identity-branch keys
+  // are folded into conv.bias and must be skipped in the pass-through).
   std::set<std::string> identity_prefixes;
-  for (auto& [prefix, _wb] : fused) {
-    static const std::regex re_repconv_keys(R"(^.*\.(conv1|conv2)\.)");
-    (void)re_repconv_keys;
-    identity_prefixes.insert(prefix);
-  }
+  for (auto& [prefix, _wb] : fused) identity_prefixes.insert(prefix);
 
   std::vector<std::pair<std::string, at::Tensor>> out;
   out.reserve(src.size());
@@ -163,13 +149,9 @@ int convert_yolov9_pt(const std::string& src_pt_path,
   }
 
   // b) Pass-through everything else.
-  static const std::regex re_skip(
-      R"(\.(conv1|conv2)\.|num_batches_tracked)");
-
+  static const std::regex re_skip(R"(\.(conv1|conv2)\.|num_batches_tracked)");
   for (auto& [name, t] : src) {
     if (std::regex_search(name, re_skip)) continue;
-    // Skip identity-BN branch keys (`<prefix>.bn.*`) when `<prefix>` is in
-    // identity_prefixes — those have been folded into the fused conv.bias.
     bool skip = false;
     for (const auto& p : identity_prefixes) {
       if (name.rfind(p + ".bn.", 0) == 0) { skip = true; break; }
@@ -177,11 +159,25 @@ int convert_yolov9_pt(const std::string& src_pt_path,
     if (skip) continue;
     out.emplace_back(name, t.to(torch::kFloat32));
   }
+  return out;
+}
 
+int convert_yolov9_pt(const std::string& src_pt_path,
+                      const std::string& out_pt_path, int /*nc*/) {
+  std::vector<std::pair<std::string, at::Tensor>> src;
+  for (const std::string& root : {"model", "ema", ""}) {
+    try {
+      auto sd = load_state_dict(src_pt_path, root);
+      if (!sd.entries.empty()) { src = std::move(sd.entries); break; }
+    } catch (...) {}
+  }
+  TORCH_CHECK(!src.empty(), "yolov9: empty state-dict (tried model/ema/'')");
+
+  auto out = reparam_yolov9(src);
   save_state_dict(out_pt_path, out);
   std::cerr << "[yolov9] wrote " << out.size() << " tensors to " << out_pt_path
             << "\n";
-  return (int)fused.size();
+  return (int)out.size();
 }
 
 }  // namespace yolocpp::serialization

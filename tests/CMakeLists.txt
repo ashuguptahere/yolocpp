@@ -19,6 +19,22 @@ set_target_properties(inspect_pt PROPERTIES
   INSTALL_RPATH "${_yolocpp_rpath}"
 )
 
+add_executable(diff_model_pt diff_model_pt.cpp)
+target_link_libraries(diff_model_pt PRIVATE yolocpp_core)
+target_link_options(diff_model_pt PRIVATE "LINKER:--disable-new-dtags")
+set_target_properties(diff_model_pt PROPERTIES
+  BUILD_RPATH   "${_yolocpp_rpath}"
+  INSTALL_RPATH "${_yolocpp_rpath}"
+)
+
+add_executable(run_convert run_convert.cpp)
+target_link_libraries(run_convert PRIVATE yolocpp_core)
+target_link_options(run_convert PRIVATE "LINKER:--disable-new-dtags")
+set_target_properties(run_convert PROPERTIES
+  BUILD_RPATH   "${_yolocpp_rpath}"
+  INSTALL_RPATH "${_yolocpp_rpath}"
+)
+
 # Dev-only video synthesiser used as the fixture for #51C2 manual
 # smokes. Not a ctest.
 add_executable(make_test_video make_test_video.cpp)
