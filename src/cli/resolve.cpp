@@ -80,6 +80,8 @@ bool run_unzip(const fs::path& zip, const fs::path& out_dir,
 // format").
 //   weights : https://github.com/ultralytics/assets/releases/download/v8.3.0/<basename>
 //   datasets: https://github.com/ultralytics/assets/releases/download/v0.0.0/<name>.zip
+// Per-family upstreams that aren't Ultralytics: v6 ← meituan/YOLOv6,
+// v7 ← WongKinYiu/yolov7, v13 ← iMoonLab/yolov13 (release tag `yolov13`).
 const std::string kAssetBase = "https://github.com/ultralytics/assets/releases/download/v8.3.0";
 
 // Upstream weights for v3/v5/v8/v9/v10 ship as `yolov<N>...pt` (note
@@ -330,6 +332,38 @@ std::string resolve_weights(const std::string& spec) {
       if (run_curl(url, wsrc) && try_v10_convert(target)) {
         return target.string();
       }
+    }
+  }
+
+  // 2e-bis) yolo13{n,s,l,x}.pt — iMoonLab fork (no `m` variant upstream).
+  // Ships in deploy form and loads directly (no reparam/convert needed); just
+  // fetch from the iMoonLab release if there's no local copy. Filenames: ours
+  // `yolo13<L>.pt`, upstream `yolov13<L>.pt`.
+  {
+    static const std::array<std::string, 4> v13_letters = {"n", "s", "l", "x"};
+    std::string letter;
+    for (const auto& L : v13_letters) {
+      if (base == "yolo13" + L + ".pt" || base == "yolov13" + L + ".pt") {
+        letter = L;
+        break;
+      }
+    }
+    if (!letter.empty()) {
+      std::string our_base      = "yolo13"  + letter + ".pt";
+      std::string upstream_base = "yolov13" + letter + ".pt";
+      // Prefer any local copy (data/, cwd, cache) under either name.
+      for (const fs::path& c : {fs::current_path() / "data" / our_base,
+                                fs::current_path() / "data" / upstream_base,
+                                fs::current_path() / our_base,
+                                home_cache() / "weights" / our_base}) {
+        if (fs::exists(c) && fs::is_regular_file(c)) return c.string();
+      }
+      // Download from the iMoonLab release into the cache under our name.
+      fs::path target = home_cache() / "weights" / our_base;
+      const std::string url =
+          "https://github.com/iMoonLab/yolov13/releases/download/yolov13/" +
+          upstream_base;
+      if (run_curl(url, target)) return target.string();
     }
   }
 

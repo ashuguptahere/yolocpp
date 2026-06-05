@@ -4,6 +4,17 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.64] — 2026-06-05
+
+### Added
+- **v13 weights wired into the resolver** (`resolve.cpp`). `yolo13{n,s,l,x}.pt`
+  now auto-downloads from the iMoonLab release
+  (`github.com/iMoonLab/yolov13/releases/download/yolov13/yolov13<L>.pt`) when
+  no local copy exists — previously v13 required manual placement (it's not an
+  Ultralytics asset). v13 ships in deploy form and loads directly (no
+  reparam/convert). Verified: bare `yolo13l.pt` auto-downloads → 1568 tensors,
+  6 dets. iMoonLab has no `m` variant, so n/s/l/x only.
+
 ## [0.99.63] — 2026-06-05
 
 ### Fixed
