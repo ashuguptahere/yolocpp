@@ -86,11 +86,17 @@ if [[ ! -d opencv ]]; then
 fi
 
 # --- CLI11 --------------------------------------------------------------------
+# Pinned to an exact tag (DEPS.md "No latest" rule) + sha256-verified so a
+# compromised mirror / MITM can't swap the header under us.
+CLI11_VER="v2.6.2"
+CLI11_SHA="227a16fe5f9f8ada80c3c409492475536f597e7bd83a6c26eacc3c8c149a9295"
 mkdir -p CLI11
 if [[ ! -f CLI11/CLI11.hpp ]]; then
-  echo "==> downloading CLI11 single-header"
+  echo "==> downloading CLI11 single-header (${CLI11_VER})"
   curl -sL -o CLI11/CLI11.hpp \
-    "https://github.com/CLIUtils/CLI11/releases/latest/download/CLI11.hpp"
+    "https://github.com/CLIUtils/CLI11/releases/download/${CLI11_VER}/CLI11.hpp"
+  echo "${CLI11_SHA}  CLI11/CLI11.hpp" | sha256sum -c - \
+    || { echo "ERROR: CLI11.hpp sha256 mismatch"; exit 1; }
 fi
 
 # --- rapidyaml ----------------------------------------------------------------
@@ -98,15 +104,18 @@ fi
 # data.yaml (path/train/val/names) for `data=...yaml` resolution. ryml is the
 # fastest serial YAML parser in C++ (no SIMD parser exists for YAML at the
 # spec-conforming level — ryml is the practical equivalent).
+RYML_SHA="6c068513694cba1885da23c96d6f8e1bf19bf090ee186efe9565f3db71903d63"
 mkdir -p rapidyaml
 if [[ ! -f rapidyaml/ryml_all.hpp ]]; then
   echo "==> downloading rapidyaml v0.11.1 single-header"
   curl -sL -o rapidyaml/ryml_all.hpp \
     "https://github.com/biojppm/rapidyaml/releases/download/v0.11.1/rapidyaml-0.11.1.hpp"
+  echo "${RYML_SHA}  rapidyaml/ryml_all.hpp" | sha256sum -c - \
+    || { echo "ERROR: ryml_all.hpp sha256 mismatch"; exit 1; }
 fi
 
 echo "==> third-party install OK"
 echo "    $TP/libtorch  -> LibTorch $(cat "$TP/libtorch/build-version" 2>/dev/null || echo unknown)"
 echo "    $TP/tensorrt  -> $(grep -oP 'TRT_MAJOR_ENTERPRISE\s+\K[0-9]+' "$TP/tensorrt/include/NvInferVersion.h").$(grep -oP 'TRT_MINOR_ENTERPRISE\s+\K[0-9]+' "$TP/tensorrt/include/NvInferVersion.h").$(grep -oP 'TRT_PATCH_ENTERPRISE\s+\K[0-9]+' "$TP/tensorrt/include/NvInferVersion.h")"
 echo "    $TP/opencv    -> 4.6.0"
-echo "    $TP/CLI11     -> latest"
+echo "    $TP/CLI11     -> 2.6.2"

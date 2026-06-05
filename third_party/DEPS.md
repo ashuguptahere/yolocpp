@@ -14,7 +14,7 @@ challenged before it lands. Maintained as part of #48 (deps audit).
 | OpenCV      | 4.6.0             | image / video I/O, letterbox, drawing       | Apache-2.0   | Ubuntu 24.04 universe debs (libopencv-* / libopencv-*-dev)        | ~124 MB      |
 | NCCL        | 2.23.4            | DDP all-reduce (multi-GPU training)         | BSD-3-Clause | NVIDIA developer portal (vendored deb, extracted by script)       | ~52 KB (headers only — runtime via libnccl) |
 | rapidyaml   | 0.11.1            | parse `data.yaml` (path/train/val/names)    | MIT          | biojppm/rapidyaml single-header amalgamation                      | ~1.7 MB      |
-| CLI11       | 2.4.x             | flag-style CLI parser                       | BSD-3-Clause | CLIUtils/CLI11 single-header release                              | ~468 KB      |
+| CLI11       | 2.6.2             | flag-style CLI parser                       | BSD-3-Clause | CLIUtils/CLI11 single-header release (pinned tag + sha256-verified)| ~468 KB      |
 
 Total: **~5.5 GB on disk**, ~99 % of which is libtorch + TensorRT.
 

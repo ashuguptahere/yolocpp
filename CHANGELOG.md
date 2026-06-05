@@ -4,6 +4,19 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.55] — 2026-06-05
+
+### Fixed
+- **Supply chain — pin CLI11 off `releases/latest` + sha256-verify the
+  vendored single-headers** (`scripts/install_third_party.sh`). CLI11 was
+  fetched from the floating `releases/latest/download/` URL, violating the
+  DEPS.md "No latest" rule and meaning a fresh install could silently pull
+  a different version than the tested one. Pinned to the exact tag `v2.6.2`
+  (the version actually vendored — DEPS.md said "2.4.x", also stale) and
+  added `sha256sum -c` verification for both CLI11.hpp and rapidyaml's
+  ryml_all.hpp so a compromised mirror/MITM can't swap the header. DEPS.md
+  CLI11 row corrected to 2.6.2.
+
 ## [0.99.54] — 2026-06-05
 
 ### Changed
