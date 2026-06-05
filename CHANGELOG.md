@@ -4,6 +4,15 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.48] — 2026-06-03
+
+### Changed
+- README `Why some cells are empty in the CSV` table refreshed.
+  The old v6-U row credited Meituan-as-filler from 0.99.42; that
+  ceased to be true in 0.99.47 when v6 U-side switched to
+  Ultralytics-from-YAML. Split MBLA + P6 (8 variants without an
+  Ultralytics yaml) into their own structural-blank row.
+
 ## [0.99.47] — 2026-06-03
 
 ### Added
