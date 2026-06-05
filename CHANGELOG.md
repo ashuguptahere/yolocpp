@@ -4,6 +4,25 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.58] — 2026-06-05
+
+### Changed
+- **DRY — collapse `emit_detect_v11` into `emit_detect`** (`onnx_export.cpp`,
+  6440→6306 lines). The two detect-head emitters were ~95% identical; their
+  only structural difference is the cv3 (cls) branch — `Conv→Conv`
+  (legacy: v3/v5/v8/v9) vs `DWConvBlock×2` (v11+). Merged into a single
+  `emit_detect` that branches cv3 on the existing `DetectImpl::legacy`
+  flag, deleted the 148-line `emit_detect_v11`, and redirected its 6 call
+  sites (v11/v12/v13 detect + v11 seg/pose). Removes a dual-maintenance
+  hazard (a DFL/decode fix previously had to be applied to both copies).
+  **Gated byte-identical**: re-exported every deterministic detect version
+  exercising both branches — legacy (v3/v4/v5/v8) and non-legacy
+  (v11/v12/v13) + v26 — all byte-for-byte unchanged before/after. ctest
+  38/39 (pre-existing v13/s parity).
+
+  Combined with 0.99.57, #7 removed **286 lines** of duplication from
+  `onnx_export.cpp` (6592→6306) with verified-zero ONNX output change.
+
 ## [0.99.57] — 2026-06-05
 
 ### Changed
