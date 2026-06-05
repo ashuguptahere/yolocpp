@@ -565,6 +565,12 @@ std::string emit_upsample_2x(GraphBuilder& g, const std::string& in,
 // distance→xyxy decoding using anchor/stride initializers.
 //
 // Outputs a single tensor named output_name: [N, 4 + nc, A]
+// Forward decl: write_model_proto is defined further down but used by
+// the early detect exporters (v8/v11/v26). (#7 epilogue dedup.)
+void write_model_proto(const GraphBuilder& g, const OnnxExportConfig& cfg,
+                       const std::string& graph_name,
+                       const std::string& path);
+
 std::string emit_detect(GraphBuilder& g,
                         const std::vector<std::string>& detect_ins,
                         const std::vector<int>&           detect_in_ch,
@@ -1853,20 +1859,7 @@ void export_yolo8_onnx(models::Yolo8Detect& model,
                {-1, 4 + nc, /*A*/ -1});
 
   // Build ModelProto.
-  Pb model_pb;
-  model_pb.write_int64_field(1, /*ir_version=*/8);  // ONNX 1.13+
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");      // domain
-  model_pb.write_int64_field(5, 1);        // model_version
-  model_pb.write_string_field(6, "");      // doc_string
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo8"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(),
-          (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo8", path);
 }
 
 void export_yolo11_onnx(models::Yolo11Detect& model,
@@ -1963,20 +1956,7 @@ void export_yolo11_onnx(models::Yolo11Detect& model,
   g.set_output(cfg.output_name, /*FLOAT=*/1,
                {-1, 4 + nc, /*A*/ -1});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, /*ir_version=*/8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo11"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(),
-          (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo11", path);
 }
 
 void export_yolo26_onnx(models::Yolo26Detect&  model,
@@ -2073,20 +2053,7 @@ void export_yolo26_onnx(models::Yolo26Detect&  model,
   g.set_output(cfg.output_name, /*FLOAT=*/1,
                {-1, 4 + nc, /*A*/ -1});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, /*ir_version=*/8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo26"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(),
-          (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo26", path);
 }
 
 // ─── Helpers for task-head exporters ──────────────────────────────────────
@@ -3955,20 +3922,7 @@ void export_yolo10_onnx(models::Yolo10& model,
   int nc = model->nc;
   g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, /*ir_version=*/8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo10"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(),
-          (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo10", path);
 }
 
 // ─── YOLO3 emitter (#34) ────────────────────────────────────────────────
@@ -4086,19 +4040,7 @@ void export_yolo3_onnx(models::Yolo3& model,
   int nc = model->nc;
   g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, 8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo3"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo3", path);
 }
 
 // ─── YOLO5 emitter ──────────────────────────────────────────────────────
@@ -4224,19 +4166,7 @@ void export_yolo5_onnx(models::Yolo5Detect& model,
   int nc = model->nc;
   g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, 8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo5"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo5", path);
 }
 
 // ─── YOLO9 emitters (#38) ──────────────────────────────────────────────
@@ -4660,19 +4590,7 @@ void export_yolo9_onnx(models::Yolo9& model,
   int nc = model->nc;
   g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, 8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo9"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo9", path);
 }
 
 // ─── YOLO4 emitters (#35) ──────────────────────────────────────────────
@@ -5053,19 +4971,7 @@ void export_yolo4_onnx(models::Yolo4& model,
   int nc = model->nc;
   g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, 8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo4"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo4", path);
 }
 
 // ─── YOLO6 emitters (#36) ──────────────────────────────────────────────
@@ -5565,19 +5471,7 @@ void export_yolo6_onnx(models::Yolo6& model,
     int nc = model->nc;
     g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
 
-    Pb model_pb;
-    model_pb.write_int64_field(1, 8);
-    model_pb.write_string_field(2, cfg.producer_name);
-    model_pb.write_string_field(3, cfg.producer_version);
-    model_pb.write_string_field(4, "");
-    model_pb.write_int64_field(5, 1);
-    model_pb.write_string_field(6, "");
-    model_pb.write_bytes_field(7, g.build_graph_bytes("yolo6"));
-    model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-    std::ofstream f(path, std::ios::binary);
-    if (!f) throw std::runtime_error("cannot write " + path);
-    f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+    write_model_proto(g, cfg, "yolo6", path);
     return;
   }
 
@@ -5668,19 +5562,7 @@ void export_yolo6_onnx(models::Yolo6& model,
   int nc = model->nc;
   g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, 8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo6"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo6", path);
 }
 
 // ─── YOLO7 emitters (#37) ──────────────────────────────────────────────
@@ -6077,19 +5959,7 @@ void export_yolo7_onnx(models::Yolo7& model,
   int nc = model->nc;
   g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, /*A*/ -1});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, 8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo7"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo7", path);
 }
 
 // ─── YOLO1 + YOLO2 (Darknet-era) ─────────────────────────────────────────
@@ -6323,18 +6193,7 @@ void export_yolo1_onnx(yolocpp::models::Yolo1& model,
 
   g.set_output(cfg.output_name, /*FLOAT=*/1, {-1, 4 + nc, (int64_t)A});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, 8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo1"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo1", path);
 }
 
 // ─── YOLO2 ────────────────────────────────────────────────────────────────
@@ -6575,18 +6434,7 @@ void export_yolo2_onnx(yolocpp::models::Yolo2& model,
   g.set_output(cfg.output_name, /*FLOAT=*/1,
                 {-1, 4 + nc, (int64_t)(na * H * W)});
 
-  Pb model_pb;
-  model_pb.write_int64_field(1, 8);
-  model_pb.write_string_field(2, cfg.producer_name);
-  model_pb.write_string_field(3, cfg.producer_version);
-  model_pb.write_string_field(4, "");
-  model_pb.write_int64_field(5, 1);
-  model_pb.write_string_field(6, "");
-  model_pb.write_bytes_field(7, g.build_graph_bytes("yolo2"));
-  model_pb.write_bytes_field(8, opset_id("", cfg.opset_version));
-  std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("cannot write " + path);
-  f.write(model_pb.bytes().data(), (std::streamsize)model_pb.bytes().size());
+  write_model_proto(g, cfg, "yolo2", path);
 }
 
 }  // namespace yolocpp::serialization

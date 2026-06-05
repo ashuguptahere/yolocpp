@@ -4,6 +4,24 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.57] — 2026-06-05
+
+### Changed
+- **DRY — dedup the 13 inlined ModelProto epilogues** (`onnx_export.cpp`,
+  6592→6440 lines). Twelve detect exporters (v1–v11/v26) plus the v6 P6
+  branch each inlined a byte-for-byte copy of the ~14-line ModelProto
+  write/serialize epilogue; replaced each with a call to the existing
+  `write_model_proto(g, cfg, "yolo<N>", path)` helper (3 sites precede the
+  definition → added a forward declaration). **Gated by a byte-identical
+  ONNX export sweep**: exported every version + 6 task variants before and
+  after; all 10 *deterministic* exporters (v2/v3/v4/v5/v7-w6/v8/v11/v12/
+  v13/v26 + tasks) are byte-identical. The other exporters (v6/v7/v9/v10/
+  v2-voc) are pre-existing run-to-run **nondeterministic** (graph-build
+  ordering), so byte-diff is N/A there — but the dedup only rewrites the
+  proto wrapper around the unchanged `g.build_graph_bytes()` call, so it is
+  structurally equivalence-preserving. ctest 38/39 (v13/s parity failure is
+  the pre-existing one from 0.99.56).
+
 ## [0.99.56] — 2026-06-05
 
 ### Changed
