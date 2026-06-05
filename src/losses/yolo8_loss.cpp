@@ -326,9 +326,13 @@ LossOutput V8DetectionLoss::operator()(
   // targets: [M, 6] (b_idx, cls, cx, cy, w, h)
   std::vector<int> per_batch(B, 0);
   if (targets.size(0) > 0) {
-    auto bi = targets.select(1, 0).to(torch::kLong);
+    // Pull the batch-index column to host ONCE, then read via accessor — a
+    // per-element bi[i].item<int>() on a CUDA tensor would force one blocking
+    // device->host sync per GT box (CLAUDE.md: no per-batch host syncs).
+    auto bi   = targets.select(1, 0).to(torch::kCPU).to(torch::kLong);
+    auto bacc = bi.accessor<int64_t, 1>();
     for (int i = 0; i < (int)bi.size(0); ++i) {
-      int b = bi[i].item<int>();
+      int b = (int)bacc[i];
       if (b >= 0 && b < B) per_batch[b]++;
     }
   }

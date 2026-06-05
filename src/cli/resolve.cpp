@@ -34,11 +34,26 @@ fs::path home_cache() {
   return p / ".cache" / "yolocpp";
 }
 
+// Wrap a string in single quotes for safe interpolation into a /bin/sh
+// command, escaping any embedded single quote as '\'' . The URL and paths
+// reaching run_curl/run_unzip are user-controlled (--dataset / --model), so
+// an unescaped value like  http://x/'$(cmd)'.zip  would otherwise break out
+// of the quotes and inject a shell command.
+std::string sh_quote(const std::string& s) {
+  std::string out = "'";
+  for (char c : s) {
+    if (c == '\'') out += "'\\''";
+    else out += c;
+  }
+  out += "'";
+  return out;
+}
+
 bool run_curl(const std::string& url, const fs::path& dst) {
   fs::create_directories(dst.parent_path());
   std::ostringstream cmd;
-  cmd << "curl -fSL --retry 3 --retry-delay 2 -o '" << dst.string()
-      << "' '" << url << "'";
+  cmd << "curl -fSL --retry 3 --retry-delay 2 -o " << sh_quote(dst.string())
+      << ' ' << sh_quote(url);
   std::cerr << "[download] " << url << "\n";
   int rc = std::system(cmd.str().c_str());
   return rc == 0 && fs::exists(dst) && fs::file_size(dst) > 0;
@@ -51,9 +66,9 @@ bool run_unzip(const fs::path& zip, const fs::path& out_dir,
   std::ostringstream cmd;
   cmd << "unzip -qq -o";
   if (flatten) cmd << " -j";
-  cmd << " '" << zip.string() << "' ";
-  if (!include_glob.empty()) cmd << "'" << include_glob << "' ";
-  cmd << " -d '" << out_dir.string() << "'";
+  cmd << ' ' << sh_quote(zip.string()) << ' ';
+  if (!include_glob.empty()) cmd << sh_quote(include_glob) << ' ';
+  cmd << " -d " << sh_quote(out_dir.string());
   return std::system(cmd.str().c_str()) == 0;
 }
 

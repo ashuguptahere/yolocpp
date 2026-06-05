@@ -335,14 +335,14 @@ gap.
 
 ### Reference smokes / sweeps
 
-- **End-to-end ctest** (`ctest --test-dir build`): 31 tests, all green
+- **End-to-end ctest** (`ctest --test-dir build`): 39 tests, all green
   on the latest release. Per-version smokes are
   `tests/test_v<N>_e2e.cpp` / `test_v<N>_train.cpp`; SKIP-gated when
   weights/data missing.
 - **Full matrix sweep** (`scripts/full_matrix_sweep.sh`): walks every
   applicable (version, variant, task, mode) cell. Last-known-good
-  reading is `PASS=152 FAIL=0 SKIP=0` (predict 121, val 4, train 3,
-  export 12, benchmark 12).
+  reading is `PASS=164 FAIL=0 SKIP=0` (predict 121, val 4, train 3,
+  export 12, benchmark 12, trt-roundtrip 12).
 - **Predict-task sweep** (`scripts/task_predict_sweep.sh`): all 75
   (v8/v11/v26 × n/s/m/l/x × 5 tasks).
 - **ONNX-export sweep** (`scripts/onnx_export_sweep.sh`): same 75.

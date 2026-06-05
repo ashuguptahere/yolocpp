@@ -45,10 +45,13 @@ we mirror in C++.
   test code itself.
 - **No fmt / spdlog** — `std::format` (C++20) and `std::cerr` cover
   every logging callsite.
-- **No json library** — we don't read JSON. `data.yaml` is YAML and
-  rapidyaml handles it. COCO JSON support (#54B) is filed but not
-  implemented; if/when it lands we'll evaluate nlohmann/json vs
-  rapidjson at that point.
+- **No json library** — `data.yaml` is YAML and rapidyaml handles it.
+  COCO JSON support (#54B) landed via a ~180-line hand-rolled streaming
+  tokenizer (`src/datasets/coco_dataset.cpp` `JsonLexer`), which passed
+  the ≤200-line-vs-new-dep test below; nlohmann/json, rapidjson and
+  simdjson were evaluated and not added (a single fixed schema doesn't
+  justify a parser dependency, and parsing is one-shot at dataset load,
+  not a hot path).
 - **No ONNX Runtime** — we go straight to TensorRT for deployment
   inference. Adding ORT would let us run on platforms without TRT
   (CPU-only, Apple Silicon) but that's #58 (multi-device deploy)

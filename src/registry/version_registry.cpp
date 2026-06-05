@@ -223,9 +223,9 @@ int detect_imgsz_default(const std::string& /*scale*/,
 
 // ---- v1 ------------------------------------------------------------------
 // Redmon 2016, the original YOLO. 24-conv backbone (no BN, leaky 0.1)
-// + 2 FC layers, output `[B, 7·7·30]` on PASCAL VOC. Predict-only at
-// the moment — train (SSE loss with λ_coord/λ_noobj weighting),
-// ONNX, TRT, benchmark all throw with a "see #66..#69" message.
+// + 2 FC layers, output `[B, 7·7·30]` on PASCAL VOC. Full pipeline:
+// predict + val + train (SSE loss with λ_coord/λ_noobj weighting) +
+// ONNX/TRT export + benchmark (landed #66..#69, 0.85.0–0.88.0).
 VersionAdapter make_v1() {
   VersionAdapter a;
   a.version_id = "v1";
@@ -288,8 +288,9 @@ VersionAdapter make_v1() {
 // Redmon & Farhadi 2017 — Darknet-19 backbone + reorg passthrough +
 // region head with 5 anchors per cell. Two scale variants: `full`
 // (default) and `tiny`. nc defaults to 20 (VOC); pass `--nc 80` and
-// `--weights yolov2.weights` for the COCO variant. Predict-only;
-// train / ONNX / TRT staged under #67 / #69.
+// `--weights yolov2.weights` for the COCO variant. Full pipeline:
+// predict + val + train + ONNX/TRT export + benchmark (landed
+// #66..#69, 0.85.0–0.88.0).
 VersionAdapter make_v2() {
   VersionAdapter a;
   a.version_id = "v2";

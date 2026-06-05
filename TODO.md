@@ -6,7 +6,7 @@ This file is maintained as part of recurring task **#33** (gap-audit) — see CL
 
 The current release version is **always read from `CMakeLists.txt` `project(... VERSION ...)`** (which flows into `build/generated/yolocpp/config.hpp` as `YOLOCPP_VERSION_STRING` and out via `yolocpp info`). Do not duplicate it into prose snapshots in this file — the only places a literal version belongs are `CMakeLists.txt`, `CHANGELOG.md` headings, and historical "landed in X.Y.Z" lines.
 
-> **Latest snapshot**: every numbered task #12..#45 closed except recurring #33. Full matrix sweep (`scripts/full_matrix_sweep.sh`) reports `PASS=152 FAIL=0 SKIP=0`. ctest 31/31 green. New roadmap tasks **#46..#63** below were filed 2026-05-01 from the user's next-batch requirement list. See `SESSION_DIGEST.md` for the per-version landing map across the previous session.
+> **Latest snapshot**: every numbered task #12..#45 closed except recurring #33. Full matrix sweep (`scripts/full_matrix_sweep.sh`) reports `PASS=164 FAIL=0 SKIP=0`. ctest 39/39 green. New roadmap tasks **#46..#63** below were filed 2026-05-01 from the user's next-batch requirement list. See `SESSION_DIGEST.md` for the per-version landing map across the previous session.
 
 Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started · 🔁 recurring
 
@@ -197,7 +197,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #47  | Centralise version stamp — single source of truth | high | 0.5 session | low risk; mostly text edits |
 | #47A | ✅ closed — top-level `./VERSION` file is now the single source of truth; CMake `file(READ)`s it into `project(... VERSION ...)`, exports through `config.hpp` (`YOLOCPP_VERSION_STRING`), surfaces via `yolocpp --version` / `-v` / `-V` and `yolocpp info`. To bump the version, edit `./VERSION` only. | — | landed | — |
 | #47B | ✅ closed — SESSION_DIGEST.md re-headered as "frozen snapshot of prior session" (its `0.X.Y` mentions are now explicitly historical). README and CLAUDE already cleaned in earlier commit. One stale parenthetical in TODO.md re-worded to "landed in 0.22.0". | — | landed | — |
-| #47C | ✅ closed — `scripts/check_version_literals.sh` added. Walks tracked files, flags any `0.X.Y` outside the allow-list (`./VERSION`, `CHANGELOG.md`, `SESSION_DIGEST.md`, historical "landed in X.Y.Z" / "added X.Y.Z" qualifiers, third-party / vendor strings). Currently passes; wire into pre-commit / CI when those land. | — | landed | — |
+| #47C | ✅ closed — `scripts/check_version_literals.sh` added. Walks tracked files, flags any `0.X.Y` outside the allow-list (`./VERSION`, `CHANGELOG.md`, `SESSION_DIGEST.md`, historical "landed in X.Y.Z" / "added X.Y.Z" qualifiers, third-party / vendor strings). **Currently exits 1**: the allow-list misses uppercase `LANDED 0.X.Y`, bare parenthetical `(landed 0.X.Y)` / `(0.X.Y)` forms, and `docs/*.md` prose — all historical, no runtime impact. Follow-up #47C2: extend `ALLOWED_LINE_PATTERNS` (case-insensitive `landed`, bare `(0.X.Y)`, whitelist `docs/`) so it genuinely passes, then wire into pre-commit / CI. | — | landed (lint follow-up open) | — |
 | #48  | ✅ closed — `third_party/DEPS.md` is the single pinned manifest (libtorch 2.11.0+cu130, TensorRT 10.14.1.48+cuda13, CUDA 13.0.88, OpenCV 4.6.0, NCCL 2.23.4, rapidyaml 0.11.1, CLI11 2.4.x). `scripts/audit_deps.sh` enforces it: any unknown `find_package` or undocumented `third_party/` directory fails the audit. Currently passes (4 packages, 8 dirs). The "no Boost / no protobuf / no GTest / no fmt / no json / no ORT" rationale is documented inline; "how to add a new dep" checklist included. | — | landed | — |
 | #48A | ✅ closed — covered by #48 (`third_party/DEPS.md`). | — | landed | — |
 | #48B | ✅ closed — audited; no redundant deps. Every `find_package` / `target_link_libraries` is genuinely consumed; the manifest documents why. | — | landed | — |
@@ -391,7 +391,6 @@ These live as inline comments in the codebase. Each should either be tracked as 
 
 | location | note | mapped to |
 |----------|------|-----------|
-| `include/yolocpp/datasets/yolo_dataset.hpp:20` | `Mosaic / mixup are TODO.` | §5 (training augmentations) |
 | `src/tasks/segment_train.cpp:388` | `pull feats explicitly (TODO: expose forward_train_seg).` | §5 (segment trainer cleanup) |
 
 Note: the `legacy stub holder` in `src/models/yolo26.cpp` and the `Object stub` in `pt_loader.cpp` are not TODOs — they're intentional sentinels.
@@ -402,9 +401,9 @@ Note: the `legacy stub holder` in `src/models/yolo26.cpp` and the `Object stub` 
 
 These don't map to a single YOLO version.
 
-- ❌ **Mosaic / mixup augmentation** — straightforward but ~600 lines of C++ we haven't needed yet. Touches `datasets/yolo_dataset.hpp`.
-- ❌ **AMP (mixed-precision training)** — Trainer is FP32-only. Adding `torch::autocast` + `GradScaler` is a future change.
-- ❌ **Multi-threaded data prefetch** — dataset is synchronous. With OpenCV decode + CUDA inference, the IO bottleneck on a 5090 is real but fixable later.
+- ✅ **Mosaic / mixup augmentation** — landed 0.54.0 (`build_mosaic4` + `apply_mixup` in `datasets/yolo_dataset.cpp`, gated by `mosaic_p` / `mixup_p`).
+- ✅ **AMP (mixed-precision training)** — landed 0.90.0 via bf16 `at::autocast` around the forward + loss block (no GradScaler needed on Blackwell); see `TrainerT::run()`.
+- ✅ **Multi-threaded data prefetch** — landed 0.94.0 (`BatchPrefetcher`, N worker threads, `--workers` flag).
 - ❌ **TRT INT8 calibration** + dynamic-shape multi-batch profiles — easy on top of `TrtBuildConfig` once a calibration set exists.
 - ❌ **Two-GPU DDP validation** — wiring is in place + world_size=1 verified, but no two-GPU box has run training yet.
 - ❌ **`forward_train_seg` factor-out** — segment trainer currently reaches into the segment head to pull feats; a clean accessor would let it ride the same templated trainer pattern as detect.

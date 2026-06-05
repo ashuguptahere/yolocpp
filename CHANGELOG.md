@@ -4,6 +4,64 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.49] — 2026-06-05
+
+Audit-driven fixes from a full 12-dimension engineering/perf/security
+sweep (every actionable finding adversarially re-verified against the
+real code + documented CLAUDE.md exceptions before landing). This patch
+takes the safe, behavior-preserving subset; numerics-affecting and
+parity-sensitive items (predict-path `fuse_model`, channels_last eval,
+HSV-LUT for the secondary loaders, `onnx_export.cpp` emitter dedup,
+mAP-accounting hoist) are recorded as verified-and-ready follow-ups.
+
+### Fixed
+- **Security — pickle reader hardening** (`pt_loader.cpp`). Added a
+  `require(nbytes)` bounds guard to every multi-byte pickle read
+  (`read_u16/u32/u64`, `read_long_le`, `read_str`); a crafted/truncated
+  `.pt` now raises a clean exception instead of an out-of-bounds heap
+  read. Also reject negative dims/offset and switch the storage-copy
+  bounds check to division-based comparison so a large `offset`/`numel`
+  can't integer-wrap past `buf.size()` and slip a bad `memcpy` through.
+- **Security — shell-injection in downloads** (`resolve.cpp`). `run_curl`
+  / `run_unzip` now route the user-controlled URL and paths through a
+  `sh_quote()` single-quote escaper before `std::system`, so a
+  `--dataset` value like `http://x/'$(cmd)'.zip` can no longer break out
+  of the quotes and inject a command.
+
+### Changed
+- **Perf — drop per-GT-box host syncs in losses** (`yolo8_loss.cpp`,
+  `yolo26_loss.cpp`, `yolo6_loss.cpp`). The GT-count loop did
+  `bi[i].item<int>()` per box on a CUDA tensor — one blocking
+  device→host sync per ground-truth box per step. Now copies the
+  batch-index column to host once and reads via an accessor (CLAUDE.md:
+  "no per-batch `.item()` host syncs"). Behavior-identical; train
+  smokes green.
+- **Perf — VocDataset single decode** (`voc_dataset.cpp`). Removed a dead
+  `IMREAD_REDUCED_COLOR_8` probe that decoded every image twice at
+  construction; the single full decode now doubles as the validity gate
+  and supplies exact dims.
+- **Cleanup — `std::clamp` over hand-spelled min/max** in
+  `yolo1_loss.cpp` / `yolo2_loss.cpp` grid-cell clamps (matches the
+  codebase idiom; CLAUDE.md "don't reinvent STL").
+
+### Docs
+- **README**: corrected yolo1/yolo2 from "predict-only / TODO #66..#69"
+  to the full pipeline (predict + val + train + ONNX/TRT, landed
+  0.85.0–0.88.0) in all five places; refreshed `ctest 39/39` and
+  `PASS=164` sweep figures.
+- **CLAUDE.md**: reference-smoke figures 31→39 ctests, 152→164 sweep
+  cells (added the 12 trt-roundtrip cells).
+- Removed stale "Mosaic / mixup are TODO" header comment
+  (`yolo_dataset.hpp`); rewrote the stale v6 "not yet wired" ONNX-export
+  doc-comment (`onnx_export.hpp`) to state all 12 v6 variants export;
+  refreshed the v1/v2 "predict-only / staged" registry comments.
+- **TODO.md**: closed the stale §5 ❌ rows for Mosaic/mixup (0.54.0),
+  AMP/bf16 autocast (0.90.0), and multi-threaded prefetch (0.94.0);
+  removed the resolved §4 `yolo_dataset.hpp:20` TODO; corrected the
+  #47C note (the literal-checker currently exits 1 on historical refs).
+- **DEPS.md**: recorded that COCO JSON (#54B) landed via a hand-rolled
+  tokenizer and nlohmann/rapidjson/simdjson were evaluated and not added.
+
 ## [0.99.48] — 2026-06-03
 
 ### Changed

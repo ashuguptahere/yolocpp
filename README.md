@@ -37,21 +37,21 @@ classify / segment / pose / obb). v12 / v13 ship detect-only
 upstream; their task heads are scaffolded in code and queued for
 retraining on COCO under task #60.
 
-The two Darknet-era versions (`yolo1`, `yolo2`) ship **predict-only**
-at the moment, but are usable end-to-end without any Darknet runtime.
+The two Darknet-era versions (`yolo1`, `yolo2`) ship the **full
+pipeline** (predict + val + train + ONNX/TRT export + benchmark,
+landed #66..#69 in 0.85.0–0.88.0) without any Darknet runtime.
 The canonical input form is `.pt`, same as every other version —
 `build/tools/convert_weights` does a one-shot `.weights → .pt`
 conversion via our pure-C++ parser
 (`src/serialization/yolov{1,2}_weights.cpp`) and writes the result
 to `data/`. The runtime / CLI / registry / tests then consume
-`data/*.pt` exclusively. Train / ONNX / TRT for v1/v2 are tracked
-under tasks #66..#69.
+`data/*.pt` exclusively.
 
 Reference reading on the current state:
 
 ```
-ctest --test-dir build                # 31/31 green
-bash scripts/full_matrix_sweep.sh     # PASS=152 FAIL=0 SKIP=0
+ctest --test-dir build                # 39/39 green
+bash scripts/full_matrix_sweep.sh     # PASS=164 FAIL=0 SKIP=0
                                       #   predict 121, val 4, train 3,
                                       #   export 12, benchmark 12
 ```
@@ -141,7 +141,7 @@ local weight cache doesn't have them yet. Each is one `curl` away:
 
 | variant | upstream URL pattern | reason missing | yolocpp support |
 |---------|----------------------|----------------|-----------------|
-| yolo1   | `https://pjreddie.com/media/files/yolov1.weights` | Joseph Redmon's original Darknet weights — not auto-downloaded yet | predict-only (TODO #66 for train/export) |
+| yolo1   | `https://pjreddie.com/media/files/yolov1.weights` | Joseph Redmon's original Darknet weights — not auto-downloaded yet | full pipeline (predict/val/train/ONNX/TRT) |
 | yolo6 `*_mbla` (s/m/l/x) | **landed 0.99.15** — yolocpp rows in main table marked `[MBLA]`; Meituan reference deferred ([MBLA] footnote — runner cwd bug) | — | full pipeline |
 | yolo7 P6 (w6/e6/d6/e6e) | **partial 0.99.15** — TRT INT8 fails per `[INT8-fail]`; train mAP=0 per `[w=0-cpp]`; predict + ONNX/TRT FP16 work | needs P6 forward / assigner fix (task #87C) | predict + ONNX + TRT FP16; train degenerate |
 | yolo13m | n/a | iMoonLab fork doesn't ship an `m` variant | — |
@@ -150,16 +150,16 @@ local weight cache doesn't have them yet. Each is one `curl` away:
 ## Darknet-era models (yolocpp-only)
 
 yolo4 / yolo2 (full + tiny + voc variants) / yolo1 ship in yolocpp
-end-to-end (predict for v1/v2, full pipeline for v4) but the
+end-to-end (full predict + train pipeline for all three) but the
 original Darknet (C) authors never published a comparable Python
 training pipeline at AlexeyAB/Joseph Redmon repos:
 
 | variant       | params | yolocpp predict | yolocpp train | reference | note |
 |---------------|-------:|-----------------|---------------|-----------|------|
-| yolo1         | ~272 M | ✅ (Pascal VOC) | TODO #66      | none      | pjreddie 2016, FC head |
-| yolo2         | ~67 M  | ✅ COCO         | TODO #67      | none      | reorg passthrough |
-| yolo2-voc     | ~50 M  | ✅              | TODO #67      | none      | PASCAL VOC anchors |
-| yolo2-tiny-voc| ~16 M  | ✅              | TODO #67      | none      | tiny YOLOv2 |
+| yolo1         | ~272 M | ✅ (Pascal VOC) | ✅ SSE loss   | none      | pjreddie 2016, FC head |
+| yolo2         | ~67 M  | ✅ COCO         | ✅ region loss| none      | reorg passthrough |
+| yolo2-voc     | ~50 M  | ✅              | ✅            | none      | PASCAL VOC anchors |
+| yolo2-tiny-voc| ~16 M  | ✅              | ✅            | none      | tiny YOLOv2 |
 | yolo4         | ~64 M  | ✅              | ✅ via V7Loss | none      | CSPDarknet53+PANet, default imgsz=608 |
 
 No training reference benchmark possible — included for completeness
@@ -268,8 +268,8 @@ v27+) are intentionally not supported.
 
 | version | year | provenance | family / changes | status |
 |---------|------|------------|------------------|--------|
-| **yolo1**  | 2016 | Redmon et al. (official Darknet)           | 24 conv (no BN, leaky 0.1) + 2 FC (4096 → 7·7·30); SSE loss with λ_coord=5 / λ_noobj=0.5; trained on PASCAL VOC at 448×448 | 🟡 **predict** — pjreddie's `yolov1.weights` parsed by our own loader (`yolov1_weights.cpp`, pure C++, no Darknet); forward → Darknet-flat decode → NMS; default imgsz=448. Train / ONNX / TRT staged as #66 / #68. |
-| **yolo2**  | 2017 | Redmon & Farhadi (official Darknet)        | Darknet-19 + BN + leaky 0.1 + `reorg` passthrough + 5-anchor `region` head; output (5·(5+nc))×13×13 at imgsz=416. Full + tiny variants | 🟡 **predict (+tiny)** — pjreddie's `yolov2.weights` / `-tiny` parsed by our own loader (`yolov2_weights.cpp`, pure C++); reorg replicates Darknet's exact flat-memory layout so trained conv weights consume the right channels. Default imgsz=416. Train / ONNX / TRT staged as #67 / #69. |
+| **yolo1**  | 2016 | Redmon et al. (official Darknet)           | 24 conv (no BN, leaky 0.1) + 2 FC (4096 → 7·7·30); SSE loss with λ_coord=5 / λ_noobj=0.5; trained on PASCAL VOC at 448×448 | ✅ **predict + val + train + ONNX/TRT** — pjreddie's `yolov1.weights` parsed by our own loader (`yolov1_weights.cpp`, pure C++, no Darknet); forward → Darknet-flat decode → NMS; default imgsz=448. Full pipeline landed #66/#68 (0.85.0–0.88.0). |
+| **yolo2**  | 2017 | Redmon & Farhadi (official Darknet)        | Darknet-19 + BN + leaky 0.1 + `reorg` passthrough + 5-anchor `region` head; output (5·(5+nc))×13×13 at imgsz=416. Full + tiny variants | ✅ **predict (+tiny) + val + train + ONNX/TRT** — pjreddie's `yolov2.weights` / `-tiny` parsed by our own loader (`yolov2_weights.cpp`, pure C++); reorg replicates Darknet's exact flat-memory layout so trained conv weights consume the right channels. Default imgsz=416. Full pipeline landed #67/#69 (0.85.0–0.88.0). |
 | **yolo3**  | 2018 | Redmon & Farhadi (official Darknet)        | Darknet-53 backbone; ships in two head forms — original anchor-based (deferred) and the upstream anchor-free `yolov3u` (v8-style DFL head, used here) | ✅ **predict / val / train / ONNX+TRT export (yolov3u)** — converted on first use (fp16 → fp32). 103M params; 7 dets on `bus.jpg`, top 0.94. v3 train via `TrainerT<Yolo3>` reuses `V8DetectionLoss`. v3 ONNX (415 MB) + TRT FP32 (483 MB) match C++ predict's 7-dets baseline exactly. |
 | **yolo4**  | 2020 | Bochkovskiy et al. (official Darknet)      | CSPDarknet-53 + SPP + PANet; Mish activations; v3-style anchor head | ✅ **predict / val / train / ONNX+TRT export** — Darknet `yolov4.weights` converted to our `yolo4.pt` on first use; default `imgsz=608` (anchor calibration). 6 dets on `bus.jpg`. v4 train via `V7DetectionLoss` (anchor-based with v4 scale_xy bias-fix + `exp()` wh decode). v4 ONNX (257 MB) + TRT FP32 (259 MB) match C++ baseline. |
 | **yolo5**  | 2020 | upstream (official)                        | CSPNet + C3 blocks, originally anchor-based; the modern `*u.pt` files use the v8 anchor-free Detect head | ✅ end-to-end (predict / train / val / ONNX + TRT export) for all 5 scales via `yolo5*u.pt` |

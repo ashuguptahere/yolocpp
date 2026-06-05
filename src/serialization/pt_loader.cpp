@@ -592,8 +592,16 @@ class Unpickler {
     // Build a tensor that owns a copy of the (sliced) storage. We copy so
     // that the original buffer can be reused by other tensors sharing the
     // same storage id, and so we own clean memory.
+    // Reject negative dims/offset from a crafted pickle before computing
+    // byte extents (at::empty would also throw on negatives, but we need
+    // clean inputs for the overflow-safe bounds check below).
+    if (offset < 0)
+      throw std::runtime_error("pt_loader: negative storage offset");
     int64_t numel = 1;
-    for (auto s : sizes) numel *= s;
+    for (auto s : sizes) {
+      if (s < 0) throw std::runtime_error("pt_loader: negative tensor dim");
+      numel *= s;
+    }
 
     auto t = at::empty(sizes, opts);
     if (numel > 0) {
@@ -601,38 +609,51 @@ class Unpickler {
       // the given strides. For cleanliness we just memcpy a contiguous
       // block — if strides aren't contiguous we'd need to handle that,
       // but tensor saves are always contiguous in practice for state_dicts.
-      auto byte_off = offset * el;
-      auto byte_len = numel * el;
-      if (byte_off + byte_len > buf.size()) {
+      // Bound-check via division so a large offset/numel can't wrap the
+      // (offset+numel)*el sum past buf.size() and slip a bad memcpy through.
+      const uint64_t cap_elems = buf.size() / el;  // el >= 1
+      if ((uint64_t)offset > cap_elems ||
+          (uint64_t)numel > cap_elems - (uint64_t)offset) {
         std::stringstream ss;
-        ss << "storage " << pid.storage_id << " too small: "
-           << buf.size() << " < " << byte_off + byte_len;
+        ss << "storage " << pid.storage_id << " too small: " << buf.size()
+           << " bytes < offset " << offset << " + numel " << numel
+           << " (elem " << el << ")";
         throw std::runtime_error(ss.str());
       }
-      std::memcpy(t.data_ptr(), buf.data() + byte_off, byte_len);
+      std::memcpy(t.data_ptr(), buf.data() + offset * el, numel * el);
     }
     (void)strides;
     return t;
   }
 
   // ── Low-level reading helpers ───────────────────────────────────────────
-  uint8_t  read_u8()  { return (uint8_t)data_[pos_++]; }
+  // Guard every multi-byte read against the buffer end: a crafted/truncated
+  // .pt must raise a clean exception, never an out-of-bounds heap read.
+  void require(uint64_t nbytes) const {
+    if (pos_ > size_ || nbytes > size_ - pos_)
+      throw std::runtime_error("pt_loader: pickle read past end of buffer");
+  }
+  uint8_t  read_u8()  { require(1); return (uint8_t)data_[pos_++]; }
   uint16_t read_u16() {
+    require(2);
     uint16_t v = (uint8_t)data_[pos_] | ((uint8_t)data_[pos_+1] << 8);
     pos_ += 2; return v;
   }
   uint32_t read_u32() {
+    require(4);
     uint32_t v = (uint8_t)data_[pos_] | ((uint8_t)data_[pos_+1] << 8) |
                  ((uint8_t)data_[pos_+2] << 16) | ((uint8_t)data_[pos_+3] << 24);
     pos_ += 4; return v;
   }
   uint64_t read_u64() {
+    require(8);
     uint64_t v = 0;
     for (int i = 0; i < 8; ++i) v |= (uint64_t)(uint8_t)data_[pos_+i] << (i*8);
     pos_ += 8; return v;
   }
   int64_t read_long_le(uint32_t n) {
     if (n == 0) return 0;
+    require(n);
     int64_t v = 0;
     for (uint32_t i = 0; i < n && i < 8; ++i)
       v |= (int64_t)(uint8_t)data_[pos_+i] << (i*8);
@@ -643,6 +664,7 @@ class Unpickler {
     pos_ += n; return v;
   }
   std::string read_str(uint64_t n) {
+    require(n);
     std::string s(data_ + pos_, n);
     pos_ += n; return s;
   }

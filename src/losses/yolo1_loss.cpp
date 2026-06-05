@@ -1,5 +1,8 @@
 #include "yolocpp/losses/yolo1_loss.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 namespace yolocpp::losses {
 
 namespace {
@@ -87,8 +90,8 @@ LossOutput Yolo1Loss::operator()(const std::vector<torch::Tensor>& feats,
       float h  = a[r][5] * inv_imgsz;
       if (bi < 0 || bi >= B) continue;
       if (c < 0 || c >= nc)  continue;
-      int gi = std::min(S - 1, std::max(0, (int)std::floor(cx * S)));
-      int gj = std::min(S - 1, std::max(0, (int)std::floor(cy * S)));
+      int gi = std::clamp((int)std::floor(cx * S), 0, S - 1);
+      int gj = std::clamp((int)std::floor(cy * S), 0, S - 1);
       int cell = gj * S + gi;
       cell_has_gt[bi][cell] = true;
       target_cls[bi][cell][c] = 1.0f;

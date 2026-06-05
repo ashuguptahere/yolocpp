@@ -121,11 +121,10 @@ void export_yolo4_onnx(models::Yolo4& model,
 
 // Export the given YOLO6 (Meituan — EfficientRep + RepBiFPANNeck +
 // EffiDeHead) model. Same output contract: [N, 4 + nc, A] xyxy +
-// sigmoid'd cls. Targets v6n/s (P5, RepBlock-based backbone, CSPSPPF,
-// EffiDeHead with direct 4-ch reg_preds branch). Other v6 variants
-// (m/l with BepC3 + SimSPPF + DFL eval; MBLA scales; P6 variants)
-// share the same module set but use a different combination — they
-// will surface a "not yet wired" error from the CLI dispatch.
+// sigmoid'd cls. Covers all 12 published v6 variants: P5 n/s (RepBlock
+// backbone + CSPSPPF), m/l (BepC3 + SimSPPF + DFL eval), the *_mbla
+// scales (MBLABlock backbone+neck), and the P6 four-level variants
+// (n6/s6/m6/l6 via the model->is_p6 branch).
 void export_yolo6_onnx(models::Yolo6& model,
                        const std::string&    path,
                        const OnnxExportConfig& cfg = {});

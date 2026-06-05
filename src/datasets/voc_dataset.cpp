@@ -152,15 +152,12 @@ VocDataset::VocDataset(std::string root, std::string split, int imgsz,
     }
     if (!fs::exists(xml_p)) continue;
 
-    cv::Mat probe = cv::imread(img_p.string(), cv::IMREAD_REDUCED_COLOR_8);
-    if (probe.empty()) continue;
-    int W = probe.cols * 8;  // approximate; we'll use the actual image dims at getitem
-    int H = probe.rows * 8;
-    // Use the precise dims via imread metadata: re-read header.
-    {
-      cv::Mat actual = cv::imread(img_p.string());
-      if (!actual.empty()) { W = actual.cols; H = actual.rows; }
-    }
+    // Single full decode doubles as the validity gate and supplies exact dims
+    // (a prior IMREAD_REDUCED_COLOR_8 probe decoded every image twice).
+    cv::Mat actual = cv::imread(img_p.string());
+    if (actual.empty()) continue;
+    int W = actual.cols;
+    int H = actual.rows;
 
     auto boxes = parse_voc_xml(xml_p.string());
     std::vector<float> rows;

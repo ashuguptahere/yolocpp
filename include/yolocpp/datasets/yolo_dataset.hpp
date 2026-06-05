@@ -17,7 +17,7 @@
 //   • letterbox (always)
 //   • horizontal flip with prob `flip_p`
 //   • HSV jitter (h, s, v) with given amplitudes
-// Mosaic / mixup are TODO.
+//   • Mosaic-4 (prob `mosaic_p`) + MixUp (prob `mixup_p`) — see below.
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>

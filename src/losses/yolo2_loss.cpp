@@ -72,8 +72,8 @@ LossOutput Yolo2Loss::operator()(const std::vector<torch::Tensor>& feats,
       // Pixel-coord cx/cy/w/h → cell-unit coords (stride = imgsz/grid).
       float gx = cx / stride;
       float gy = cy / stride;
-      int gi = std::min(W - 1, std::max(0, (int)std::floor(gx)));
-      int gj = std::min(H - 1, std::max(0, (int)std::floor(gy)));
+      int gi = std::clamp((int)std::floor(gx), 0, W - 1);
+      int gj = std::clamp((int)std::floor(gy), 0, H - 1);
       float gtw_cells = w / stride;
       float gth_cells = h / stride;
       // Pick the best anchor by w/h IoU (both centered at the cell).

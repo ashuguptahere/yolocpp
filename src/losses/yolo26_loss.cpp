@@ -365,9 +365,12 @@ Yolo26LossOutput Yolo26Loss::operator()(
   // feature pyramid.)
   std::vector<int> per_batch(B, 0);
   if (targets.size(0) > 0) {
-    auto bi = targets.select(1, 0).to(torch::kLong);
+    // Host copy once + accessor read; avoids a per-GT-box device->host sync
+    // (CLAUDE.md: no per-batch host syncs).
+    auto bi   = targets.select(1, 0).to(torch::kCPU).to(torch::kLong);
+    auto bacc = bi.accessor<int64_t, 1>();
     for (int i = 0; i < (int)bi.size(0); ++i) {
-      int b = bi[i].item<int>();
+      int b = (int)bacc[i];
       if (b >= 0 && b < B) per_batch[b]++;
     }
   }
