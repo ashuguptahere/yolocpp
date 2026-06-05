@@ -4,6 +4,17 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.59] — 2026-06-05
+
+### Fixed
+- **`scripts/onnx_export_sweep.sh` used the removed kv-style CLI**
+  (`task=… mode=export model=…`), so it errored out on every export.
+  Converted to the canonical flag-style parser
+  (`--mode export --task … -m … -f onnx -o … -i …`). (Surfaced while
+  building the #7 ONNX parity gate.) Four other sweep scripts
+  (`launch_ddp`, `task_predict_sweep`, `convergence_sweep`,
+  `parity_check`) share the same breakage — tracked as a follow-up.
+
 ## [0.99.58] — 2026-06-05
 
 ### Changed

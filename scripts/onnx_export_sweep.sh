@@ -28,8 +28,8 @@ for v in 8 11 26; do
       rm -f "${out_path}"
       echo ">>> yolo${v}${s}${suf} → ${out_path}" | tee -a "${LOG}"
       set +e
-      ./build/yolocpp task="${t}" mode=export model="${weight}" \
-          format=onnx out="${out_path}" imgsz="${imgsz}" \
+      ./build/yolocpp --mode export --task "${t}" -m "${weight}" \
+          -f onnx -o "${out_path}" -i "${imgsz}" \
           >> "${LOG}" 2>&1
       rc=$?
       set -e
