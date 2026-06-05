@@ -73,19 +73,34 @@ TrtPredictor::TrtPredictor(const std::string& engine_path, int imgsz,
   impl_->ctx.reset(impl_->engine->createExecutionContext());
   if (!impl_->ctx) throw std::runtime_error("createExecutionContext failed");
 
-  // Set runtime input shape to the requested max batch. Engine's profile
-  // kMAX must cover this; if it doesn't, setInputShape returns false and
-  // we surface that to the caller.
+  // Self-configure imgsz from the engine's static spatial dims when the engine
+  // declares them (e.g. v4 builds at 608, v6-P6 at 1280, obb at 1024). Callers
+  // pass a default (640) that won't match those engines; using the engine's
+  // own H/W keeps letterbox + setInputShape consistent with how it was built.
+  // Only override when the spatial dims are static (>0); a dynamic spatial dim
+  // (-1) keeps the requested imgsz.
+  {
+    auto in_dims = impl_->engine->getTensorShape(impl_->input_name.c_str());
+    if (in_dims.nbDims == 4 && in_dims.d[2] > 0 && in_dims.d[3] > 0 &&
+        in_dims.d[2] == in_dims.d[3]) {
+      imgsz_ = (int)in_dims.d[2];
+    }
+  }
+
+  // Set runtime input shape to the requested max batch at the engine's imgsz.
+  // Engine's profile kMAX must cover this batch; if it doesn't, setInputShape
+  // returns false and we surface that to the caller.
   if (!impl_->ctx->setInputShape(
           impl_->input_name.c_str(),
-          nvinfer1::Dims4(max_batch_, 3, imgsz, imgsz))) {
+          nvinfer1::Dims4(max_batch_, 3, imgsz_, imgsz_))) {
     throw std::runtime_error(
         "setInputShape rejected batch=" + std::to_string(max_batch_) +
-        " — engine profile kMAX is smaller than requested batch");
+        " at imgsz=" + std::to_string(imgsz_) +
+        " — engine profile does not cover this shape");
   }
 
   CUDA_OK(cudaStreamCreate(&impl_->stream));
-  impl_->d_in_size = (size_t)max_batch_ * 3 * imgsz * imgsz * sizeof(float);
+  impl_->d_in_size = (size_t)max_batch_ * 3 * imgsz_ * imgsz_ * sizeof(float);
   CUDA_OK(cudaMalloc(&impl_->d_in,  impl_->d_in_size));
 
   // Probe output shape (now resolved after setInputShape).
@@ -103,7 +118,7 @@ TrtPredictor::TrtPredictor(const std::string& engine_path, int imgsz,
   impl_->ctx->setTensorAddress(impl_->output_name.c_str(), impl_->d_out);
 
   std::cout << "[trt-pred] engine ready: in=" << impl_->input_name
-            << "[" << max_batch_ << ",3," << imgsz << "," << imgsz
+            << "[" << max_batch_ << ",3," << imgsz_ << "," << imgsz_
             << "] → out=" << impl_->output_name
             << "[" << max_batch_ << "," << impl_->output_channels << ","
             << impl_->output_anchors << "]\n";

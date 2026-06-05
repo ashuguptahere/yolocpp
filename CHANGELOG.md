@@ -4,6 +4,19 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.65] — 2026-06-05
+
+### Fixed
+- **TrtPredictor self-configures imgsz from the engine** (`trt_predictor.cpp`).
+  The predictor used the caller's default imgsz (640) for `setInputShape`, but
+  engines built at a different size — v4 (608), v6-P6 (1280), obb (1024) —
+  rejected it with a static-dimension mismatch (manifesting as the misleading
+  "engine profile kMAX is smaller than requested batch" error in the matrix
+  sweep). Now the ctor reads the engine's declared static input H/W and uses
+  it for both `setInputShape` and letterbox; a dynamic spatial dim keeps the
+  requested imgsz. Fixes the v4 trt-roundtrip sweep cell (engine 608 → 6 dets);
+  640 engines unchanged.
+
 ## [0.99.64] — 2026-06-05
 
 ### Added
