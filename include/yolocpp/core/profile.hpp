@@ -1,13 +1,24 @@
 #pragma once
 //
-// Per-phase wall-clock profiler. Threaded throughout the inference
-// + training hot paths so the user can answer "where did the cycles
-// go?" without rewiring instrumentation each time. (Task #98.)
+// Per-phase wall-clock profiler. Each ProfileScope also emits an NVTX
+// range when --profile is on, so `nsys profile ./yolocpp ... --profile`
+// yields an Nsight Systems timeline for free. (Task #98 / #6.)
+//
+// Coverage (where ProfileScope is wired):
+//   • benchmark mode (engine) — full preprocess/enqueue/nms breakdown.
+//   • TRT predict path (trt_predictor.cpp) — gpu_letterbox / enqueueV3.
+//   • C++ API Predictor::predict (predictor.cpp) — preprocess/forward/
+//     nms/postprocess.
+// Two paths are profiled differently and do NOT feed this singleton:
+//   • the per-version CLI `.pt` predict functions report timing via
+//     Results.speed (preprocess/inference/postprocess ms), not --profile.
+//   • the training loop has per-step phase timers behind the
+//     YOLOCPP_PROFILE_STEP env var (trainer.cpp), which need explicit
+//     CUDA-stream syncs around each phase.
 //
 // Usage from CLI:
-//   yolocpp --mode predict -m yolo11n.pt -s bus.jpg --profile
-//   yolocpp --mode benchmark -m yolo11x.pt --profile
-//   yolocpp --mode train ... --profile     (per-epoch breakdown)
+//   yolocpp --mode benchmark -m yolo11x.pt -s bus.jpg --profile
+//   nsys profile -o yolo ./build/yolocpp --mode benchmark ... --profile
 //
 // Usage from C++ code:
 //   {
@@ -30,6 +41,16 @@
 #include <mutex>
 #include <string>
 #include <vector>
+
+// Optional NVTX3 ranges for nsys/Nsight Systems timelines. Header-only
+// (ships with the CUDA toolkit, already on the include path via
+// CUDA::cudart); compiled out cleanly if the header is ever absent.
+#if defined(__has_include)
+#  if __has_include(<nvtx3/nvToolsExt.h>)
+#    include <nvtx3/nvToolsExt.h>
+#    define YOLOCPP_HAS_NVTX 1
+#  endif
+#endif
 
 namespace yolocpp::core {
 
@@ -84,8 +105,16 @@ class ProfileScope {
  public:
   explicit ProfileScope(std::string tag) : tag_(std::move(tag)) {
     Profile::instance().start(tag_);
+#ifdef YOLOCPP_HAS_NVTX
+    if (Profile::instance().enabled()) nvtxRangePushA(tag_.c_str());
+#endif
   }
-  ~ProfileScope() { Profile::instance().stop(tag_); }
+  ~ProfileScope() {
+#ifdef YOLOCPP_HAS_NVTX
+    if (Profile::instance().enabled()) nvtxRangePop();
+#endif
+    Profile::instance().stop(tag_);
+  }
  private:
   std::string tag_;
 };

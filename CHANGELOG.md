@@ -4,6 +4,28 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.52] — 2026-06-05
+
+### Added
+- **NVTX timeline ranges via `ProfileScope`** (`core/profile.hpp`). Every
+  `ProfileScope` now also pushes/pops an NVTX range when `--profile` is
+  on, so `nsys profile ./yolocpp --mode benchmark ... --profile` yields
+  an Nsight Systems timeline (per-kernel overlap, stream gaps) on top of
+  the existing wall-clock summary. Header-only NVTX3 (ships with the CUDA
+  toolkit, already on the include path via `CUDA::cudart`), guarded by
+  `__has_include` so it compiles out cleanly if ever absent.
+- **`ProfileScope` coverage on the C++ API `Predictor::predict`**
+  (`predictor.cpp`) — preprocess / forward / nms / postprocess phases,
+  with a device sync at phase boundaries under `--profile` for accurate
+  GPU attribution.
+
+### Changed
+- `profile.hpp` doc-comment rewritten to state coverage precisely
+  (benchmark + TRT predict + API `Predictor` feed the singleton/NVTX;
+  per-version CLI `.pt` predict reports via `Results.speed`; training
+  uses `YOLOCPP_PROFILE_STEP`) instead of the prior over-claim that it
+  was "threaded throughout … training hot paths."
+
 ## [0.99.51] — 2026-06-05
 
 ### Changed

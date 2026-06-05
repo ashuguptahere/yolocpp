@@ -9,6 +9,7 @@
 
 #include "yolocpp/inference/results.hpp"
 
+#include "yolocpp/core/profile.hpp"
 #include "yolocpp/cli/resolve.hpp"
 #include "yolocpp/inference/letterbox.hpp"
 #include "yolocpp/models/yolo11.hpp"
@@ -81,21 +82,40 @@ Predictor::Predictor(const std::string& weights, int imgsz, std::string device,
 
 std::vector<Detection> Predictor::predict(const cv::Mat& bgr,
                                           NMSConfig conf) const {
-  auto lb = letterbox(bgr, imgsz_);
-  // Uint8 BGR H2D + on-GPU BGR→RGB (flip) + cast + /255.
-  auto x_u8 = image_to_tensor_u8_bgr_chw(lb.img).unsqueeze(0);
-  auto x    = x_u8.to(device_).flip(/*dim=*/1).to(at::kFloat).div_(255.0f);
+  using ::yolocpp::core::ProfileScope;
+  // Under --profile, sync the device at phase boundaries so the GPU phases
+  // (forward) get real wall-clock attribution instead of async-enqueue time.
+  const bool prof = ::yolocpp::core::Profile::instance().enabled();
+  auto psync = [&] { if (prof && device_.is_cuda()) torch::cuda::synchronize(); };
+
+  LetterboxResult lb;
+  torch::Tensor x;
+  {
+    ProfileScope _s{"preprocess"};
+    lb = letterbox(bgr, imgsz_);
+    // Uint8 BGR H2D + on-GPU BGR→RGB (flip) + cast + /255.
+    auto x_u8 = image_to_tensor_u8_bgr_chw(lb.img).unsqueeze(0);
+    x = x_u8.to(device_).flip(/*dim=*/1).to(at::kFloat).div_(255.0f);
+    psync();
+  }
 
   torch::Tensor pred;
   {
+    ProfileScope _s{"forward"};
     c10::InferenceMode im_guard;
     pred = const_cast<models::Yolo8Detect&>(model_)->forward_eval(x);
+    psync();
   }
-  auto outs = nms(pred, conf);
+  std::vector<torch::Tensor> outs;
+  {
+    ProfileScope _s{"nms"};
+    outs = nms(pred, conf);
+  }
   TORCH_CHECK(outs.size() == 1, "expected single image batch");
   auto& det = outs[0];   // [k, 6] xyxy + conf + cls (in letterbox coords)
 
   // Move to CPU and unscale.
+  ProfileScope _post{"postprocess"};
   det = det.to(torch::kCPU);
   if (det.size(0) == 0) return {};
 
