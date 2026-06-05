@@ -23,11 +23,23 @@
 //
 
 #include <string>
+#include <utility>
+#include <vector>
+
+#include <torch/torch.h>
 
 namespace yolocpp::serialization {
 
 int convert_yolov6_pt(const std::string& src_pt_path,
                       const std::string& out_pt_path,
                       int                nc = 80);
+
+// In-memory reparameterization: raw Meituan training-form v6 state-dict
+// (RepVGG rbr_dense/rbr_1x1/rbr_identity + upstream module naming) → the
+// deploy form our Yolo6Impl loads (fused `.conv` + our prefixes). Used by the
+// converter above and by Yolo6Impl::load_from_state_dict so the original `.pt`
+// loads directly. Pass-through for already-deploy checkpoints.
+std::vector<std::pair<std::string, at::Tensor>>
+reparam_yolov6(const std::vector<std::pair<std::string, at::Tensor>>& src);
 
 }  // namespace yolocpp::serialization

@@ -87,23 +87,13 @@ fuse_all_repvggdw(const std::vector<std::pair<std::string, at::Tensor>>& src) {
 
 }  // namespace
 
-int convert_yolov10_pt(const std::string& src_pt_path,
-                       const std::string& out_pt_path, int /*nc*/) {
-  std::vector<std::pair<std::string, at::Tensor>> src;
-  for (const std::string& root : {"model", "ema", ""}) {
-    try {
-      auto sd = load_state_dict(src_pt_path, root);
-      if (!sd.entries.empty()) { src = std::move(sd.entries); break; }
-    } catch (...) {}
-  }
-  TORCH_CHECK(!src.empty(), "yolov10: empty state-dict (tried model/ema/'')");
-
+std::vector<std::pair<std::string, at::Tensor>>
+reparam_yolov10(const std::vector<std::pair<std::string, at::Tensor>>& src) {
   // 1) RepVGGDW fusion. Note: the regex matches ANY `<prefix>.{conv,conv1}.*`
   // pattern — we filter to only those where conv has 7×7 weight AND conv1
   // has 3×3 weight (i.e. the pair is a real RepVGGDW; not the 3×3+1×1
   // RepConv pattern handled by the v9 converter).
   auto fused = fuse_all_repvggdw(src);
-  std::cerr << "[yolov10] fused " << fused.size() << " RepVGGDW pairs\n";
 
   // Pre-compute fused-prefix set so we know which keys to skip in the
   // pass-through stage.
@@ -166,11 +156,24 @@ int convert_yolov10_pt(const std::string& src_pt_path,
     }
     out.emplace_back(n2, t.to(torch::kFloat32));
   }
+  return out;
+}
 
+int convert_yolov10_pt(const std::string& src_pt_path,
+                       const std::string& out_pt_path, int /*nc*/) {
+  std::vector<std::pair<std::string, at::Tensor>> src;
+  for (const std::string& root : {"model", "ema", ""}) {
+    try {
+      auto sd = load_state_dict(src_pt_path, root);
+      if (!sd.entries.empty()) { src = std::move(sd.entries); break; }
+    } catch (...) {}
+  }
+  TORCH_CHECK(!src.empty(), "yolov10: empty state-dict (tried model/ema/'')");
+  auto out = reparam_yolov10(src);
   save_state_dict(out_pt_path, out);
   std::cerr << "[yolov10] wrote " << out.size() << " tensors to " << out_pt_path
             << "\n";
-  return (int)fused.size();
+  return (int)out.size();
 }
 
 int convert_yolov10_dual_pt(const std::string& src_pt_path,

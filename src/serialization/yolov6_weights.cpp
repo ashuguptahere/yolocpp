@@ -183,23 +183,10 @@ std::string rename_prefix(std::string prefix) {
 
 }  // namespace
 
-int convert_yolov6_pt(const std::string& src_pt_path,
-                      const std::string& out_pt_path, int /*nc*/) {
-  // Upstream stores everything under `model.<...>` — but Meituan's writer
-  // puts it under different top-level keys depending on save path. Probe
-  // common roots; bare-form (no submodel prefix) is also accepted.
-  std::vector<std::pair<std::string, at::Tensor>> src;
-  for (const std::string& root : {"model", "ema", ""}) {
-    try {
-      auto sd = load_state_dict(src_pt_path, root);
-      if (!sd.entries.empty()) { src = std::move(sd.entries); break; }
-    } catch (...) {}
-  }
-  TORCH_CHECK(!src.empty(), "yolov6: empty state-dict (tried model/ema/'')");
-
+std::vector<std::pair<std::string, at::Tensor>>
+reparam_yolov6(const std::vector<std::pair<std::string, at::Tensor>>& src) {
   // 1) RepVGG fusion across all blocks.
   auto fused = fuse_all_repvgg(src);
-  std::cerr << "[yolov6] fused " << fused.size() << " RepVGG blocks\n";
 
   // 2) Walk source entries and emit converted ones.
   std::vector<std::pair<std::string, at::Tensor>> out;
@@ -234,11 +221,27 @@ int convert_yolov6_pt(const std::string& src_pt_path,
 
   // detect.proj and detect.proj_conv.weight are deterministic (arange / its
   // reshape) — our model recreates them at construction. Skipping is fine.
+  return out;
+}
 
+int convert_yolov6_pt(const std::string& src_pt_path,
+                      const std::string& out_pt_path, int /*nc*/) {
+  // Upstream stores everything under `model.<...>` — but Meituan's writer
+  // puts it under different top-level keys depending on save path. Probe
+  // common roots; bare-form (no submodel prefix) is also accepted.
+  std::vector<std::pair<std::string, at::Tensor>> src;
+  for (const std::string& root : {"model", "ema", ""}) {
+    try {
+      auto sd = load_state_dict(src_pt_path, root);
+      if (!sd.entries.empty()) { src = std::move(sd.entries); break; }
+    } catch (...) {}
+  }
+  TORCH_CHECK(!src.empty(), "yolov6: empty state-dict (tried model/ema/'')");
+  auto out = reparam_yolov6(src);
   save_state_dict(out_pt_path, out);
   std::cerr << "[yolov6] wrote " << out.size() << " tensors to " << out_pt_path
             << "\n";
-  return (int)fused.size();
+  return (int)out.size();
 }
 
 }  // namespace yolocpp::serialization

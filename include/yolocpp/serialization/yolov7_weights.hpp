@@ -20,11 +20,23 @@
 //
 
 #include <string>
+#include <utility>
+#include <vector>
+
+#include <torch/torch.h>
 
 namespace yolocpp::serialization {
 
 int convert_yolov7_pt(const std::string& src_pt_path,
                       const std::string& out_pt_path,
                       int                nc = 80);
+
+// In-memory reparameterization: raw WongKinYiu training-form v7 state-dict
+// (RepConv rbr_dense/rbr_1x1/rbr_identity) → the deploy form our Yolo7Impl
+// loads (fused `model.<i>.conv.{weight,bias}`). Used by the converter above
+// and by Yolo7Impl::load_from_state_dict so the original `.pt` loads directly.
+// Pass-through for already-deploy checkpoints.
+std::vector<std::pair<std::string, at::Tensor>>
+reparam_yolov7(const std::vector<std::pair<std::string, at::Tensor>>& src);
 
 }  // namespace yolocpp::serialization

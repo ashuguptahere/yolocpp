@@ -124,21 +124,9 @@ fuse_all_repconv(const std::vector<std::pair<std::string, at::Tensor>>& src) {
 
 }  // namespace
 
-int convert_yolov7_pt(const std::string& src_pt_path,
-                      const std::string& out_pt_path, int /*nc*/) {
-  // Upstream stores under `model` (an attribute of the saved Model
-  // wrapper); `ema` is the EMA copy. Try both.
-  std::vector<std::pair<std::string, at::Tensor>> src;
-  for (const std::string& root : {"model", "ema", ""}) {
-    try {
-      auto sd = load_state_dict(src_pt_path, root);
-      if (!sd.entries.empty()) { src = std::move(sd.entries); break; }
-    } catch (...) {}
-  }
-  TORCH_CHECK(!src.empty(), "yolov7: empty state-dict (tried model/ema/'')");
-
+std::vector<std::pair<std::string, at::Tensor>>
+reparam_yolov7(const std::vector<std::pair<std::string, at::Tensor>>& src) {
   auto fused = fuse_all_repconv(src);
-  std::cerr << "[yolov7] fused " << fused.size() << " RepConv blocks\n";
 
   std::vector<std::pair<std::string, at::Tensor>> out;
   out.reserve(src.size());
@@ -162,11 +150,26 @@ int convert_yolov7_pt(const std::string& src_pt_path,
     if (std::regex_search(name, re_skip)) continue;
     out.emplace_back(name, t.to(torch::kFloat32));
   }
+  return out;
+}
 
+int convert_yolov7_pt(const std::string& src_pt_path,
+                      const std::string& out_pt_path, int /*nc*/) {
+  // Upstream stores under `model` (an attribute of the saved Model
+  // wrapper); `ema` is the EMA copy. Try both.
+  std::vector<std::pair<std::string, at::Tensor>> src;
+  for (const std::string& root : {"model", "ema", ""}) {
+    try {
+      auto sd = load_state_dict(src_pt_path, root);
+      if (!sd.entries.empty()) { src = std::move(sd.entries); break; }
+    } catch (...) {}
+  }
+  TORCH_CHECK(!src.empty(), "yolov7: empty state-dict (tried model/ema/'')");
+  auto out = reparam_yolov7(src);
   save_state_dict(out_pt_path, out);
   std::cerr << "[yolov7] wrote " << out.size() << " tensors to " << out_pt_path
             << "\n";
-  return (int)fused.size();
+  return (int)out.size();
 }
 
 }  // namespace yolocpp::serialization

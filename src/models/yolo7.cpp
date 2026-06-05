@@ -1,6 +1,9 @@
 #include "yolocpp/models/yolo7.hpp"
 
 #include <stdexcept>
+#include <string>
+
+#include "yolocpp/serialization/yolov7_weights.hpp"
 
 namespace yolocpp::models {
 
@@ -1277,7 +1280,17 @@ torch::Tensor Yolo7Impl::forward_eval(torch::Tensor x) {
 }
 
 int Yolo7Impl::load_from_state_dict(
-    const std::vector<std::pair<std::string, at::Tensor>>& entries) {
+    const std::vector<std::pair<std::string, at::Tensor>>& entries_in) {
+  // Accept a raw WongKinYiu training-form checkpoint directly: if it carries
+  // RepConv branches (`.rbr_dense.` etc.), reparameterize to deploy form
+  // in-memory (mirrors RepConv.fuse_repvgg_block). No-op for deploy files.
+  bool training_form = false;
+  for (const auto& e : entries_in)
+    if (e.first.find(".rbr_dense.") != std::string::npos) { training_form = true; break; }
+  std::vector<std::pair<std::string, at::Tensor>> reparamed;
+  if (training_form) reparamed = serialization::reparam_yolov7(entries_in);
+  const auto& entries = training_form ? reparamed : entries_in;
+
   auto params  = this->named_parameters(true);
   auto buffers = this->named_buffers(true);
   int n = 0;

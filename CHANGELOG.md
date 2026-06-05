@@ -4,6 +4,35 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.62] — 2026-06-05
+
+### Fixed
+- **v6 / v7 / v10 load raw upstream `.pt` directly (load-time fusion)** —
+  extends 0.99.61's v9 fix to the other RepConv/RepVGG families. Each
+  ships in training form upstream (v6 Meituan RepVGG `rbr_dense`/`rbr_1x1`;
+  v7 WongKinYiu RepConv `rbr_dense`; v10 THU RepVGGDW `conv`/`conv1` + dual
+  one2one/one2many head), and our models are deploy-form, so the raw files
+  loaded only a fraction of params → 0–1 dets + nondeterministic export.
+  Extracted each converter's reparam into an in-memory `reparam_yolov{6,7,10}()`
+  and call it from the model's `load_from_state_dict` when a training-form
+  checkpoint is detected (`.rbr_dense.` for v6/v7, `one2one_cv` for v10;
+  v10 skipped when `dual_head` so DDP training is unaffected). Verified on
+  the raw upstream files (RTX 5090, bus.jpg):
+
+  | version | before | after |
+  |---------|--------|-------|
+  | yolov6n.pt  | 24 loaded, 0 dets   | 233 loaded, **4 dets** |
+  | yolov7.pt   | 524 loaded, 0 dets  | 444 loaded, **6 dets** |
+  | yolov9c.pt  | 745 loaded, 0 dets  | 655 loaded, **5 dets** (0.99.61) |
+  | yolov10n.pt | 463 loaded, 1 det   | 390 loaded, **5 dets** |
+
+  ONNX export for all four is now **byte-deterministic** (was 92%-of-bytes
+  nondeterministic from random unloaded params — closes the #14 root cause).
+  Deploy-form checkpoints still load unchanged (no-op reparam). No custom
+  weights, no offline conversion — the models are directly compatible with
+  the original Ultralytics / Meituan / WongKinYiu / THU repos, mirroring
+  what those frameworks do at `model.fuse()` / `switch_to_deploy()`.
+
 ## [0.99.61] — 2026-06-05
 
 ### Fixed

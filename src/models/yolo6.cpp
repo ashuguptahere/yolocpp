@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
+
+#include "yolocpp/serialization/yolov6_weights.hpp"
 
 namespace yolocpp::models {
 
@@ -949,7 +952,18 @@ torch::Tensor Yolo6Impl::forward_eval(torch::Tensor x) {
 }
 
 int Yolo6Impl::load_from_state_dict(
-    const std::vector<std::pair<std::string, at::Tensor>>& entries) {
+    const std::vector<std::pair<std::string, at::Tensor>>& entries_in) {
+  // Accept a raw Meituan training-form checkpoint directly: if it carries
+  // RepVGG branches (`.rbr_dense.` etc.), reparameterize to deploy form +
+  // rename to our module layout in-memory (mirrors RepVGGBlock.switch_to_deploy).
+  // No-op (pass-through) for already-deploy checkpoints.
+  bool training_form = false;
+  for (const auto& e : entries_in)
+    if (e.first.find(".rbr_dense.") != std::string::npos) { training_form = true; break; }
+  std::vector<std::pair<std::string, at::Tensor>> reparamed;
+  if (training_form) reparamed = serialization::reparam_yolov6(entries_in);
+  const auto& entries = training_form ? reparamed : entries_in;
+
   auto params  = this->named_parameters(true);
   auto buffers = this->named_buffers(true);
   int n = 0, skipped_shape = 0;

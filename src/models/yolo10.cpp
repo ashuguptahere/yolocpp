@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <string>
+
+#include "yolocpp/serialization/yolov10_weights.hpp"
 
 namespace yolocpp::models {
 
@@ -402,7 +405,20 @@ std::vector<torch::Tensor> Yolo10Impl::forward_train(torch::Tensor x) {
 }
 
 int Yolo10Impl::load_from_state_dict(
-    const std::vector<std::pair<std::string, at::Tensor>>& entries) {
+    const std::vector<std::pair<std::string, at::Tensor>>& entries_in) {
+  // Accept a raw upstream/Ultralytics training-form checkpoint directly: if it
+  // carries the dual one2one head (`one2one_cv*`) + RepVGGDW branches,
+  // reparameterize to single-head deploy form in-memory (mirrors model.fuse()).
+  // Only for the deploy (single-head) model; dual_head training keeps both
+  // heads and loads via the dual converter. No-op for already-deploy files.
+  bool training_form = false;
+  if (!dual_head)
+    for (const auto& e : entries_in)
+      if (e.first.find("one2one_cv") != std::string::npos) { training_form = true; break; }
+  std::vector<std::pair<std::string, at::Tensor>> reparamed;
+  if (training_form) reparamed = serialization::reparam_yolov10(entries_in);
+  const auto& entries = training_form ? reparamed : entries_in;
+
   auto params  = this->named_parameters(true);
   auto buffers = this->named_buffers(true);
   int n = 0, skipped_shape = 0;
