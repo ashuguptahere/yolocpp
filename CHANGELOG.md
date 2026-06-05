@@ -4,6 +4,15 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.63] — 2026-06-05
+
+### Fixed
+- **Preserve `convert_yolov{6,7,9,10}_pt` return value** (= number of fused
+  RepConv/RepVGG blocks). The 0.99.61/62 reparam extraction made them return
+  the total tensor count, breaking the block-count assertions in
+  `test_v{6,9,10}_e2e`. Restored the original semantics (re-derive the fused
+  count). e2e tests green again.
+
 ## [0.99.62] — 2026-06-05
 
 ### Fixed

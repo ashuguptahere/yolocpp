@@ -173,7 +173,7 @@ int convert_yolov10_pt(const std::string& src_pt_path,
   save_state_dict(out_pt_path, out);
   std::cerr << "[yolov10] wrote " << out.size() << " tensors to " << out_pt_path
             << "\n";
-  return (int)out.size();
+  return (int)fuse_all_repvggdw(src).size();  // # RepVGGDW pairs fused
 }
 
 int convert_yolov10_dual_pt(const std::string& src_pt_path,

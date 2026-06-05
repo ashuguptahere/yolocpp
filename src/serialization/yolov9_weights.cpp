@@ -177,7 +177,7 @@ int convert_yolov9_pt(const std::string& src_pt_path,
   save_state_dict(out_pt_path, out);
   std::cerr << "[yolov9] wrote " << out.size() << " tensors to " << out_pt_path
             << "\n";
-  return (int)out.size();
+  return (int)fuse_all_repconv(src).size();  // # RepConv blocks fused
 }
 
 }  // namespace yolocpp::serialization
