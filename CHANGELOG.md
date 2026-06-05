@@ -4,6 +4,25 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.51] — 2026-06-05
+
+### Changed
+- **Perf — Conv+BN fold on the LibTorch predict path** (`predictor.cpp`,
+  `task_predictors.cpp`). The user-facing predict path constructed the
+  model and called `eval()` but never `fuse_model()` — the benchmark
+  harness (which does fuse) measured the unfused PT FP32 forward ~40%
+  slower. Now `models::fuse_model()` runs once after `eval()` in the
+  detect `Predictor` ctor, all 14 per-version `predict_*_to_file`
+  functions, and all 12 inference-only task-predictor ctors
+  (classify/segment/pose/obb × v8/v11/v26). Verified output-invariant:
+  yolo11n det=5, seg=5 instances, pose=4 people unchanged; full ctest
+  39/39.
+  - **Deliberately NOT applied to `validator.cpp`**: `validate()` is a
+    template reused on the *live training model* during per-epoch
+    validation, and `ConvImpl::forward` takes the fused path whenever
+    `fused==true` regardless of train/eval mode — fusing there would fold
+    BN into the conv weights and corrupt subsequent training epochs.
+
 ## [0.99.50] — 2026-06-05
 
 ### Changed

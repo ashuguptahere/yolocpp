@@ -73,6 +73,10 @@ Predictor::Predictor(const std::string& weights, int imgsz, std::string device,
 
   model_->to(device_);
   model_->eval();
+  // Conv+BN fold — the benchmark path measured the unfused PT forward at
+  // ~40% slower; fuse_model is recursive and a no-op for blocks without a
+  // fuse(), so it is safe on any version.
+  models::fuse_model(*model_);
 }
 
 std::vector<Detection> Predictor::predict(const cv::Mat& bgr,
@@ -181,7 +185,7 @@ std::vector<Detection> predict_v1_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v1-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -221,7 +225,7 @@ std::vector<Detection> predict_v2_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v2-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -261,7 +265,7 @@ std::vector<Detection> predict_v3_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v3-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -315,7 +319,7 @@ std::vector<Detection> predict_v4_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v4-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -369,7 +373,7 @@ std::vector<Detection> predict_v10_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v10-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -426,7 +430,7 @@ std::vector<Detection> predict_v9_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v9-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -480,7 +484,7 @@ std::vector<Detection> predict_v7_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v7-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -538,7 +542,7 @@ std::vector<Detection> predict_v6_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v6-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -592,7 +596,7 @@ std::vector<Detection> predict_v5_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v5-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -643,7 +647,7 @@ std::vector<Detection> predict_v11_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v11-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -699,7 +703,7 @@ std::vector<Detection> predict_v12_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v12-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -755,7 +759,7 @@ std::vector<Detection> predict_v13_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v13-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);
@@ -811,7 +815,7 @@ std::vector<Detection> predict_v26_to_file(
   int copied = model->load_from_state_dict(sd.entries);
   std::cout << "[v26-pred] loaded " << copied << " tensors from "
             << weights << "\n";
-  model->to(dev); model->eval();
+  model->to(dev); model->eval(); models::fuse_model(*model);
 
   cv::Mat src = cv::imread(in_path, cv::IMREAD_COLOR);
   if (src.empty()) throw std::runtime_error("could not read " + in_path);

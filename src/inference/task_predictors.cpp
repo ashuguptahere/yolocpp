@@ -391,6 +391,7 @@ ClassifyPredictor::ClassifyPredictor(const std::string& weights, int imgsz,
   std::cout << "[classify] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 ClassifyResult ClassifyPredictor::predict(const cv::Mat& bgr, int top_k) const {
@@ -416,6 +417,7 @@ SegmentPredictor::SegmentPredictor(const std::string& weights, int imgsz,
   std::cout << "[segment] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 std::vector<SegInstance> SegmentPredictor::predict(const cv::Mat& bgr,
@@ -606,6 +608,7 @@ PosePredictor::PosePredictor(const std::string& weights, int imgsz,
   std::cout << "[pose] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 std::vector<PoseInstance> PosePredictor::predict(const cv::Mat& bgr,
@@ -751,6 +754,7 @@ OBBPredictor::OBBPredictor(const std::string& weights, int imgsz,
   std::cout << "[obb] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 // Probabilistic IoU (covariance-form) approx used upstream for OBB
@@ -904,6 +908,7 @@ Yolo11ClassifyPredictor::Yolo11ClassifyPredictor(const std::string& weights, int
   std::cout << "[v11-classify] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 ClassifyResult Yolo11ClassifyPredictor::predict(const cv::Mat& bgr, int top_k) const {
@@ -922,6 +927,7 @@ Yolo11SegmentPredictor::Yolo11SegmentPredictor(const std::string& weights, int i
   std::cout << "[v11-segment] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 std::vector<SegInstance> Yolo11SegmentPredictor::predict(const cv::Mat& bgr,
@@ -970,6 +976,7 @@ Yolo11PosePredictor::Yolo11PosePredictor(const std::string& weights, int imgsz,
   std::cout << "[v11-pose] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 std::vector<PoseInstance> Yolo11PosePredictor::predict(const cv::Mat& bgr,
@@ -1019,6 +1026,7 @@ Yolo11OBBPredictor::Yolo11OBBPredictor(const std::string& weights, int imgsz,
   std::cout << "[v11-obb] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 std::vector<OBBInstance> Yolo11OBBPredictor::predict(const cv::Mat& bgr,
@@ -1077,6 +1085,7 @@ Yolo26ClassifyPredictor::Yolo26ClassifyPredictor(const std::string& weights, int
   std::cout << "[v26-classify] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 ClassifyResult Yolo26ClassifyPredictor::predict(const cv::Mat& bgr, int top_k) const {
@@ -1095,6 +1104,7 @@ Yolo26SegmentPredictor::Yolo26SegmentPredictor(const std::string& weights, int i
   std::cout << "[v26-segment] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 std::vector<SegInstance> Yolo26SegmentPredictor::predict(const cv::Mat& bgr,
@@ -1143,6 +1153,7 @@ Yolo26PosePredictor::Yolo26PosePredictor(const std::string& weights, int imgsz,
   std::cout << "[v26-pose] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 std::vector<PoseInstance> Yolo26PosePredictor::predict(const cv::Mat& bgr,
@@ -1192,6 +1203,7 @@ Yolo26OBBPredictor::Yolo26OBBPredictor(const std::string& weights, int imgsz,
   std::cout << "[v26-obb] loaded " << copied << " tensors from " << weights << "\n";
   model_->to(device_);
   model_->eval();
+  models::fuse_model(*model_);  // Conv+BN fold (inference-only predictor)
 }
 
 std::vector<OBBInstance> Yolo26OBBPredictor::predict(const cv::Mat& bgr,
