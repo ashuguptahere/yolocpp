@@ -372,10 +372,13 @@ preserve them through any forward/converter changes.
   must register inside a nested `V6ActScope force_relu(false)` block —
   upstream's RepBiFPANNeck/CSPRepBiFPANNeck hardcodes ReLU there
   regardless of training_mode. Already wired in NeckImpl/NeckP6Impl.
-- **v10 TRT must clear `kTF32` on every scale** (n/s/m/b/l/x). The
+- **v10 AND v13 TRT must clear `kTF32` on every scale.** v10: the
   RepVGGDW 7×7-dwconv-with-bias stack accumulates enough TF32 mantissa
-  loss to saturate cls. Already wired in both `cmd_export` and
-  `engine::run_benchmark`.
+  loss to saturate cls. v13: the V13AAttn attention + DSConv + HyperACE
+  accumulation loses enough TF32 mantissa to drop borderline detections
+  (v13/s TRT-fp32 returned 3 dets vs PT's 5 with TF32 on; 5/5 with it
+  cleared). Both set `trt_disable_tf32 = true` in their `VersionAdapter`,
+  which `cmd_export` / `engine::run_benchmark` honor.
 - **CLI scale auto-resolve**: never default `scale_s` to a literal in
   any CLI11 layer. Default empty; resolve via
   `cli::scale_from_filename(weights)` at function entry. The "scale=n"

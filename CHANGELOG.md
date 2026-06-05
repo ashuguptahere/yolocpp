@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.60] — 2026-06-05
+
+### Fixed
+- **v13/s TRT parity gap — clear `kTF32` for v13** (`version_registry.cpp`).
+  `test_cross_backend_parity` failed on v13/s (PT=5 vs TRT-fp32=3, fp16=4–5).
+  Root cause: TF32 mantissa loss, the same class as the documented v10
+  RepVGGDW quirk — v13's V13AAttn attention + DSConv + HyperACE accumulation
+  loses enough precision under TF32 to drop borderline detections. Confirmed
+  by a flip-the-flag experiment: setting `trt_disable_tf32 = true` in
+  `make_v13()` restores **5/5 on both TRT-fp32 and fp16**. **Full ctest now
+  39/39** (was 38/39). Updated the CLAUDE.md cross-cutting parity rule (now
+  v10 *and* v13) and the v10-TF32 memory. Trade-off: v13 TRT-fp32 accumulates
+  in full precision (no TF32 tensor-core speedup) — correctness over speed,
+  same call as v10.
+
 ## [0.99.59] — 2026-06-05
 
 ### Fixed

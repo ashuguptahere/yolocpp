@@ -945,6 +945,11 @@ VersionAdapter make_v13() {
   a.default_export_basename = "yolo13";
   a.supported_tasks = {"detect"};
   a.default_imgsz = detect_imgsz_default;
+  // v13 TRT must clear kTF32 (same class as the v10 RepVGGDW quirk): the
+  // V13AAttn attention + DSConv + HyperACE accumulation loses enough TF32
+  // mantissa to drop borderline detections. With TF32 on, v13/s TRT-fp32
+  // returns 3 dets vs PT's 5; clearing it restores 5/5 (and fp16 5/5).
+  a.trt_disable_tf32 = true;
   a.export_onnx = [](const std::string& weights, const std::string& scale,
                      int nc, const std::string& task,
                      const std::string& path,
