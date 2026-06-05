@@ -98,7 +98,8 @@ README. Read directly or join into your own analysis pipeline.
 
 | Marker | Affects | Reason |
 |--------|---------|--------|
-| v6 U-side | yolo6 P5 + P6 + MBLA (12 variants) | Stock Ultralytics rejects Meituan format. Filled in 0.99.42 via Meituan's own training pipeline. |
+| v6 U-side (n/s/m/l) | yolo6 P5 — 4 variants | Stock Ultralytics can't load Meituan `.pt`; 0.99.47 fills U-side by training Ultralytics from `cfg/models/v6/yolov6.yaml` instead. Meituan-trained baseline kept in `/tmp/ultra_bench/meituan_train/` for reference; CHANGELOG 0.99.18 quantifies the gap. |
+| v6 U-side (MBLA + P6) | yolo6 *_mbla + n6/s6/m6/l6 (8 variants) | No upstream Ultralytics yaml for these variants; structural blank. |
 | `[WKY-incompatible]` | yolo7 base/tiny/x + P6 | WongKinYiu/yolov7 (2022) `torch.load` checkpoint format breaks under modern torch 2.12 — `_pickle.UnpicklingError`. CHANGELOG 0.99.42. |
 | `[no-iMoon-TRT]` | yolo13 U FP16/INT8 | iMoon fork's `YOLO.export(format=engine)` blocked by PEP-668 + onnxslim pin. |
 | `[w=0]` / 1-ep Y leads | yolo8l/9m/10s-x/11x/12x at 1-ep | Ultralytics' Blackwell deadlock with `workers≥1`. CHANGELOG 0.99.13. |
