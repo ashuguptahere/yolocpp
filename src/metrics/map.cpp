@@ -4,6 +4,7 @@
 #include <cmath>
 #include <map>
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 namespace yolocpp::metrics {
@@ -20,24 +21,30 @@ double iou(const DetectionRow& d, const GroundTruthRow& g) {
   return inter / (ad + ag - inter + 1e-9);
 }
 
+// Build the image_id → indices-into-`gts` lookup. Invariant across IoU
+// thresholds, so the caller builds it once per class/gt-set and reuses it
+// across all 10 sweep thresholds (unordered_map: equality lookup only,
+// index vectors stay in insertion order).
+std::unordered_map<int, std::vector<size_t>>
+build_gts_by_img(const std::vector<GroundTruthRow>& gts) {
+  std::unordered_map<int, std::vector<size_t>> m;
+  m.reserve(gts.size());
+  for (size_t i = 0; i < gts.size(); ++i) m[gts[i].image_id].push_back(i);
+  return m;
+}
+
 // Compute AP at a single IoU threshold for a single class.
 //   class_dets and class_gts have already been filtered to one class.
-double compute_ap_class(std::vector<DetectionRow> class_dets,
+//   class_dets MUST already be sorted descending by conf, and gts_by_img
+//   MUST be prebuilt over class_gts (both invariant across thresholds) —
+//   the caller does that once per class/gt-set instead of ~41× here.
+double compute_ap_class(const std::vector<DetectionRow>& class_dets,
                         const std::vector<GroundTruthRow>& class_gts,
+                        const std::unordered_map<int, std::vector<size_t>>& gts_by_img,
                         double iou_thresh) {
   if (class_dets.empty()) return 0.0;
   if (class_gts.empty())  return 0.0;
 
-  // Sort by descending conf.
-  std::sort(class_dets.begin(), class_dets.end(),
-            [](const DetectionRow& a, const DetectionRow& b) {
-              return a.conf > b.conf;
-            });
-
-  // Group gts by image_id for fast lookup; track matched flags.
-  std::map<int, std::vector<size_t>> gts_by_img;
-  for (size_t i = 0; i < class_gts.size(); ++i)
-    gts_by_img[class_gts[i].image_id].push_back(i);
   std::vector<bool> matched(class_gts.size(), false);
 
   std::vector<int> tp(class_dets.size(), 0), fp(class_dets.size(), 0);
@@ -120,9 +127,17 @@ mAPResult compute_map(const std::vector<DetectionRow>& dets,
   for (int c = 0; c < nc; ++c) {
     if (gc[c].empty()) continue;
     n_active++;
-    double ap50  = compute_ap_class(dc[c], gc[c], 0.5);
+    // Sort dets + build the gt index ONCE per class; both are invariant
+    // across the 11 (ap50 + 10-sweep) calls below (and reused by the
+    // size-bucket loop, which only runs on these same sorted dc[c]).
+    std::sort(dc[c].begin(), dc[c].end(),
+              [](const DetectionRow& a, const DetectionRow& b) {
+                return a.conf > b.conf;
+              });
+    auto idx = build_gts_by_img(gc[c]);
+    double ap50  = compute_ap_class(dc[c], gc[c], idx, 0.5);
     double mean  = 0.0;
-    for (double t : ious) mean += compute_ap_class(dc[c], gc[c], t);
+    for (double t : ious) mean += compute_ap_class(dc[c], gc[c], idx, t);
     mean /= (double)ious.size();
     r.ap_per_class_50[c]    = ap50;
     r.ap_per_class_50_95[c] = mean;
@@ -165,9 +180,13 @@ mAPResult compute_map(const std::vector<DetectionRow>& dets,
       if (gs.empty()) continue;
       n_gt += (int)gs.size();
       double mean = 0.0;
-      // All same-class detections are passed in; ones that don't
-      // match an in-bucket GT become FPs (correct COCO semantics).
-      for (double t : ious) mean += compute_ap_class(dc[c], gs, t);
+      // dc[c] is already sorted (the main loop above ran for every class
+      // with a non-empty gc[c]; gs non-empty ⇒ gc[c] non-empty). Build the
+      // bucket-filtered gt index once, reuse across the 10 thresholds.
+      // Same-class dets that don't match an in-bucket GT become FPs
+      // (correct COCO semantics).
+      auto idx = build_gts_by_img(gs);
+      for (double t : ious) mean += compute_ap_class(dc[c], gs, idx, t);
       mean /= (double)ious.size();
       sum += mean;
       ++n_act;

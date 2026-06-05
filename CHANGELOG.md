@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.53] — 2026-06-05
+
+### Changed
+- **Perf — hoist invariant work out of the mAP IoU sweep** (`map.cpp`).
+  `compute_ap_class` took its det vector by value and re-sorted it +
+  rebuilt a `std::map` image-index on *every* call; `compute_map` calls
+  it ~41× per class (1 ap50 + 10 sweep + 30 size-bucket). Now each
+  class's dets are sorted once and the gt index is built once per gt-set
+  (full + s/m/l) and reused across thresholds, and the index is a
+  `std::unordered_map` (equality lookup only). Cuts per-class accounting
+  from ~41 sorts + 41 tree-builds to 1 sort + ~4 hash builds on the
+  per-epoch validation path. **Verified bit-identical**: yolo11n/coco8
+  mAP@0.5 0.870901 and mAP@0.5:0.95 0.590381 unchanged before/after;
+  ctest 39/39.
+
 ## [0.99.52] — 2026-06-05
 
 ### Added
