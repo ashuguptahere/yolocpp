@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.54] — 2026-06-05
+
+### Changed
+- **DRY + perf — shared `hsv_jitter` (#54E)** (`datasets/augment.{hpp,cpp}`).
+  The HSV-jitter augmentation was duplicated four times; YoloDataset used
+  the parity-correct 256-entry `cv::LUT` form while flat/coco/voc each
+  carried a slower **per-pixel scalar hue-wrap loop** over the full-res
+  image in float domain (and lacked the `lut_s[0]=0` pure-white rule).
+  Factored the canonical LUT implementation into one shared
+  `yolocpp::datasets::hsv_jitter` and deleted the three divergent copies.
+  flat/coco/voc augmentation is now both faster (one vectorized table
+  pass vs a scalar branch loop per pixel) and parity-aligned with the
+  primary loader (additive-wrap hue, `lut_s[0]=0`). YoloDataset behavior
+  is unchanged (its LUT was moved verbatim). ctest 39/39.
+
 ## [0.99.53] — 2026-06-05
 
 ### Changed

@@ -10,6 +10,8 @@
 
 #include "yolocpp/datasets/flat_dataset.hpp"
 
+#include "yolocpp/datasets/augment.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -63,39 +65,9 @@ std::vector<std::string> split_line(const std::string& line, char delim) {
   return out;
 }
 
-// HSV-jitter augmentation. Same shape as YoloDataset's helper —
-// duplicated here pending #54E factoring.
-void hsv_jitter(cv::Mat& bgr, std::mt19937& rng,
-                float h_amp, float s_amp, float v_amp) {
-  std::uniform_real_distribution<float> u(-1.f, 1.f);
-  float h = u(rng) * h_amp;
-  float s = u(rng) * s_amp;
-  float v = u(rng) * v_amp;
-  cv::Mat hsv;
-  cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
-  std::vector<cv::Mat> ch; cv::split(hsv, ch);
-  ch[0].convertTo(ch[0], CV_32F);
-  ch[1].convertTo(ch[1], CV_32F);
-  ch[2].convertTo(ch[2], CV_32F);
-  ch[0] = (ch[0] + h * 180.f);
-  cv::Mat mod = ch[0].clone();
-  for (int r = 0; r < mod.rows; ++r) {
-    auto* p = mod.ptr<float>(r);
-    for (int c = 0; c < mod.cols; ++c) {
-      float x = p[c]; while (x < 0)   x += 180.f;
-                       while (x >= 180) x -= 180.f;
-      p[c] = x;
-    }
-  }
-  ch[0] = mod;
-  ch[1] = cv::min(cv::max(ch[1] * (1.f + s), 0.f), 255.f);
-  ch[2] = cv::min(cv::max(ch[2] * (1.f + v), 0.f), 255.f);
-  ch[0].convertTo(ch[0], CV_8U);
-  ch[1].convertTo(ch[1], CV_8U);
-  ch[2].convertTo(ch[2], CV_8U);
-  cv::merge(ch, hsv);
-  cv::cvtColor(hsv, bgr, cv::COLOR_HSV2BGR);
-}
+// hsv_jitter now lives in datasets/augment.{hpp,cpp} (#54E) — the shared
+// LUT-based form, parity-correct with YoloDataset (replaces the old
+// float-domain per-pixel wrap loop).
 
 }  // namespace
 

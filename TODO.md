@@ -248,7 +248,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #54B | ✅ closed — `VocDataset` + `CocoDataset`. VOC reads `JPEGImages/Annotations/ImageSets`; XML via regex (no libxml2). COCO reads `instances_<split>.json` via a hand-rolled JSON tokenizer (no libjson per `DEPS.md`). Sparse COCO category IDs compressed to dense [0, N). Both yield the standard `YoloExample`. | — | landed | — |
 | #54C | ✅ closed — `metrics::mAPResult` extended with `map_50_95_{small,medium,large}` + `n_gt_*` counts. Three additional passes per call (COCO area buckets ≤32², ≤96², >96²). Surfaced through `cmd_val` to stdout + `runs/val/<stem>_results.txt`. Verified on coco8 (4/7/6 GT counts; mAP 0.06/0.37/0.88 on yolo11s). | — | landed | — |
 | #54D | ✅ closed — Mosaic-4 + Mixup in `YoloDataset::sample_batch`. `AugConfig::mosaic_p`/`mixup_p` (default 0). Mosaic stitches 4 sampled images at a random centre, crops to imgsz×imgsz, drops boxes that shrink to ≤1 px. Mixup blends with α~Beta(8,8) (8-sample uniform-ratio approximation). | — | landed | — |
-| #54E | (optional follow-up) Factor `letterbox + hsv_jitter + label-pixel-remap` shared between YoloDataset / FlatDataset / VocDataset / CocoDataset into one helper. ~80 lines duplicated 4× today; pending until a fifth loader makes it painful. | low | within #54 | — |
+| #54E | ✅ partial (0.99.54) — `hsv_jitter` factored into `datasets/augment.{hpp,cpp}`, shared by all four loaders; the three divergent float-domain copies (flat/coco/voc) deleted and replaced with the parity-correct LUT form. `letterbox + label-pixel-remap` sharing still pending (lower value). | low | within #54 | landed (hsv) |
 
 ### Group IV — feature add-ons (independent of one another; can land in any order after Group I)
 
