@@ -4,6 +4,32 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.56] — 2026-06-05
+
+### Changed
+- **Build — precompiled headers + ccache/PCH coexistence** (`CMakeLists.txt`).
+  Added `target_precompile_headers` for the heavy umbrella headers
+  (`torch/torch.h` + opencv core/imgproc/imgcodecs) on `yolocpp_core`,
+  behind `option(YOLOCPP_ENABLE_PCH ON)`. Measured on the heaviest TU
+  (`onnx_export.cpp`, 6592 lines, ccache disabled): **18.4s → 15.1s
+  (−18%)**; cold/CI builds benefit more (28 torch-including TUs each skip
+  the multi-second `torch/torch.h` parse). To stop PCH from disabling
+  ccache on warm rebuilds, the ccache launcher now injects
+  `CCACHE_SLOPPINESS=pch_defines,time_macros` via a `cmake -E env` wrapper.
+  No `.cu` sources in `yolocpp_core`, so PCH is safe. (Ninja generator was
+  already the configured default; ccache + mold already wired.)
+
+### Notes
+- `test_cross_backend_parity` currently fails on **v13/s only** (PT=5 vs
+  TRT-fp32=3 / fp16=4–5). Proven **pre-existing and orthogonal** to this
+  session: `git diff` shows `onnx_export.cpp` / `trt_export.cpp` /
+  `yolo13.cpp` byte-identical since before 0.99.49, and it reproduces with
+  PCH on *and* off. It was masked by a cached engine in
+  `build/parity_cache/` until that dir was externally cleared. fp16 is
+  build-nondeterministic (TRT tactic selection); fp32 is a deterministic
+  2-detection gap. Tracked for a separate v13 export-numerics pass; v8 /
+  v11 / v12 parity is clean.
+
 ## [0.99.55] — 2026-06-05
 
 ### Fixed

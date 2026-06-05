@@ -58,7 +58,13 @@ endif()
 #              if mold is missing; falls back to BFD if neither.
 find_program(CCACHE_PROGRAM ccache)
 if(CCACHE_PROGRAM)
-  set(CMAKE_CXX_COMPILER_LAUNCHER  "${CCACHE_PROGRAM}")
+  # Inject CCACHE_SLOPPINESS via a `cmake -E env` launcher wrapper so ccache
+  # can cache precompiled-header-using TUs. Without pch_defines/time_macros,
+  # ccache silently refuses to cache PCH'd compiles, which would regress the
+  # warm rebuild path the moment PCH is enabled (see YOLOCPP_ENABLE_PCH).
+  set(CMAKE_CXX_COMPILER_LAUNCHER
+      "${CMAKE_COMMAND}" -E env "CCACHE_SLOPPINESS=pch_defines,time_macros"
+      "${CCACHE_PROGRAM}")
   set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
   message(STATUS "ccache: ${CCACHE_PROGRAM} (compiler launcher wired)")
 endif()
@@ -228,6 +234,26 @@ target_link_libraries(yolocpp_core
     rapidyaml
 )
 target_compile_features(yolocpp_core PUBLIC cxx_std_20)
+
+# ---- Precompiled headers --------------------------------------------------
+# torch/torch.h is a multi-second-per-TU parse; PCH'ing it (plus the OpenCV
+# umbrella headers used across the loaders/predictors) once and reusing it
+# across the core TUs is the biggest cold-build / ccache-miss win after
+# ccache itself. Opt-in (default ON) so a ccache-warm dev loop can disable
+# it — PCH'd TUs are only ccache-cached when CCACHE_SLOPPINESS includes
+# `pch_defines,time_macros`, so on a warm tree without that env the plain
+# `-DYOLOCPP_ENABLE_PCH=OFF` path keeps ccache hits. No `.cu` sources live in
+# yolocpp_core, so PCH is safe here.
+option(YOLOCPP_ENABLE_PCH "Precompile heavy headers (torch/opencv)" ON)
+if(YOLOCPP_ENABLE_PCH)
+  target_precompile_headers(yolocpp_core PRIVATE
+    <torch/torch.h>
+    <opencv2/core.hpp>
+    <opencv2/imgproc.hpp>
+    <opencv2/imgcodecs.hpp>
+  )
+  message(STATUS "PCH: enabled (torch + opencv core/imgproc/imgcodecs)")
+endif()
 
 # ---- CLI executable -------------------------------------------------------
 add_executable(yolocpp src/cli/main.cpp)
