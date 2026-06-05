@@ -151,14 +151,21 @@ GpuLetterboxBatch gpu_letterbox_batch(const std::vector<cv::Mat>& bgrs,
     double pad_x = dw / 2.0, pad_y = dh / 2.0;
     lb.gain = r; lb.pad_x = pad_x; lb.pad_y = pad_y;
 
-    // Upload raw HWC uint8 → GPU → CHW float → interpolate → pad.
-    auto cpu_u8 = torch::from_blob(
+    // Upload raw HWC uint8 directly (cv::Mat data is HWC-contiguous, so this
+    // is a clean contiguous H2D with NO CPU transpose), then do the HWC→CHW
+    // permute + BGR→RGB flip + float cast + /255 entirely on the GPU. The old
+    // path did a per-image CPU permute().contiguous() before the upload —
+    // profiling showed that CPU transpose dominated gpu_letterbox.
+    TORCH_CHECK(src.isContinuous(), "gpu_letterbox: need continuous cv::Mat");
+    auto hwc_u8 = torch::from_blob(
                       src.data, {src.rows, src.cols, 3},
-                      torch::TensorOptions().dtype(torch::kUInt8));
-    auto chw_u8 = cpu_u8.permute({2, 0, 1}).contiguous();      // [3, H, W] BGR uint8 CPU
-    auto chw    = chw_u8.to(device).flip(0).to(torch::kFloat)  // [3, H, W] RGB float
+                      torch::TensorOptions().dtype(torch::kUInt8))
+                      .to(device, /*non_blocking=*/true);      // [H, W, 3] BGR uint8 GPU
+    auto chw    = hwc_u8.permute({2, 0, 1})                    // [3, H, W] BGR uint8 (view)
+                       .flip(0)                                // BGR → RGB
+                       .to(torch::kFloat)
                        .div_(255.0f)
-                       .unsqueeze(0);                          // [1, 3, H, W]
+                       .unsqueeze(0);                          // [1, 3, H, W] RGB float
     auto resized = F::interpolate(
         chw,
         F::InterpolateFuncOptions()

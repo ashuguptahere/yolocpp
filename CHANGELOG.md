@@ -4,6 +4,28 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.50] — 2026-06-05
+
+### Changed
+- **Perf — `gpu_letterbox_batch` drops the per-image CPU transpose**
+  (`letterbox.cpp`). `--profile` on the TRT path showed `gpu_letterbox`
+  was **46%** of yolo11n inference — more than the model forward. Root
+  cause: each image did a CPU-side `permute({2,0,1}).contiguous()`
+  (HWC→CHW transpose of the full-res image) *before* the H2D upload. Now
+  the raw HWC uint8 is uploaded directly (cv::Mat is HWC-contiguous → a
+  clean contiguous H2D) and the permute + BGR→RGB flip + float cast +
+  /255 run on the GPU. Measured on yolo11n / bus.jpg / b=16 (RTX 5090):
+
+  | phase / metric            | before    | after     |
+  |---------------------------|-----------|-----------|
+  | `gpu_letterbox` median    | 3.688 ms  | 1.944 ms  |
+  | TRT FP16 b=16 throughput  | 2356 img/s| 3086 img/s|
+  | TRT FP32 b=16 throughput  | 1759 img/s| 2175 img/s|
+
+  Output-invariant (det count unchanged; full ctest 39/39). The pipeline
+  rebalances so the model forward (`enqueueV3`, 48%) is again the
+  dominant cost, with letterbox 31% and NMS 19%.
+
 ## [0.99.49] — 2026-06-05
 
 Audit-driven fixes from a full 12-dimension engineering/perf/security
