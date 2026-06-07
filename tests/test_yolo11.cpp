@@ -23,6 +23,7 @@
 #include "yolocpp/inference/nms.hpp"
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
+#include "test_weights.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -61,8 +62,8 @@ int main() {
   };
 
   for (const auto& sp : scales) {
-    std::string pt = "data/yolo11" + sp.letter + ".pt";
-    std::cout << "[v11] === " << pt << " ===\n";
+    std::string pt = test::find_weight("yolo11" + sp.letter + ".pt");
+    std::cout << "[v11] === yolo11" << sp.letter << " ===\n";
 
     models::Yolo11Detect model(sp.scale, /*nc=*/80);
     long long got_params = count_params(*model);
@@ -71,14 +72,24 @@ int main() {
 
     long long diff = std::abs(got_params - sp.expected_params);
     EXPECT(diff < sp.expected_params / 50,  // ±2%
-           "param count too far from upstream published value for " + pt);
+           "param count too far from upstream published value for yolo11"
+               + sp.letter);
 
-    auto sd = serialization::load_state_dict(pt);
-    int copied = model->load_from_state_dict(sd.entries);
-    std::cout << "  loaded " << copied << " of " << sd.entries.size()
-              << " checkpoint tensors\n";
-    EXPECT(copied == (int)sd.entries.size(),
-           "did not consume the full state_dict for " + pt);
+    // Weights are optional here: the param-count + forward_eval shape
+    // checks below exercise the graph even on a random-init model. When
+    // the checkpoint is present we additionally verify a full state_dict
+    // load. SKIP (not fail) the load when the weight is absent.
+    if (pt.empty()) {
+      std::cout << "  SKIP load: no yolo11" << sp.letter
+                << ".pt in ./models or ./data\n";
+    } else {
+      auto sd = serialization::load_state_dict(pt);
+      int copied = model->load_from_state_dict(sd.entries);
+      std::cout << "  loaded " << copied << " of " << sd.entries.size()
+                << " checkpoint tensors\n";
+      EXPECT(copied == (int)sd.entries.size(),
+             "did not consume the full state_dict for yolo11" + sp.letter);
+    }
 
     auto dev = torch::cuda::is_available() ? torch::Device(torch::kCUDA)
                                             : torch::Device(torch::kCPU);
@@ -99,10 +110,12 @@ int main() {
   }
 
   // Detection-quality smoke test on bus.jpg with the n-scale weights.
-  {
+  if (std::string w = test::find_weight("yolo11n.pt"); w.empty()) {
+    std::cout << "[v11] SKIP bus.jpg smoke: no yolo11n.pt in ./models or ./data\n";
+  } else {
     std::cout << "[v11] === bus.jpg detection smoke ===\n";
     models::Yolo11Detect model(models::kYolo11n, /*nc=*/80);
-    auto sd = serialization::load_state_dict("data/yolo11n.pt");
+    auto sd = serialization::load_state_dict(w);
     model->load_from_state_dict(sd.entries);
     auto dev = torch::cuda::is_available() ? torch::Device(torch::kCUDA)
                                             : torch::Device(torch::kCPU);

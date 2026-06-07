@@ -44,7 +44,11 @@ LossOutput Yolo1Loss::operator()(const std::vector<torch::Tensor>& feats,
   const float inv_imgsz = 1.0f / (float)imgsz;
   TORCH_CHECK(feats.size() == 1,
               "Yolo1Loss expects 1 feature tensor, got ", feats.size());
-  auto flat = feats[0];   // [B, S·S·(B·5+nc)]
+  // Compute the v1 loss in fp32 even under bf16 autocast: the CPU
+  // accessor<float> loop below hard-requires float, and SSE accumulation
+  // is steadier in fp32. The cast is autograd-safe (grads flow back to
+  // the bf16 params) and a no-op when the output is already fp32.
+  auto flat = feats[0].to(torch::kFloat);   // [B, S·S·(B·5+nc)]
   const int B   = (int)flat.size(0);
   const int S   = cfg.S;
   const int Bx  = cfg.B;

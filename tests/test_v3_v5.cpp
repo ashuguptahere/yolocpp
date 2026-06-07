@@ -3,8 +3,10 @@
 
 #include <torch/torch.h>
 
+#include <filesystem>
 #include <iostream>
 #include <map>
+#include <string>
 
 #include "yolocpp/inference/predictor.hpp"
 #include "yolocpp/models/yolo3.hpp"
@@ -43,15 +45,37 @@ int main() {
     long long  expected_params_M_x10;  // expected param count × 10 (so 1.86M → 19)
   };
   V5Cfg v5cfgs[] = {
-      {"data/yolo5n.pt", models::kYolo5n, "n",  19},   //  1.9M
-      {"data/yolo5s.pt", models::kYolo5s, "s",  72},   //  7.2M
-      {"data/yolo5m.pt", models::kYolo5m, "m", 211},   // 21.1M
-      {"data/yolo5l.pt", models::kYolo5l, "l", 463},   // 46.3M
-      {"data/yolo5x.pt", models::kYolo5x, "x", 868},   // 86.8M
+      {"yolo5n.pt", models::kYolo5n, "n",  19},   //  1.9M
+      {"yolo5s.pt", models::kYolo5s, "s",  72},   //  7.2M
+      {"yolo5m.pt", models::kYolo5m, "m", 211},   // 21.1M
+      {"yolo5l.pt", models::kYolo5l, "l", 463},   // 46.3M
+      {"yolo5x.pt", models::kYolo5x, "x", 868},   // 86.8M
   };
+  namespace fs = std::filesystem;
+  // Weights now cache under ./models (the resolver's download dir); keep
+  // ./data as a legacy fallback. SKIP a scale (don't fail) when neither
+  // has it — matches the SKIP-on-missing-weights convention.
+  auto find_w = [](const char* base) -> std::string {
+    for (const char* dir : {"models/", "data/"}) {
+      fs::path p = std::string(dir) + base;
+      if (fs::exists(p)) return p.string();
+    }
+    return {};
+  };
+  if (!fs::exists("data/bus.jpg")) {
+    std::cout << "[v5] SKIP predict: data/bus.jpg missing\n";
+    std::cout << "=== v3 PASS (v5 skipped) ===\n";
+    return 0;
+  }
   for (const auto& cfg : v5cfgs) {
+    std::string w = find_w(cfg.path);
+    if (w.empty()) {
+      std::cout << "[v5" << cfg.name << "] SKIP: no " << cfg.path
+                << " in ./models or ./data\n";
+      continue;
+    }
     auto dets = inference::predict_v5_to_file(
-        cfg.path, "data/bus.jpg",
+        w, "data/bus.jpg",
         std::string("build/v5_test_bus_") + cfg.name + ".jpg",
         /*imgsz=*/640, /*device=*/"", /*nc=*/80, cfg.scale);
     EXPECT(dets.size() >= 4,

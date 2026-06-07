@@ -12,6 +12,7 @@
 #include <iostream>
 
 #include "yolocpp/engine/benchmark.hpp"
+#include "test_weights.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -19,8 +20,13 @@
   } while (0)
 
 int main() {
+  std::string w = yolocpp::test::find_weight("yolo8n.pt");
+  if (w.empty()) {
+    std::cout << "[benchmark] SKIP: no yolo8n.pt in ./models or ./data\n";
+    return 0;
+  }
   yolocpp::engine::BenchConfig cfg;
-  cfg.weights      = "data/yolo8n.pt";
+  cfg.weights      = w;
   cfg.source       = "data/bus.jpg";
   cfg.imgsz        = 640;
   cfg.warmup_iters = 5;

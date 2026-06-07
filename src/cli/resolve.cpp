@@ -107,9 +107,10 @@ bool looks_like_upstream_weight(const std::string& base) {
 }
 
 // Translate a canonical local name (yolo5n.pt, yolo8n-seg.pt, yolo11n.pt)
-// to the upstream filename. v3/v5/v8/v9/v10 are published as
-// `yolov<N>...pt`; v11/v26 ship without the 'v' (already canonical).
-// Returns the input unchanged if no transform is needed.
+// to the upstream filename. v3/v8/v9/v10 are published as
+// `yolov<N>...pt`; v5 only as the anchor-free `yolov5<scale>u.pt`;
+// v11+/v26 ship without the 'v' (already canonical). Returns the input
+// unchanged if no transform is needed.
 std::string upstream_basename(const std::string& base) {
   static const std::regex re(R"(^yolo([0-9]+)(.*)$)");
   std::smatch m;
@@ -119,6 +120,17 @@ std::string upstream_basename(const std::string& base) {
   // Upstream uses "yolov<N>" for v3..v10 and "yolo<N>" for v11+.
   int n = std::stoi(num);
   if (n >= 11) return base;        // already canonical upstream
+  if (n == 5) {
+    // Ultralytics publishes v5 only as the anchor-free "u" form
+    // (`yolov5<scale>u.pt`); our DFL/anchor-free v5 head loads it
+    // directly. The classic anchor-based `yolov5<scale>.pt` is absent
+    // from the assets release (404), so splice the 'u' in before the
+    // extension.
+    auto dot = rest.rfind('.');
+    std::string stem = (dot == std::string::npos) ? rest : rest.substr(0, dot);
+    std::string ext  = (dot == std::string::npos) ? "" : rest.substr(dot);
+    return "yolov5" + stem + "u" + ext;
+  }
   return "yolov" + num + rest;     // re-insert the 'v'
 }
 

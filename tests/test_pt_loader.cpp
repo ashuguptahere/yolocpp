@@ -10,6 +10,7 @@
 
 #include "yolocpp/models/yolo8.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
+#include "test_weights.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -20,7 +21,11 @@
   } while (0)
 
 int main() {
-  const std::string pt_path = "data/yolo8n.pt";
+  const std::string pt_path = yolocpp::test::find_weight("yolo8n.pt");
+  if (pt_path.empty()) {
+    std::cout << "[pt-loader] SKIP: no yolo8n.pt in ./models or ./data\n";
+    return 0;
+  }
   std::cout << "[load] reading " << pt_path << "\n";
   auto sd = yolocpp::serialization::load_state_dict(pt_path);
   std::cout << "[load] state_dict has " << sd.size() << " entries\n";

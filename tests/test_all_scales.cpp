@@ -9,6 +9,7 @@
 
 #include "yolocpp/inference/predictor.hpp"
 #include "yolocpp/models/yolo8.hpp"
+#include "test_weights.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -26,16 +27,24 @@ int main() {
   };
 
   Cfg cfgs[] = {
-      {"data/yolo8n.pt", models::kYolo8n, "n",  3157184},
-      {"data/yolo8s.pt", models::kYolo8s, "s", 11166560},
-      {"data/yolo8m.pt", models::kYolo8m, "m", 25902640},
-      {"data/yolo8l.pt", models::kYolo8l, "l", 43691520},
-      {"data/yolo8x.pt", models::kYolo8x, "x", 68229648},
+      {"yolo8n.pt", models::kYolo8n, "n",  3157184},
+      {"yolo8s.pt", models::kYolo8s, "s", 11166560},
+      {"yolo8m.pt", models::kYolo8m, "m", 25902640},
+      {"yolo8l.pt", models::kYolo8l, "l", 43691520},
+      {"yolo8x.pt", models::kYolo8x, "x", 68229648},
   };
 
+  int ran = 0;
   for (const auto& c : cfgs) {
-    std::cout << "[scale " << c.name << "] loading " << c.path << "...\n";
-    inference::Predictor p(c.path, /*imgsz=*/640, /*device=*/"", /*nc=*/80, c.scale);
+    std::string w = test::find_weight(c.path);
+    if (w.empty()) {
+      std::cout << "[scale " << c.name << "] SKIP: no " << c.path
+                << " in ./models or ./data\n";
+      continue;
+    }
+    ++ran;
+    std::cout << "[scale " << c.name << "] loading " << w << "...\n";
+    inference::Predictor p(w, /*imgsz=*/640, /*device=*/"", /*nc=*/80, c.scale);
 
     long long params = 0;
     for (auto& t : p.model()->parameters()) params += t.numel();
@@ -60,6 +69,7 @@ int main() {
     EXPECT(by_class["bus"]    >= 1, "expected ≥ 1 bus");
   }
 
-  std::cout << "=== all 5 scales PASS ===\n";
+  std::cout << "=== " << ran << "/5 scales PASS"
+            << (ran < 5 ? " (rest skipped — weights absent)" : "") << " ===\n";
   return 0;
 }

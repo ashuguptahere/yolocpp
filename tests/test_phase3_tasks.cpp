@@ -4,8 +4,10 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <iostream>
+#include <string>
 
 #include "yolocpp/inference/task_predictors.hpp"
+#include "test_weights.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -18,9 +20,13 @@ int main() {
   cv::Mat img = cv::imread("data/bus.jpg", cv::IMREAD_COLOR);
   EXPECT(!img.empty(), "could not load bus.jpg");
 
+  using yolocpp::test::find_weight;
+
   // ─── classify ─────────────────────────────────────────────────────────
-  {
-    ClassifyPredictor p("data/yolo8n-cls.pt", /*imgsz=*/224);
+  if (std::string w = find_weight("yolo8n-cls.pt"); w.empty()) {
+    std::cout << "[cls] SKIP: no yolo8n-cls.pt in ./models or ./data\n";
+  } else {
+    ClassifyPredictor p(w, /*imgsz=*/224);
     auto r = p.predict(img, /*top_k=*/5);
     std::cout << "[cls] top-5:";
     for (auto& [cid, prob] : r.topk)
@@ -36,8 +42,10 @@ int main() {
   }
 
   // ─── segment ──────────────────────────────────────────────────────────
-  {
-    SegmentPredictor p("data/yolo8n-seg.pt", /*imgsz=*/640);
+  if (std::string w = find_weight("yolo8n-seg.pt"); w.empty()) {
+    std::cout << "[seg] SKIP: no yolo8n-seg.pt in ./models or ./data\n";
+  } else {
+    SegmentPredictor p(w, /*imgsz=*/640);
     auto insts = p.predict_to_file("data/bus.jpg", "build/seg_bus.jpg");
     std::cout << "[seg] " << insts.size() << " instances\n";
     EXPECT(insts.size() >= 4, "expected ≥ 4 segmented instances on bus.jpg");
@@ -48,8 +56,10 @@ int main() {
   }
 
   // ─── pose ─────────────────────────────────────────────────────────────
-  {
-    PosePredictor p("data/yolo8n-pose.pt", /*imgsz=*/640);
+  if (std::string w = find_weight("yolo8n-pose.pt"); w.empty()) {
+    std::cout << "[pose] SKIP: no yolo8n-pose.pt in ./models or ./data\n";
+  } else {
+    PosePredictor p(w, /*imgsz=*/640);
     auto insts = p.predict_to_file("data/bus.jpg", "build/pose_bus.jpg");
     std::cout << "[pose] " << insts.size() << " people\n";
     EXPECT(insts.size() >= 1, "expected ≥ 1 person on bus.jpg");
@@ -60,8 +70,10 @@ int main() {
   // ─── OBB ──────────────────────────────────────────────────────────────
   // bus.jpg isn't aerial DOTA imagery — we just verify the pipeline runs
   // without crashing and produces some valid (cx,cy,w,h,angle) output.
-  {
-    OBBPredictor p("data/yolo8n-obb.pt", /*imgsz=*/640);
+  if (std::string w = find_weight("yolo8n-obb.pt"); w.empty()) {
+    std::cout << "[obb] SKIP: no yolo8n-obb.pt in ./models or ./data\n";
+  } else {
+    OBBPredictor p(w, /*imgsz=*/640);
     auto insts = p.predict_to_file("data/bus.jpg", "build/obb_bus.jpg",
                                    /*conf=*/{ .conf_thresh = 0.05f });
     std::cout << "[obb] " << insts.size() << " rotated boxes\n";

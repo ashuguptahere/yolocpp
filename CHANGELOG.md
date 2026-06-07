@@ -4,6 +4,47 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.68] — 2026-06-07
+
+### Fixed
+- **v5 weight resolver 404** (`resolve.cpp`). `upstream_basename` emitted
+  `yolov5<scale>.pt`, which the `ultralytics/assets` release does not publish
+  (404) — Ultralytics ships v5 only as the anchor-free **u-form**
+  (`yolov5<scale>u.pt`), which our DFL v5 head loads directly (427 tensors,
+  clean predict). The bare basename now splices the `u` in before the
+  extension. Exposed by the clean delete-all-then-redownload sweep: every v5
+  variant had been silently falling back to random-init → near-zero 1-epoch
+  mAP. n/s/m/l/x all download + load + detect now.
+- **v1 training crash under bf16 autocast** (`yolo1_loss.cpp`). The loss reads
+  model predictions through a CPU `accessor<float,4>` host loop; under bf16
+  AMP the forward output is BFloat16, so the accessor threw *"expected scalar
+  type Float but found BFloat16"* on the first batch. The v1 loss now casts the
+  flattened head output to fp32 at entry (autograd-safe; grads still flow to the
+  bf16 params; no-op when already fp32) so SSE accumulation and the accessor
+  loop run in float. yolo1 trains from scratch end-to-end again.
+- **8 weight-gated tests aborted after the `models/` move** (`test_pt_loader`,
+  `test_predict`, `test_trt_export`, `test_benchmark`, `test_phase3_tasks`,
+  `test_all_scales`, `test_yolo11`, `test_v3_v5`). They hard-coded
+  `data/<weight>.pt`; with weights now under `./models` (and `data/*.pt`
+  deleted) `torch::load` aborted on a missing file. New shared
+  `tests/test_weights.hpp::find_weight()` resolves `models/` → `data/` and
+  returns "" so each now SKIPs (a pass) on absent weights — matching the
+  suite-wide convention. Full ctest back to 39/39.
+
+### Added
+- **`scripts/train_metrics_sweep.sh`** — 1-epoch training-metrics sweep over the
+  canonical 60 (version, variant) cells on the screen-detection dataset. Records
+  mAP@0.5 / mAP@0.5:0.95 / P / R / F1 from the trainer's val line plus peak
+  CPU% / RSS / VRAM (`/usr/bin/time -v` + a 1 Hz `nvidia-smi` sampler) to a
+  per-variant CSV. Weights resolve + download into `./models/` (source URL
+  printed).
+- **`scripts/build_train_delta.sh`** — joins a fresh sweep CSV against the
+  yolocpp baseline columns in `docs/data/training.csv` and emits a delta CSV
+  (new / baseline / Δ for each of mAP50 / mAP / P / R / F1 / CPU% / RSS / VRAM).
+  Maps `yolo3u`→`yolo3`; variants absent from the baseline (yolo1/2/4) are
+  flagged `new`.
+- **`.gitignore`**: `models/` and `*.weights` (download cache — never committed).
+
 ## [0.99.67] — 2026-06-07
 
 ### Added

@@ -7,6 +7,7 @@
 #include <string>
 
 #include "yolocpp/inference/predictor.hpp"
+#include "test_weights.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -16,7 +17,12 @@
 int main() {
   using namespace yolocpp::inference;
 
-  Predictor pred("data/yolo8n.pt", /*imgsz=*/640);
+  std::string w = yolocpp::test::find_weight("yolo8n.pt");
+  if (w.empty()) {
+    std::cout << "[predict] SKIP: no yolo8n.pt in ./models or ./data\n";
+    return 0;
+  }
+  Predictor pred(w, /*imgsz=*/640);
   auto dets = pred.predict_to_file("data/bus.jpg",
                                    "build/predict_output.jpg", {});
   std::cout << "[predict] detections: " << dets.size() << "\n";

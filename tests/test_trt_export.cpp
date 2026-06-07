@@ -23,6 +23,7 @@
 #include "yolocpp/serialization/onnx_export.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
 #include "yolocpp/serialization/trt_export.hpp"
+#include "test_weights.hpp"
 
 #define EXPECT(cond, msg)                                          \
   do {                                                             \
@@ -32,7 +33,11 @@
 int main() {
   using namespace yolocpp;
 
-  const std::string pt   = "data/yolo8n.pt";
+  const std::string pt   = test::find_weight("yolo8n.pt");
+  if (pt.empty()) {
+    std::cout << "[trt-test] SKIP: no yolo8n.pt in ./models or ./data\n";
+    return 0;
+  }
   const std::string img  = "data/bus.jpg";
   const std::string onnx = "build/yolo8n.test.onnx";
   const std::string trt  = "build/yolo8n.test.trt";

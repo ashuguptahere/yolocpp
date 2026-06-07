@@ -23,7 +23,9 @@ third_party/rapidyaml/
 
 coco8/
 data/
+models/
 *.pt
+*.weights
 runs/
 .claude/
 # Pickled checkpoints (`.pt` already covered above; cover `.pth` too).
