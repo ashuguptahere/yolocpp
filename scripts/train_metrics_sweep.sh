@@ -23,9 +23,17 @@ CSV="${OUT}/metrics.csv"
 echo "variant,mAP50,mAP,P,R,F1,CPU_pct,RSS_GB,VRAM_MB,batch,train_sec,status" > "$CSV"
 echo "[sweep] output → $OUT"
 
-# Reuse the canonical 60-variant list from screen_train_sweep.sh (no dup).
-mapfile -t VARIANTS < <(sed -n '/VARIANTS=(/,/^)/p' scripts/screen_train_sweep.sh \
-  | grep -E '^[[:space:]]*"' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+# Variant list: an explicit "name weights batch" file via $VARIANTS_FILE
+# (one variant per line; '#'/blank lines skipped), else the canonical 60 from
+# screen_train_sweep.sh (no dup). The file form lets a caller pin per-variant
+# batches — e.g. to match a prior baseline's batch_train column.
+if [ -n "${VARIANTS_FILE:-}" ] && [ -f "$VARIANTS_FILE" ]; then
+  mapfile -t VARIANTS < <(grep -vE '^[[:space:]]*(#|$)' "$VARIANTS_FILE")
+  echo "[sweep] variant list ← $VARIANTS_FILE"
+else
+  mapfile -t VARIANTS < <(sed -n '/VARIANTS=(/,/^)/p' scripts/screen_train_sweep.sh \
+    | grep -E '^[[:space:]]*"' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+fi
 echo "[sweep] ${#VARIANTS[@]} variants, 1 epoch each on $(basename "$(dirname "$DATA")")"
 
 run_one() {
@@ -36,11 +44,27 @@ run_one() {
   # Peak-VRAM sampler (1 Hz) for the duration of this variant's training.
   ( while :; do nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits \
         2>/dev/null >> "$vramf"; sleep 1; done ) & local sampler=$!
-  local t0; t0=$(date +%s)
-  /usr/bin/time -v -o "$timef" timeout 1200 "$BIN" --mode train -m "$weights" -d "$DATA" \
-      --epochs 1 --batch "$batch" --imgsz 640 --seed 42 --save "$save" > "$tlog" 2>&1
-  local rc=$?
-  local t1; t1=$(date +%s)
+  # Train at the requested batch; on a CUDA OOM, halve and retry (floor 2).
+  # The VRAM file and the wall-clock window are reset each attempt so the
+  # recorded peak-VRAM / train_sec belong to the final (successful) run, not
+  # to an OOM-aborted attempt that briefly spiked to the card's ceiling.
+  local cur_batch="$batch" rc=0 note="" t0 t1
+  while :; do
+    : > "$vramf"
+    t0=$(date +%s)
+    /usr/bin/time -v -o "$timef" timeout 1200 "$BIN" --mode train -m "$weights" -d "$DATA" \
+        --epochs 1 --batch "$cur_batch" --imgsz 640 --seed 42 --save "$save" > "$tlog" 2>&1
+    rc=$?
+    t1=$(date +%s)
+    if [ "$rc" -ne 0 ] && [ "$cur_batch" -gt 2 ] \
+       && grep -qiE 'out of memory|CUDA error|CUBLAS|cuda runtime error|CUDA out of memory' "$tlog"; then
+      cur_batch=$(( cur_batch / 2 )); note="oom-b${cur_batch}"
+      printf '  [oom] %s → retry at batch=%s\n' "$name" "$cur_batch"
+      continue
+    fi
+    break
+  done
+  batch="$cur_batch"
   kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null
 
   local vline; vline=$(grep -E '\[trainer\] val:' "$tlog" | tail -1)
@@ -58,7 +82,8 @@ run_one() {
   vram=$(sort -n "$vramf" 2>/dev/null | tail -1)
 
   local status=ok
-  [ "$rc" -ne 0 ] && status="rc=${rc}"
+  [ -n "$note" ] && status="ok:${note}"
+  [ "$rc" -ne 0 ] && status="rc=${rc}${note:+:$note}"
   echo "${name},${map50},${map},${p},${r},${f1},${cpu},${rss_gb},${vram},${batch},$((t1-t0)),${status}" >> "$CSV"
   printf '[%-12s] mAP50=%-7s mAP=%-7s P=%-7s R=%-7s | CPU=%s%% RSS=%sG VRAM=%sM | %ss rc=%s\n' \
       "$name" "${map50:-NA}" "${map:-NA}" "${p:-NA}" "${r:-NA}" "${cpu:-NA}" "${rss_gb:-NA}" "${vram:-NA}" "$((t1-t0))" "$rc"

@@ -4,6 +4,19 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.70] — 2026-06-07
+
+### Added
+- **`train_metrics_sweep.sh`: explicit variant-list + CUDA-OOM resilience.**
+  A `VARIANTS_FILE` env var supplies an explicit `name weights batch` list (one
+  per line) so a caller can pin per-variant batches — used to match a prior
+  baseline's `batch_train`. Each variant now trains at its requested batch and,
+  on a CUDA OOM, halves the batch and retries (floor 2); the peak-VRAM file and
+  wall-clock window reset per attempt so the recorded numbers belong to the
+  successful run, and the CSV `status` is annotated `ok:oom-b<N>` when a retry
+  was needed. Lets the batch-16 (baseline-matched) re-run complete even if a
+  near-32 GB x-scale variant can't hold batch 16 on the 5090.
+
 ## [0.99.69] — 2026-06-07
 
 ### Added
