@@ -34,6 +34,17 @@ fs::path home_cache() {
   return p / ".cache" / "yolocpp";
 }
 
+// Canonical local model directory. The resolver searches it and lands all
+// downloads here. Defaults to ./models (repo-relative); override with
+// YOLOCPP_MODELS_DIR. Created on demand.
+fs::path models_dir() {
+  const char* env = std::getenv("YOLOCPP_MODELS_DIR");
+  fs::path p = (env && env[0]) ? fs::path(env) : (fs::current_path() / "models");
+  std::error_code ec;
+  fs::create_directories(p, ec);
+  return p;
+}
+
 // Wrap a string in single quotes for safe interpolation into a /bin/sh
 // command, escaping any embedded single quote as '\'' . The URL and paths
 // reaching run_curl/run_unzip are user-controlled (--dataset / --model), so
@@ -131,7 +142,7 @@ std::string resolve_weights(const std::string& spec) {
       std::vector<fs::path> roots = {
           fs::current_path() / "data" / wname,
           fs::current_path() / wname,
-          home_cache() / "weights" / wname,
+          models_dir() / wname,
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
@@ -161,13 +172,13 @@ std::string resolve_weights(const std::string& spec) {
     std::string ours    = "yolo6"  + letter + ".pt";
     std::string upstream = "yolov6" + letter + ".pt";
     if (base != ours && base != upstream) continue;
-    fs::path target = home_cache() / "weights" / ours;
+    fs::path target = models_dir() / ours;
     if (fs::exists(target)) return target.string();
     auto try_v6_convert = [&](const fs::path& pt_target) -> bool {
       std::vector<fs::path> roots = {
           fs::current_path() / "data" / upstream,
           fs::current_path() / upstream,
-          home_cache() / "weights" / upstream,
+          models_dir() / upstream,
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
@@ -184,7 +195,7 @@ std::string resolve_weights(const std::string& spec) {
       return false;
     };
     if (try_v6_convert(target)) return target.string();
-    fs::path wsrc = home_cache() / "weights" / upstream;
+    fs::path wsrc = models_dir() / upstream;
     const std::string url =
         "https://github.com/meituan/YOLOv6/releases/download/0.4.0/" + upstream;
     if (run_curl(url, wsrc) && try_v6_convert(target)) {
@@ -206,14 +217,14 @@ std::string resolve_weights(const std::string& spec) {
            {"yolo7-d6.pt",    "yolov7-d6.pt"},
            {"yolo7-e6e.pt",   "yolov7-e6e.pt"}}) {
     if (base != pair.first && base != pair.second) continue;
-    fs::path target = home_cache() / "weights" / pair.first;
+    fs::path target = models_dir() / pair.first;
     if (fs::exists(target)) return target.string();
     auto upstream = pair.second;
     auto try_v7_convert = [&](const fs::path& pt_target) -> bool {
       std::vector<fs::path> roots = {
           fs::current_path() / "data" / upstream,
           fs::current_path() / upstream,
-          home_cache() / "weights" / upstream,
+          models_dir() / upstream,
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
@@ -230,7 +241,7 @@ std::string resolve_weights(const std::string& spec) {
       return false;
     };
     if (try_v7_convert(target)) return target.string();
-    fs::path wsrc = home_cache() / "weights" / upstream;
+    fs::path wsrc = models_dir() / upstream;
     const std::string url =
         "https://github.com/WongKinYiu/yolov7/releases/download/v0.1/" + upstream;
     if (run_curl(url, wsrc) && try_v7_convert(target)) {
@@ -248,13 +259,13 @@ std::string resolve_weights(const std::string& spec) {
     bool match = (base == ours || base == upstream)
                   || (letter == "c" && base == "yolo9.pt");
     if (!match) continue;
-    fs::path target = home_cache() / "weights" / ours;
+    fs::path target = models_dir() / ours;
     if (fs::exists(target)) return target.string();
     auto try_v9_convert = [&](const fs::path& pt_target) -> bool {
       std::vector<fs::path> roots = {
           fs::current_path() / "data" / upstream,
           fs::current_path() / upstream,
-          home_cache() / "weights" / upstream,
+          models_dir() / upstream,
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
@@ -271,7 +282,7 @@ std::string resolve_weights(const std::string& spec) {
       return false;
     };
     if (try_v9_convert(target)) return target.string();
-    fs::path wsrc = home_cache() / "weights" / upstream;
+    fs::path wsrc = models_dir() / upstream;
     const std::string url =
         "https://github.com/ultralytics/assets/releases/download/v8.3.0/" + upstream;
     if (run_curl(url, wsrc) && try_v9_convert(target)) {
@@ -301,14 +312,14 @@ std::string resolve_weights(const std::string& spec) {
       // Target is yolo10<L>.pt in cache (or yolo10.pt for the historical n alias).
       std::string tgt_base =
           (base == "yolo10.pt") ? "yolo10.pt" : ("yolo10" + letter + ".pt");
-      fs::path target = home_cache() / "weights" / tgt_base;
+      fs::path target = models_dir() / tgt_base;
       if (fs::exists(target)) return target.string();
       std::string upstream_base = "yolov10" + letter + ".pt";
       auto try_v10_convert = [&](const fs::path& pt_target) -> bool {
         std::vector<fs::path> roots = {
             fs::current_path() / "data" / upstream_base,
             fs::current_path() / upstream_base,
-            home_cache() / "weights" / upstream_base,
+            models_dir() / upstream_base,
         };
         for (const auto& w : roots) {
           if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
@@ -325,7 +336,7 @@ std::string resolve_weights(const std::string& spec) {
         return false;
       };
       if (try_v10_convert(target)) return target.string();
-      fs::path wsrc = home_cache() / "weights" / upstream_base;
+      fs::path wsrc = models_dir() / upstream_base;
       const std::string url =
           "https://github.com/ultralytics/assets/releases/download/v8.3.0/" +
           upstream_base;
@@ -355,11 +366,11 @@ std::string resolve_weights(const std::string& spec) {
       for (const fs::path& c : {fs::current_path() / "data" / our_base,
                                 fs::current_path() / "data" / upstream_base,
                                 fs::current_path() / our_base,
-                                home_cache() / "weights" / our_base}) {
+                                models_dir() / our_base}) {
         if (fs::exists(c) && fs::is_regular_file(c)) return c.string();
       }
       // Download from the iMoonLab release into the cache under our name.
-      fs::path target = home_cache() / "weights" / our_base;
+      fs::path target = models_dir() / our_base;
       const std::string url =
           "https://github.com/iMoonLab/yolov13/releases/download/yolov13/" +
           upstream_base;
@@ -370,13 +381,13 @@ std::string resolve_weights(const std::string& spec) {
   // 2f) yolo3.pt — convert from upstream yolov3u.pt (anchor-free
   // v3 with v8-style head). No fusion needed — fp16→fp32 cast only.
   if (base == "yolo3.pt" || base == "yolov3u.pt" || base == "yolov3.pt") {
-    fs::path target = home_cache() / "weights" / "yolo3.pt";
+    fs::path target = models_dir() / "yolo3.pt";
     if (fs::exists(target)) return target.string();
     auto try_v3_convert = [&](const fs::path& pt_target) -> bool {
       std::vector<fs::path> roots = {
           fs::current_path() / "data" / "yolov3u.pt",
           fs::current_path() / "yolov3u.pt",
-          home_cache() / "weights" / "yolov3u.pt",
+          models_dir() / "yolov3u.pt",
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
@@ -393,7 +404,7 @@ std::string resolve_weights(const std::string& spec) {
       return false;
     };
     if (try_v3_convert(target)) return target.string();
-    fs::path wsrc = home_cache() / "weights" / "yolov3u.pt";
+    fs::path wsrc = models_dir() / "yolov3u.pt";
     const std::string url =
         "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov3u.pt";
     if (run_curl(url, wsrc) && try_v3_convert(target)) {
@@ -402,11 +413,11 @@ std::string resolve_weights(const std::string& spec) {
   }
 
   if (base == "yolo4.pt" || base == "yolov4.pt") {
-    fs::path target = home_cache() / "weights" / "yolo4.pt";
+    fs::path target = models_dir() / "yolo4.pt";
     if (fs::exists(target)) return target.string();
     if (try_v4_convert(target)) return target.string();
     // No local .weights — try downloading from AlexeyAB and converting.
-    fs::path wsrc = home_cache() / "weights" / "yolov4.weights";
+    fs::path wsrc = models_dir() / "yolov4.weights";
     const std::string url =
         "https://github.com/AlexeyAB/darknet/releases/download/yolov4/yolov4.weights";
     if (run_curl(url, wsrc) && try_v4_convert(target)) {
@@ -420,7 +431,7 @@ std::string resolve_weights(const std::string& spec) {
   if (base == "yolo1.pt" || base == "yolov1.pt" ||
       base == "yolo1-tiny.pt" || base == "yolov1-tiny.pt") {
     const bool tiny = (base.find("tiny") != std::string::npos);
-    fs::path target = home_cache() / "weights" /
+    fs::path target = models_dir() /
                        (tiny ? "yolo1-tiny.pt" : "yolo1.pt");
     if (fs::exists(target)) return target.string();
     const std::string wname = tiny ? "yolov1-tiny.weights" : "yolov1.weights";
@@ -428,7 +439,7 @@ std::string resolve_weights(const std::string& spec) {
       std::vector<fs::path> roots = {
           fs::current_path() / "data" / wname,
           fs::current_path() / wname,
-          home_cache() / "weights" / wname,
+          models_dir() / wname,
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
@@ -446,7 +457,7 @@ std::string resolve_weights(const std::string& spec) {
       return false;
     };
     if (try_v1_convert(target)) return target.string();
-    fs::path wsrc = home_cache() / "weights" / wname;
+    fs::path wsrc = models_dir() / wname;
     const std::string url = "https://pjreddie.com/media/files/" + wname;
     if (run_curl(url, wsrc) && try_v1_convert(target)) {
       return target.string();
@@ -475,13 +486,13 @@ std::string resolve_weights(const std::string& spec) {
       std::string our_canonical = (ours.rfind("yolov", 0) == 0)
                                        ? ("yolo" + ours.substr(5))
                                        : ours;
-      fs::path target = home_cache() / "weights" / our_canonical;
+      fs::path target = models_dir() / our_canonical;
       if (fs::exists(target)) return target.string();
       auto try_v2_convert = [&](const fs::path& pt_target) -> bool {
         std::vector<fs::path> roots = {
             fs::current_path() / "data" / wname,
             fs::current_path() / wname,
-            home_cache() / "weights" / wname,
+            models_dir() / wname,
         };
         for (const auto& w : roots) {
           if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
@@ -499,7 +510,7 @@ std::string resolve_weights(const std::string& spec) {
         return false;
       };
       if (try_v2_convert(target)) return target.string();
-      fs::path wsrc = home_cache() / "weights" / wname;
+      fs::path wsrc = models_dir() / wname;
       const std::string url = "https://pjreddie.com/media/files/" + wname;
       if (run_curl(url, wsrc) && try_v2_convert(target)) {
         return target.string();
@@ -512,7 +523,7 @@ std::string resolve_weights(const std::string& spec) {
   std::vector<fs::path> candidates = {
       fs::current_path() / "data" / base,
       fs::current_path() / base,
-      home_cache() / "weights" / base,
+      models_dir() / base,
   };
   for (const auto& c : candidates) {
     if (fs::exists(c) && fs::is_regular_file(c)) return c.string();
@@ -523,7 +534,7 @@ std::string resolve_weights(const std::string& spec) {
   //    upstream still publishes v3..v10 as `yolov<N>...pt`, so we fetch
   //    from the v-prefixed URL and save under the canonical name.
   if (looks_like_upstream_weight(base)) {
-    auto target = home_cache() / "weights" / base;
+    auto target = models_dir() / base;
     std::string upstream = upstream_basename(base);
     // v26 lives in the v8.4.0 asset release; everything else in v8.3.0.
     std::string base_url = kAssetBase;

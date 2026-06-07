@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.67] — 2026-06-07
+
+### Added
+- **`models/` directory convention** (`resolve.cpp`). The resolver now searches
+  and downloads weights into `./models/` (override via `YOLOCPP_MODELS_DIR`)
+  instead of `~/.cache/yolocpp/weights` — all 28 weight cache/download sites
+  redirected to a new `models_dir()`. Bare names (`yolo8n.pt`) resolve there;
+  the source URL is printed (`[download] <url>`) whenever a model isn't present
+  locally and is fetched. `data/` remains a search fallback.
+- **val reports precision / recall / F1** (`map.cpp`, `commands.cpp`,
+  `version_adapter.hpp`). `mAPResult` gains `precision`/`recall`/`f1`, computed
+  in `compute_map` as the mean over classes at the max-mean-F1 confidence (the
+  scalar P/R/F1 Ultralytics reports, from the IoU=0.5 PR curves). `--mode val`
+  now prints them alongside mAP@0.5 / mAP@0.5:0.95.
+
 ## [0.99.66] — 2026-06-05
 
 ### Fixed

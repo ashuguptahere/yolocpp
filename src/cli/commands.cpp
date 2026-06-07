@@ -286,6 +286,9 @@ int cmd_val(const std::string& weights, const std::string& root,
     auto r = adapter->run_val(weights, scale_s, nc, ds, torch_dev);
     std::cout << "mAP@0.5      = " << r.map_50    << "\n"
               << "mAP@0.5:0.95 = " << r.map_50_95 << "\n"
+              << "precision    = " << r.precision << "\n"
+              << "recall       = " << r.recall    << "\n"
+              << "F1           = " << r.f1         << "\n"
               << "  small  (n_gt=" << r.n_gt_small  << "): "
               << r.map_50_95_small  << "\n"
               << "  medium (n_gt=" << r.n_gt_medium << "): "
@@ -300,7 +303,10 @@ int cmd_val(const std::string& weights, const std::string& root,
                                    parse_scale(scale_s));
   auto res = yolocpp::engine::validate(p.model(), ds, p.device());
   std::cout << "mAP@0.5      = " << res.map_50    << "\n"
-            << "mAP@0.5:0.95 = " << res.map_50_95 << "\n";
+            << "mAP@0.5:0.95 = " << res.map_50_95 << "\n"
+            << "precision    = " << res.precision << "\n"
+            << "recall       = " << res.recall    << "\n"
+            << "F1           = " << res.f1         << "\n";
   write_val_results(weights, root, imgsz, res.map_50, res.map_50_95);
   return 0;
 }

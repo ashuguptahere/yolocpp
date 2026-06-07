@@ -133,6 +133,9 @@ struct VersionAdapter {
     int    n_gt_small  = 0;
     int    n_gt_medium = 0;
     int    n_gt_large  = 0;
+    double precision   = 0.0;
+    double recall      = 0.0;
+    double f1          = 0.0;
   };
   std::function<ValResult(const std::string& weights,
                           const std::string& scale,

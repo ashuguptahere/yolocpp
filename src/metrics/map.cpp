@@ -199,6 +199,33 @@ mAPResult compute_map(const std::vector<DetectionRow>& dets,
   r.map_50_95_small  = m_s; r.n_gt_small  = n_s;
   r.map_50_95_medium = m_m; r.n_gt_medium = n_m;
   r.map_50_95_large  = m_l; r.n_gt_large  = n_l;
+
+  // Single-point P/R/F1 at the max-mean-F1 confidence (IoU=0.5 curves),
+  // matching the scalar P/R/F1 Ultralytics prints.
+  {
+    auto cv = compute_curves(dets, gts, nc, 0.5);
+    double best_mf1 = -1.0;
+    for (size_t i = 0; i < cv.px.size(); ++i) {
+      double sp = 0, sr = 0, sf = 0;
+      int na = 0;
+      for (int c = 0; c < nc; ++c) {
+        if (c >= (int)cv.n_gt_per_class.size() || cv.n_gt_per_class[c] == 0)
+          continue;
+        sp += cv.p[c][i];
+        sr += cv.r[c][i];
+        sf += cv.f1[c][i];
+        ++na;
+      }
+      if (na == 0) continue;
+      double mf1 = sf / na;
+      if (mf1 > best_mf1) {
+        best_mf1 = mf1;
+        r.precision = sp / na;
+        r.recall    = sr / na;
+        r.f1        = mf1;
+      }
+    }
+  }
   return r;
 }
 

@@ -148,7 +148,8 @@ VersionAdapter::ValResult run_val_with(Holder& m,
   return VersionAdapter::ValResult{
       r.map_50, r.map_50_95,
       r.map_50_95_small, r.map_50_95_medium, r.map_50_95_large,
-      r.n_gt_small, r.n_gt_medium, r.n_gt_large};
+      r.n_gt_small, r.n_gt_medium, r.n_gt_large,
+      r.precision, r.recall, r.f1};
 }
 
 // Shared detect-train driver: optionally load init weights, construct
