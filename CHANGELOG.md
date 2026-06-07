@@ -4,6 +4,31 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.71] — 2026-06-07
+
+### Fixed
+- **`train_metrics_sweep.sh` dropped scientific-notation metrics.** The
+  mAP/P/R/F1 parse used `[0-9.]+`, which truncates `2.88308e-06` to `2.88308`
+  — so a near-zero from-scratch mAP (yolo1) was logged as a bogus 2.88 (>1).
+  Value class widened to `[0-9.eE+-]` so the exponent is captured whole.
+- **`train_metrics_sweep.sh` smuggled `\r` into the CSV.** A CRLF `VARIANTS_FILE`
+  (or one built from a CRLF baseline CSV's last column) put a carriage return in
+  the batch field, splitting every affected row for an RFC-4180 parser. The
+  variant read now pipes through `tr -d '\r'`. (Caught by the adversarial
+  verification pass over the delta CSV.)
+
+### Added
+- **Batch-16 (baseline-matched) 1-epoch metrics re-run**
+  (`docs/data/training_rerun_b16_0.99.71.csv`,
+  `docs/data/training_delta_b16_0.99.71.csv`). Re-ran all 60 variants at the
+  baseline's per-variant batch (16 for all but yolo13x=8) so the delta vs
+  `training.csv` is apples-to-apples on batch. yolo6l6 OOMs at batch 16 on the
+  32 GB 5090 (needs ~30 GB) and was auto-reduced to batch 8 (`status ok:oom-b8`).
+  Headline: matched-variant mean Δ mAP50 **excluding v6 = +0.011** (flat, within
+  single-epoch noise); the all-matched **+0.103** is dominated by v6 recovering
+  from its near-zero baseline (broken weight-load when the baseline was taken).
+  Resource columns are now batch-aligned.
+
 ## [0.99.70] — 2026-06-07
 
 ### Added

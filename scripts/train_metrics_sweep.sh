@@ -28,7 +28,10 @@ echo "[sweep] output → $OUT"
 # screen_train_sweep.sh (no dup). The file form lets a caller pin per-variant
 # batches — e.g. to match a prior baseline's batch_train column.
 if [ -n "${VARIANTS_FILE:-}" ] && [ -f "$VARIANTS_FILE" ]; then
-  mapfile -t VARIANTS < <(grep -vE '^[[:space:]]*(#|$)' "$VARIANTS_FILE")
+  # tr -d '\r' so a CRLF variant file (or one built from a CRLF baseline CSV's
+  # last column) doesn't smuggle a carriage return into the batch field and on
+  # into the output CSV.
+  mapfile -t VARIANTS < <(grep -vE '^[[:space:]]*(#|$)' "$VARIANTS_FILE" | tr -d '\r')
   echo "[sweep] variant list ← $VARIANTS_FILE"
 else
   mapfile -t VARIANTS < <(sed -n '/VARIANTS=(/,/^)/p' scripts/screen_train_sweep.sh \
@@ -69,11 +72,14 @@ run_one() {
 
   local vline; vline=$(grep -E '\[trainer\] val:' "$tlog" | tail -1)
   local map50 map p r f1
-  map50=$(grep -oE 'mAP@0\.5=[0-9.]+'      <<<"$vline" | head -1 | cut -d= -f2)
-  map=$(  grep -oE 'mAP@0\.5:0\.95=[0-9.]+'<<<"$vline" | cut -d= -f2)
-  p=$(    grep -oE ' P=[0-9.]+'            <<<"$vline" | tr -d ' ' | cut -d= -f2)
-  r=$(    grep -oE ' R=[0-9.]+'            <<<"$vline" | tr -d ' ' | cut -d= -f2)
-  f1=$(   grep -oE ' F1=[0-9.]+'           <<<"$vline" | tr -d ' ' | cut -d= -f2)
+  # Value class includes e/E/+/- so scientific-notation metrics (e.g. a
+  # near-zero from-scratch mAP printed as 2.88e-06) are captured whole —
+  # a bare [0-9.]+ truncates at the 'e' and yields a bogus 2.88.
+  map50=$(grep -oE 'mAP@0\.5=[0-9.eE+-]+'      <<<"$vline" | head -1 | cut -d= -f2)
+  map=$(  grep -oE 'mAP@0\.5:0\.95=[0-9.eE+-]+'<<<"$vline" | cut -d= -f2)
+  p=$(    grep -oE ' P=[0-9.eE+-]+'            <<<"$vline" | tr -d ' ' | cut -d= -f2)
+  r=$(    grep -oE ' R=[0-9.eE+-]+'            <<<"$vline" | tr -d ' ' | cut -d= -f2)
+  f1=$(   grep -oE ' F1=[0-9.eE+-]+'           <<<"$vline" | tr -d ' ' | cut -d= -f2)
 
   local cpu rss_kb rss_gb vram
   cpu=$(grep 'Percent of CPU' "$timef" 2>/dev/null | grep -oE '[0-9]+%' | tr -d '%')
