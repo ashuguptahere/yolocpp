@@ -537,7 +537,9 @@ Directory layout under `src/` and `include/yolocpp/` mirrors
 the upstream Python layout: `models/`, `losses/`, `datasets/`, `engine/` (training
 loop), `serialization/` (ONNX + TRT + .pt converters), `inference/`
 (predictor + NMS + letterbox + TRT runtime), `core/` (device/version
-utility), `cli/` (CLI11 + kv-style entry).
+utility), `cli/` (CLI11 + kv-style entry), `web/` (the optional
+`yolocpp_web` console — server-side Clay→HTML UI + cpp-httplib backend
+calling the public `YOLO` API; no LibTorch in the browser).
 
 - **One unified training engine** (`TrainerT<M>` template + per-version
   `LossTraits<M>` specialization) across all model families.

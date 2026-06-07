@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ALLOWED_FIND_PACKAGE=(Torch CUDAToolkit TensorRT OpenCV)
-ALLOWED_TP_DIRS=(CLI11 libtorch nccl opencv opencv_root rapidyaml tensorrt tensorrt_root)
+ALLOWED_TP_DIRS=(CLI11 clay httplib libtorch nccl opencv opencv_root rapidyaml tensorrt tensorrt_root)
 
 violations=0
 

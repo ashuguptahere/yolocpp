@@ -263,6 +263,27 @@ endif()
 add_executable(yolocpp src/cli/main.cpp)
 target_link_libraries(yolocpp PRIVATE yolocpp_core CLI11)
 
+# ---- web console (Clay UI + cpp-httplib backend) --------------------------
+# Server-side Clay→HTML dashboard to drive train/val/predict/export from a
+# browser (see src/web/). clay_impl.c compiles Clay's single-header
+# implementation as C — the project's strict C++20 (CXX_EXTENSIONS OFF)
+# rejects Clay's C compound literals, which compile cleanly as C. The C++
+# TUs include clay.h for its extern-"C" declarations only.
+option(YOLOCPP_BUILD_WEB "Build the yolocpp_web console" ON)
+if(YOLOCPP_BUILD_WEB)
+  add_executable(yolocpp_web
+    src/web/web_server.cpp
+    src/web/web_ui.cpp
+    src/web/clay_impl.c
+  )
+  target_link_libraries(yolocpp_web PRIVATE yolocpp_core)
+  target_include_directories(yolocpp_web PRIVATE
+    "${YOLOCPP_THIRD_PARTY}/clay"
+    "${YOLOCPP_THIRD_PARTY}/httplib"
+  )
+  target_compile_features(yolocpp_web PRIVATE cxx_std_20)
+endif()
+
 # ---- tests ----------------------------------------------------------------
 enable_testing()
 add_subdirectory(tests)
@@ -287,3 +308,11 @@ set_target_properties(yolocpp PROPERTIES
   BUILD_RPATH   "${_yolocpp_rpath}"
   INSTALL_RPATH "${_yolocpp_rpath}"
 )
+
+if(YOLOCPP_BUILD_WEB)
+  target_link_options(yolocpp_web PRIVATE "LINKER:--disable-new-dtags")
+  set_target_properties(yolocpp_web PROPERTIES
+    BUILD_RPATH   "${_yolocpp_rpath}"
+    INSTALL_RPATH "${_yolocpp_rpath}"
+  )
+endif()

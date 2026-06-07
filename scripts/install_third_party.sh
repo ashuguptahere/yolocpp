@@ -114,6 +114,31 @@ if [[ ! -f rapidyaml/ryml_all.hpp ]]; then
     || { echo "ERROR: ryml_all.hpp sha256 mismatch"; exit 1; }
 fi
 
+# --- clay (UI layout for the web console) -------------------------------------
+# Single-header layout engine (zlib). Backs `yolocpp_web`'s server-side
+# Clay→HTML dashboard. Pinned to the v0.14 release tag.
+CLAY_SHA="c97241cc423af3fa11267978adce9cbb46274a2ad0709a5d4b2b1092dc27599d"
+mkdir -p clay
+if [[ ! -f clay/clay.h ]]; then
+  echo "==> downloading clay v0.14 single-header"
+  curl -sL -o clay/clay.h \
+    "https://raw.githubusercontent.com/nicbarker/clay/v0.14/clay.h"
+  echo "${CLAY_SHA}  clay/clay.h" | sha256sum -c - \
+    || { echo "ERROR: clay.h sha256 mismatch"; exit 1; }
+fi
+
+# --- cpp-httplib (web console HTTP server) ------------------------------------
+# Single-header HTTP/1.1 server (MIT). Pinned to the v0.46.1 release tag.
+HTTPLIB_SHA="6ea64fcedb27668134c442b087ef854a487edc5e1328d8fbc3e919b2f55b5663"
+mkdir -p httplib
+if [[ ! -f httplib/httplib.h ]]; then
+  echo "==> downloading cpp-httplib v0.46.1 single-header"
+  curl -sL -o httplib/httplib.h \
+    "https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.46.1/httplib.h"
+  echo "${HTTPLIB_SHA}  httplib/httplib.h" | sha256sum -c - \
+    || { echo "ERROR: httplib.h sha256 mismatch"; exit 1; }
+fi
+
 echo "==> third-party install OK"
 echo "    $TP/libtorch  -> LibTorch $(cat "$TP/libtorch/build-version" 2>/dev/null || echo unknown)"
 echo "    $TP/tensorrt  -> $(grep -oP 'TRT_MAJOR_ENTERPRISE\s+\K[0-9]+' "$TP/tensorrt/include/NvInferVersion.h").$(grep -oP 'TRT_MINOR_ENTERPRISE\s+\K[0-9]+' "$TP/tensorrt/include/NvInferVersion.h").$(grep -oP 'TRT_PATCH_ENTERPRISE\s+\K[0-9]+' "$TP/tensorrt/include/NvInferVersion.h")"

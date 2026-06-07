@@ -417,6 +417,24 @@ yolocpp --mode train --task obb      -d DATA -m yolo8n-obb.pt -e 30
 yolocpp --mode val   --task segment  -d DATA -m runs/segment/last.pt
 ```
 
+### Web console
+
+Drive train / val / predict / export from a browser. `yolocpp_web` serves a
+dashboard whose layout is authored with [`clay.h`](https://github.com/nicbarker/clay)
+and rendered **server-side to HTML** (Clay's render commands → positioned divs —
+no WASM, no JS framework), backed by a small [cpp-httplib](https://github.com/yhirose/cpp-httplib)
+server. Each button POSTs to `/api/{predict,val,train,export}`, which queues a
+job that runs on the box's GPU through the same `yolocpp::YOLO` API the CLI
+uses; `/api/jobs` streams live status back to the page.
+
+```
+./build/yolocpp_web --port 8080      # then open http://127.0.0.1:8080
+```
+
+The browser never links LibTorch — all GPU work stays in the native backend.
+Build is gated by `-DYOLOCPP_BUILD_WEB=ON` (default on); the two header-only
+deps (clay, cpp-httplib) are documented in `third_party/DEPS.md`.
+
 ### Public C++ API
 
 ```cpp

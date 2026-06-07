@@ -20,6 +20,8 @@ third_party/opencv_debs/
 
 # rapidyaml single-header amalgamation (~1.7 MB) — fetched by installer
 third_party/rapidyaml/
+third_party/clay/
+third_party/httplib/
 
 coco8/
 data/

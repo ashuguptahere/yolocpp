@@ -15,8 +15,16 @@ challenged before it lands. Maintained as part of #48 (deps audit).
 | NCCL        | 2.23.4            | DDP all-reduce (multi-GPU training)         | BSD-3-Clause | NVIDIA developer portal (vendored deb, extracted by script)       | ~52 KB (headers only — runtime via libnccl) |
 | rapidyaml   | 0.11.1            | parse `data.yaml` (path/train/val/names)    | MIT          | biojppm/rapidyaml single-header amalgamation                      | ~1.7 MB      |
 | CLI11       | 2.6.2             | flag-style CLI parser                       | BSD-3-Clause | CLIUtils/CLI11 single-header release (pinned tag + sha256-verified)| ~468 KB      |
+| clay        | 0.14              | UI layout engine for the web console (`yolocpp_web`); server-side Clay→HTML | zlib | nicbarker/clay single-header (`clay.h`)               | ~300 KB      |
+| cpp-httplib | 0.46.1            | HTTP/1.1 server backing the web console     | MIT          | yhirose/cpp-httplib single-header (`httplib.h`)                   | ~690 KB      |
 
 Total: **~5.5 GB on disk**, ~99 % of which is libtorch + TensorRT.
+
+`clay` + `cpp-httplib` back the optional `yolocpp_web` target (build with
+`-DYOLOCPP_BUILD_WEB=ON`, default on). Both are header-only, permissively
+licensed (zlib / MIT), and pulled in only by `src/web/`. They add no runtime
+`.so`. The web backend reuses the existing `yolocpp::YOLO` API for all GPU
+work — the browser never links LibTorch.
 
 ## Runtime
 

@@ -4,6 +4,27 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.100.0] — 2026-06-07
+
+### Added
+- **Web console (`yolocpp_web`)** — drive train / val / predict / export from a
+  browser. New `src/web/`: a server-side **Clay** UI (the layout is authored
+  with `clay.h`; `render_dashboard` walks Clay's render-command output into
+  positioned HTML/CSS — no WASM, no JS framework) served by a **cpp-httplib**
+  backend. `GET /` returns the Clay-rendered dashboard; `POST
+  /api/{predict,val,train,export}` queue a job; `GET /api/jobs` reports live
+  state. Jobs run one-at-a-time on a worker thread, each invoking the existing
+  `yolocpp::YOLO` API (model paths resolved through `cli::resolve_weights`, so
+  `models/` download-on-miss works exactly as the CLI). The browser never links
+  LibTorch — all GPU work stays in this native process. Run:
+  `./build/yolocpp_web --port 8080` → open `http://127.0.0.1:8080`.
+  Two new header-only deps: **clay** 0.14 (zlib) + **cpp-httplib** 0.46.1 (MIT),
+  documented in `third_party/DEPS.md`, whitelisted in `scripts/audit_deps.sh`,
+  fetched (sha256-pinned) by `scripts/install_third_party.sh`. Build gated by
+  `-DYOLOCPP_BUILD_WEB=ON` (default on). `clay_impl.c` builds Clay's
+  single-header implementation as C (the project's strict C++20 rejects Clay's
+  C compound literals; the C++ TUs use its `extern "C"` declarations only).
+
 ## [0.99.71] — 2026-06-07
 
 ### Fixed
