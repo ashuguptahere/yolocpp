@@ -4,6 +4,24 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.99.69] — 2026-06-07
+
+### Added
+- **1-epoch training-metrics re-run after the clean redownload**
+  (`docs/data/training_rerun_0.99.68.csv`, `docs/data/training_delta_0.99.68.csv`).
+  All 60 variants trained 1 epoch on the screen-detection dataset with weights
+  freshly resolved into `./models` (post-0.99.68 v5/v1 fixes). Every variant
+  completed `ok` — no 404 / random-init / crash. The delta CSV joins each
+  variant against the yolocpp baseline columns in `training.csv`.
+  **Caveats baked into the report:** (1) baseline was captured at batch=16, this
+  re-run at batch=8 (4 for x-scales, 2 for yolo6l6) — so the CPU/RSS/VRAM deltas
+  largely reflect the smaller batch, not a regression; (2) the v6 family shows
+  +0.5–0.7 mAP50 because the baseline's v6 rows were near-zero (the RepConv
+  load-time fusion had not yet landed when the baseline was taken) — the new
+  ~0.55–0.72 numbers are the corrected ones; (3) yolo1 is all-zeros: from-scratch
+  v1, 1 epoch, no pretrain → ~0 mAP expected, but it now trains instead of
+  crashing (the 0.99.68 bf16 fix).
+
 ## [0.99.68] — 2026-06-07
 
 ### Fixed
