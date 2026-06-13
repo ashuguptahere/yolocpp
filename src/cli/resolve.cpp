@@ -1,6 +1,7 @@
 #include "yolocpp/cli/resolve.hpp"
 
 #include "yolocpp/cli/data_yaml.hpp"
+#include "yolocpp/core/log.hpp"
 #include "yolocpp/serialization/darknet_weights.hpp"
 #include "yolocpp/serialization/yolov1_weights.hpp"
 #include "yolocpp/serialization/yolov2_weights.hpp"
@@ -65,7 +66,7 @@ bool run_curl(const std::string& url, const fs::path& dst) {
   std::ostringstream cmd;
   cmd << "curl -fSL --retry 3 --retry-delay 2 -o " << sh_quote(dst.string())
       << ' ' << sh_quote(url);
-  std::cerr << "[download] " << url << "\n";
+  LOG_INFO("download") << url;
   int rc = std::system(cmd.str().c_str());
   return rc == 0 && fs::exists(dst) && fs::file_size(dst) > 0;
 }
@@ -158,13 +159,13 @@ std::string resolve_weights(const std::string& spec) {
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
-        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        LOG_INFO("resolve") << "converting " << w << " → " << pt_target;
         fs::create_directories(pt_target.parent_path());
         try {
           serialization::convert_yolov4_weights(w.string(), pt_target.string());
           return true;
         } catch (const std::exception& e) {
-          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          LOG_WARN("resolve") << "convert failed: " << e.what();
           return false;
         }
       }
@@ -194,13 +195,13 @@ std::string resolve_weights(const std::string& spec) {
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
-        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        LOG_INFO("resolve") << "converting " << w << " → " << pt_target;
         fs::create_directories(pt_target.parent_path());
         try {
           serialization::convert_yolov6_pt(w.string(), pt_target.string());
           return true;
         } catch (const std::exception& e) {
-          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          LOG_WARN("resolve") << "convert failed: " << e.what();
           return false;
         }
       }
@@ -240,13 +241,13 @@ std::string resolve_weights(const std::string& spec) {
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
-        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        LOG_INFO("resolve") << "converting " << w << " → " << pt_target;
         fs::create_directories(pt_target.parent_path());
         try {
           serialization::convert_yolov7_pt(w.string(), pt_target.string());
           return true;
         } catch (const std::exception& e) {
-          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          LOG_WARN("resolve") << "convert failed: " << e.what();
           return false;
         }
       }
@@ -281,13 +282,13 @@ std::string resolve_weights(const std::string& spec) {
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
-        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        LOG_INFO("resolve") << "converting " << w << " → " << pt_target;
         fs::create_directories(pt_target.parent_path());
         try {
           serialization::convert_yolov9_pt(w.string(), pt_target.string());
           return true;
         } catch (const std::exception& e) {
-          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          LOG_WARN("resolve") << "convert failed: " << e.what();
           return false;
         }
       }
@@ -335,13 +336,13 @@ std::string resolve_weights(const std::string& spec) {
         };
         for (const auto& w : roots) {
           if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
-          std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+          LOG_INFO("resolve") << "converting " << w << " → " << pt_target;
           fs::create_directories(pt_target.parent_path());
           try {
             serialization::convert_yolov10_pt(w.string(), pt_target.string());
             return true;
           } catch (const std::exception& e) {
-            std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+            LOG_WARN("resolve") << "convert failed: " << e.what();
             return false;
           }
         }
@@ -403,13 +404,13 @@ std::string resolve_weights(const std::string& spec) {
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
-        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        LOG_INFO("resolve") << "converting " << w << " → " << pt_target;
         fs::create_directories(pt_target.parent_path());
         try {
           serialization::convert_yolov3_pt(w.string(), pt_target.string());
           return true;
         } catch (const std::exception& e) {
-          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          LOG_WARN("resolve") << "convert failed: " << e.what();
           return false;
         }
       }
@@ -455,14 +456,14 @@ std::string resolve_weights(const std::string& spec) {
       };
       for (const auto& w : roots) {
         if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
-        std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+        LOG_INFO("resolve") << "converting " << w << " → " << pt_target;
         fs::create_directories(pt_target.parent_path());
         try {
           serialization::convert_yolov1_weights(w.string(), pt_target.string(),
                                                  /*nc=*/20);
           return true;
         } catch (const std::exception& e) {
-          std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+          LOG_WARN("resolve") << "convert failed: " << e.what();
           return false;
         }
       }
@@ -508,14 +509,14 @@ std::string resolve_weights(const std::string& spec) {
         };
         for (const auto& w : roots) {
           if (!fs::exists(w) || !fs::is_regular_file(w)) continue;
-          std::cerr << "[resolve] converting " << w << " → " << pt_target << "\n";
+          LOG_INFO("resolve") << "converting " << w << " → " << pt_target;
           fs::create_directories(pt_target.parent_path());
           try {
             serialization::convert_yolov2_weights(w.string(), pt_target.string(),
                                                    nc, scale);
             return true;
           } catch (const std::exception& e) {
-            std::cerr << "[resolve] convert failed: " << e.what() << "\n";
+            LOG_WARN("resolve") << "convert failed: " << e.what();
             return false;
           }
         }
@@ -538,7 +539,11 @@ std::string resolve_weights(const std::string& spec) {
       models_dir() / base,
   };
   for (const auto& c : candidates) {
-    if (fs::exists(c) && fs::is_regular_file(c)) return c.string();
+    LOG_DEBUG("resolve") << "looking for " << base << " at " << c;
+    if (fs::exists(c) && fs::is_regular_file(c)) {
+      LOG_DEBUG("resolve") << "found " << c;
+      return c.string();
+    }
   }
 
   // 3) If recognised upstream name, download.
@@ -554,14 +559,18 @@ std::string resolve_weights(const std::string& spec) {
       base_url = "https://github.com/ultralytics/assets/releases/download/v8.4.0";
     }
     if (run_curl(base_url + "/" + upstream, target)) {
-      std::cerr << "[resolve] cached " << base << " at " << target
-                << " (upstream: " << upstream << ")\n";
+      LOG_INFO("resolve") << "cached " << base << " at " << target
+                          << " (upstream: " << upstream << ")";
       return target.string();
     }
   }
 
+  LOG_ERROR("resolve")
+      << "could not find or download weights '" << spec << "'"
+      << log::hint("checked ./data/, ./, and ./models/ — pass a real path, or "
+                   "use a known name like yolo11n.pt so it can be downloaded");
   throw std::runtime_error("could not resolve weights: " + spec +
-                           " (checked cwd, ./data, ~/.cache/yolocpp/weights)");
+                           " (checked ./data, ./, ./models)");
 }
 
 

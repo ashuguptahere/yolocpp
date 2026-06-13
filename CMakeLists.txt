@@ -153,6 +153,7 @@ add_library(yolocpp_core
   src/core/version.cpp
   src/core/device.cpp
   src/core/profile.cpp
+  src/core/log.cpp
   src/models/yolo3.cpp
   src/models/yolo4.cpp
   src/models/yolo5.cpp

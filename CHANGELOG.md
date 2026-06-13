@@ -4,6 +4,23 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.100.1] — 2026-06-08
+
+### Added
+- **`yolocpp::log` — dependency-free leveled logger** (`include/yolocpp/core/log.hpp`,
+  `src/core/log.cpp`). Stream-style (`LOG_DEBUG/INFO/WARN/ERROR("tag") << ...`)
+  with a level gate so DEBUG detail costs nothing when off; timestamped, coloured
+  on a TTY (honours `NO_COLOR`), output to stderr. Human-friendly errors carry an
+  optional remediation hint: `<< log::hint("…")` prints a `→ hint` line.
+  Verbosity via **`YOLOCPP_LOG=debug|info|warn|error|silent`** (works for the CLI,
+  `yolocpp_web`, and the public API) or the new CLI **`--debug` / `--verbose`**
+  flags. Default level is Info.
+- **Weight resolution is now traceable** (`resolve.cpp`). `--debug` prints each
+  candidate path searched (`looking for yolo8n.pt at …/data/…`, `…/models/…`) and
+  where it was found — the fastest way to debug a "why didn't it find my model"
+  miss. The not-found error is now friendly: names what was checked and suggests
+  passing a real path or a downloadable name.
+
 ## [0.100.0] — 2026-06-07
 
 ### Added

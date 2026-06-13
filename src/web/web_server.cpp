@@ -11,6 +11,7 @@
 
 #include "yolocpp/api.hpp"
 #include "yolocpp/cli/resolve.hpp"
+#include "yolocpp/core/log.hpp"
 #include "yolocpp/web/web_ui.hpp"
 
 #include <httplib.h>
@@ -215,6 +216,7 @@ std::vector<std::string> list_models() {
 }  // namespace
 
 int main(int argc, char** argv) {
+  yolocpp::log::init_from_env();  // YOLOCPP_LOG=debug for verbose job logs
   std::string host = "127.0.0.1";
   int port = 8080;
   for (int i = 1; i < argc; ++i) {

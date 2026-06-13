@@ -9,6 +9,7 @@
 
 #include <yolocpp/config.hpp>
 #include "yolocpp/cli/commands.hpp"
+#include "yolocpp/core/log.hpp"
 #include "yolocpp/core/profile.hpp"
 #include "yolocpp/inference/results.hpp"
 
@@ -60,6 +61,7 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   uint64_t seed = 0;
   std::string save_dir = "runs/train";
   bool   profile_enabled = false;
+  bool   debug_log = false;  // --debug/--verbose → YOLOCPP_LOG=debug
   // Predict output options (#97 Results integration).
   std::string save_json;       // --save-json <path>: dump Results.json()
   std::string save_txt;        // --save-txt  <path>: dump "cls conf x1 y1 x2 y2"
@@ -124,6 +126,8 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
                  "INT8 calibration cache file (default: <engine>.calib)");
   app.add_flag  ("--profile", profile_enabled,
                   "enable per-phase wall-clock profiler (every mode, every model)");
+  app.add_flag  ("--debug,--verbose", debug_log,
+                  "verbose debug logging (equivalent to YOLOCPP_LOG=debug)");
   app.add_option("--save-json", save_json,
                   "predict: dump Results.json() (boxes + xyxy + names + speed) to file");
   app.add_option("--save-txt", save_txt,
@@ -132,6 +136,7 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
                   "download mode: dataset short-name (coco8, VOC, ...) or .zip URL");
 
   CLI11_PARSE(app, argc, argv);
+  if (debug_log) yolocpp::log::set_level(yolocpp::log::Level::Debug);
   device = normalise_device(device);
   // Flip the global profile switch as early as possible — every
   // PROFILE_SCOPE downstream will then start recording. atexit
@@ -354,6 +359,7 @@ int main(int argc, char** argv) {
   // first libtorch call so OMP picks the policy up at init time.
   setenv("OMP_WAIT_POLICY", "PASSIVE", /*overwrite=*/0);
   setenv("KMP_BLOCKTIME",   "0",       /*overwrite=*/0);
+  yolocpp::log::init_from_env();  // YOLOCPP_LOG baseline (--debug overrides post-parse)
   using namespace yolocpp::cli;
   // --version / -v / -V short-circuit. Reads YOLOCPP_VERSION_STRING
   // from the CMake-stamped config.hpp (which CMake derives from the
