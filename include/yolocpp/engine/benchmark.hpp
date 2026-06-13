@@ -58,6 +58,7 @@ struct BenchResult {
   double      mean_ms;
   double      throughput_imgps;   // 1000 / median
   int         num_detections;
+  double      size_mb = 0.0;      // on-disk size of this format's artefact
   // Detections from this backend (used for accuracy delta vs PT).
   std::vector<inference::Detection> dets;
 };

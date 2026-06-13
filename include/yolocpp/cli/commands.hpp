@@ -67,13 +67,20 @@ int cmd_export(const std::string& weights, const std::string& format,
                const std::string& version_hint = "",
                const std::string& task = "detect");
 
+// `weights` may be a comma-separated list of models (a.pt,b.pt,…) — each is
+// benchmarked across formats (PyTorch + the requested TRT precisions); with
+// >1 model a leaderboard is printed. `data` (optional) enables a per-model
+// mAP column (validated on that dataset, Ultralytics-style).
 int cmd_benchmark(const std::string& weights, const std::string& source,
                   int imgsz, int warmup, int iters,
                   const std::string& cache, const std::string& device,
                   int batch_size = 1,
                   const std::string& precision_csv = "fp32,fp16",
                   const std::string& int8_calib_dir = "",
-                  const std::string& int8_calib_cache = "");
+                  const std::string& int8_calib_cache = "",
+                  const std::string& data = "",
+                  const std::string& names_csv = "",
+                  const std::string& scale_s = "");
 
 // Centralised --device validator (also exposed so the API can
 // validate device strings the same way the CLI does).

@@ -4,6 +4,26 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.0] — 2026-06-08
+
+### Added
+- **Multi-model + format benchmark** (Ultralytics `benchmark`-style). `--mode
+  benchmark` now accepts a comma-separated **model list** (`-m a.pt,b.pt,…`):
+  each model is timed across formats (PyTorch + the requested TRT precisions),
+  and prints a per-model table — **Format · Size(MB) · ms/im · img/s · dets** —
+  plus, for >1 model, a **leaderboard** (params(M) · PT ms/im · best ms/im ·
+  best img/s). `BenchResult` gained `size_mb` (on-disk artefact size per format).
+  ms/im is throughput-normalized (per-image) so a batched TRT row is comparable
+  to single-image PyTorch. Params are counted from the checkpoint.
+- **`--data <data.yaml>` on benchmark** adds a per-model reference
+  **mAP50 / mAP50-95** column, validated through the same registry dispatch
+  `--mode val` uses (every version's `run_val`, with the v8 Predictor+validate
+  fallback). Verified: `yolo8n` on coco8 → mAP50 0.896 / mAP50-95 0.683.
+- Benchmark now defaults to **batch=1** (single-image latency, Ultralytics-style)
+  unless `--batch` is passed explicitly (the global default of 16 is a training
+  default). `--model` for benchmark is resolved per-model (the list isn't run
+  through the single-spec resolver).
+
 ## [0.100.2] — 2026-06-08
 
 ### Changed

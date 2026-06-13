@@ -155,7 +155,9 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   // routes yolo4 .weights → .pt conversion and yolo6 upstream-pt →
   // canonical-pt conversion. Skipped for trt engines (.trt) and any
   // file that already exists at the given path.
-  if (!weights.empty() && mode != "download") {
+  // benchmark resolves each model itself (its --model may be a comma-separated
+  // list a.pt,b.pt,…), so skip the single-spec resolve here for that mode.
+  if (!weights.empty() && mode != "download" && mode != "benchmark") {
     try {
       weights = resolve_weights(weights);
     } catch (const std::exception& e) {
@@ -324,8 +326,13 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   if (mode == "benchmark") {
     if (!need(mode, "model",  !weights.empty())) return 2;
     if (!need(mode, "source", !source.empty()))  return 2;
+    // Benchmark defaults to batch=1 (single-image latency, Ultralytics-style)
+    // unless --batch was given explicitly — the global default of 16 is a
+    // training default, not a latency-benchmark one.
+    int bench_batch = app.count("--batch") ? batch_size : 1;
     return cmd_benchmark(weights, source, imgsz, warmup, iters, cache_dir, device,
-                         batch_size, bench_precision, int8_calib_dir, int8_calib_cache);
+                         bench_batch, bench_precision, int8_calib_dir, int8_calib_cache,
+                         data, names_csv, scale_s);
   }
 
   if (mode == "download") {

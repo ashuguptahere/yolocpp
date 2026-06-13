@@ -369,9 +369,18 @@ yolocpp --mode predict -m yolo11n.pt -s bus.jpg
 yolocpp --mode predict -m yolo11n.pt -s frames/ -o annotated/
 yolocpp --mode export  -m yolo11n.pt -f trt -p fp16
 yolocpp --mode benchmark -m yolo11n.pt -s bus.jpg
+yolocpp --mode benchmark -m yolo8n.pt,yolo11n.pt -s bus.jpg --data coco8/data.yaml
 yolocpp --mode info
 yolocpp --mode download --dataset coco8
 ```
+
+`--mode benchmark` accepts a comma-separated **list of models** (`-m a.pt,b.pt`):
+each is timed across formats (PyTorch + the requested TRT precisions via
+`--bench-precision fp32,fp16,int8`), printing a per-model table (format · size ·
+ms/im · img/s) and, for >1 model, a leaderboard (params · best ms/im · img/s),
+Ultralytics-style. Pass `--data <data.yaml>` to add a per-model reference
+mAP50 / mAP50-95 column. Defaults to batch=1 (single-image latency) unless
+`--batch` is given. Add `--debug` (or `YOLOCPP_LOG=debug`) for verbose logs.
 
 Common flags:
 

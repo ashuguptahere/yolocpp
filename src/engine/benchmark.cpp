@@ -83,6 +83,14 @@ void build_onnx_for(const BenchConfig& cfg, const std::string& version,
 
 }  // anonymous namespace
 
+namespace {
+double file_mb(const std::string& path) {
+  std::error_code ec;
+  auto n = fs::file_size(path, ec);
+  return ec ? 0.0 : static_cast<double>(n) / (1024.0 * 1024.0);
+}
+}  // namespace
+
 std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
   if (cfg.weights.empty() || cfg.source.empty())
     throw std::runtime_error("benchmark needs both weights and source");
@@ -134,6 +142,7 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
       results.push_back(bench_one("PT (libtorch FP32)", img, p,
                                   cfg.warmup_iters, cfg.iters));
     }
+    if (!results.empty()) results.back().size_mb = file_mb(cfg.weights);
   }
 
   // Build/cache ONNX once if any TRT path is requested.
@@ -197,6 +206,7 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
       serialization::build_trt_engine(onnx_path, trt32, tcfg);
     }
     bench_trt("TRT FP32", trt32);
+    results.back().size_mb = file_mb(trt32);
   }
 
   // ── TRT FP16 ────────────────────────────────────────────────────────────
@@ -208,6 +218,7 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
       serialization::build_trt_engine(onnx_path, trt16, tcfg);
     }
     bench_trt("TRT FP16", trt16);
+    results.back().size_mb = file_mb(trt16);
   }
 
   // ── TRT INT8 ────────────────────────────────────────────────────────────
@@ -230,6 +241,7 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
         serialization::build_trt_engine(onnx_path, trt8, tcfg);
       }
       bench_trt("TRT INT8", trt8);
+      results.back().size_mb = file_mb(trt8);
     }
   }
 

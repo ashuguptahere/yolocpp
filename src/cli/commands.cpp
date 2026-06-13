@@ -50,6 +50,7 @@
 #include "yolocpp/datasets/flat_dataset.hpp"
 #include "yolocpp/datasets/voc_dataset.hpp"
 #include "yolocpp/datasets/yolo_dataset.hpp"
+#include "yolocpp/core/log.hpp"
 #include "yolocpp/engine/benchmark.hpp"
 #include "yolocpp/engine/trainer.hpp"
 #include "yolocpp/engine/validator.hpp"
@@ -760,45 +761,163 @@ int cmd_export(const std::string& weights, const std::string& format,
   return 2;
 }
 
+namespace {
+
+// Trainable params (millions) from the checkpoint: sum tensor numel, skipping
+// BN running stats / counters. Approximate but version-agnostic. -1 on failure.
+double bench_params_m(const std::string& weights) {
+  try {
+    auto sd = yolocpp::serialization::load_state_dict(weights);
+    long long n = 0;
+    for (const auto& [k, t] : sd.entries) {
+      if (k.find("running_mean") != std::string::npos ||
+          k.find("running_var")  != std::string::npos ||
+          k.find("num_batches")  != std::string::npos) continue;
+      n += t.numel();
+    }
+    return static_cast<double>(n) / 1e6;
+  } catch (...) { return -1.0; }
+}
+
+// One reference mAP (50, 50:95) for a model on `data`. Uses the registry
+// adapter's run_val where available, else the v8 Predictor+validate path —
+// the same dispatch cmd_val uses. {-1,-1} on failure.
+std::pair<double, double> bench_map(const std::string& weights, const std::string& data,
+                                    int imgsz, const std::string& device,
+                                    std::string scale_s, const std::string& names_csv) {
+  try {
+    auto names = split_csv(names_csv);
+    if (names.empty()) names = yolocpp::inference::coco_names();
+    int nc = static_cast<int>(names.size());
+    yolocpp::datasets::AugConfig aug; aug.augment = false;
+    auto ds = make_dataset(data, "val", imgsz, names, aug);
+    auto dev = (device == "cpu") ? torch::Device(torch::kCPU)
+             : torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0)
+                                           : torch::Device(torch::kCPU);
+    if (scale_s.empty()) scale_s = yolocpp::cli::scale_from_filename(weights);
+    auto vh = yolocpp::cli::version_from_filename(weights);
+    yolocpp::registry::register_all_versions();
+    if (const auto* a = yolocpp::registry::Registry::instance().find(vh); a && a->run_val) {
+      auto r = a->run_val(weights, scale_s, nc, ds, dev);
+      return {r.map_50, r.map_50_95};
+    }
+    yolocpp::inference::Predictor pr(weights, imgsz, device, nc, parse_scale(scale_s));
+    auto res = yolocpp::engine::validate(pr.model(), ds, pr.device());
+    return {res.map_50, res.map_50_95};
+  } catch (const std::exception& e) {
+    LOG_WARN("bench") << "mAP unavailable for " << weights << ": " << e.what();
+    return {-1.0, -1.0};
+  }
+}
+
+struct ModelBench {
+  std::string name;
+  double params_m = -1, map50 = -1, map95 = -1;
+  std::vector<yolocpp::engine::BenchResult> formats;
+};
+
+void print_model_formats(const ModelBench& r, bool have_map) {
+  std::cout << "\n\033[1m" << r.name << "\033[0m";
+  if (r.params_m >= 0) { char b[48]; std::snprintf(b, sizeof b, "  %.1fM params", r.params_m); std::cout << b; }
+  if (have_map && r.map50 >= 0) {
+    char b[80]; std::snprintf(b, sizeof b, "  mAP50 %.3f  mAP50-95 %.3f", r.map50, r.map95);
+    std::cout << b;
+  }
+  std::cout << "\n  Format                Size(MB)   ms/im      img/s    dets\n";
+  std::cout << "  ────────────────────  ────────  ────────  ────────  ─────\n";
+  for (const auto& f : r.formats) {
+    // ms/im is per-image (throughput-normalized) so a batched TRT row is
+    // comparable to single-image PT, not a per-call number.
+    double ms_im = f.throughput_imgps > 0 ? 1000.0 / f.throughput_imgps : f.median_ms;
+    char line[256];
+    std::snprintf(line, sizeof line, "  %-20s  %8.1f  %8.3f  %8.1f  %5d\n",
+                  f.backend.c_str(), f.size_mb, ms_im, f.throughput_imgps,
+                  f.num_detections);
+    std::cout << line;
+  }
+}
+
+void print_leaderboard(const std::vector<ModelBench>& reports, bool have_map) {
+  std::cout << "\n\033[1m=== Leaderboard (" << reports.size() << " models) ===\033[0m\n";
+  std::cout << "  model         params(M)";
+  if (have_map) std::cout << "   mAP50  mAP50-95";
+  std::cout << "   PT ms/im   best ms/im   best img/s\n";
+  std::cout << "  ────────────  ─────────";
+  if (have_map) std::cout << "   ─────  ────────";
+  std::cout << "   ────────   ──────────   ──────────\n";
+  for (const auto& r : reports) {
+    double pt_ms = 0, best_ips = 0;
+    for (const auto& f : r.formats) {
+      double ms_im = f.throughput_imgps > 0 ? 1000.0 / f.throughput_imgps : f.median_ms;
+      if (f.backend.rfind("PT", 0) == 0) pt_ms = ms_im;
+      best_ips = std::max(best_ips, f.throughput_imgps);
+    }
+    double best_ms = best_ips > 0 ? 1000.0 / best_ips : 0;
+    char line[320];
+    int off = std::snprintf(line, sizeof line, "  %-12s  %9.2f", r.name.c_str(), r.params_m);
+    if (have_map)
+      off += std::snprintf(line + off, sizeof line - off, "   %.3f   %.3f", r.map50, r.map95);
+    std::snprintf(line + off, sizeof line - off, "   %8.2f   %10.2f   %10.1f\n",
+                  pt_ms, best_ms, best_ips);
+    std::cout << line;
+  }
+}
+
+}  // namespace
+
 int cmd_benchmark(const std::string& weights, const std::string& source,
                   int imgsz, int warmup, int iters,
                   const std::string& cache, const std::string& device,
                   int batch_size, const std::string& precision_csv,
                   const std::string& int8_calib_dir,
-                  const std::string& int8_calib_cache) {
-  yolocpp::engine::BenchConfig cfg;
-  cfg.weights      = weights;
-  cfg.source       = source;
-  cfg.imgsz        = imgsz;
-  cfg.warmup_iters = warmup;
-  cfg.iters        = iters;
-  cfg.cache_dir    = cache;
-  cfg.device       = device;
-  cfg.batch_size   = batch_size;
-  cfg.int8_calib_dir   = int8_calib_dir;
-  cfg.int8_calib_cache = int8_calib_cache;
-  // Parse precision CSV — defaults to fp32+fp16, accepts int8 too.
-  cfg.run_trt_fp32 = false;
-  cfg.run_trt_fp16 = false;
-  cfg.run_trt_int8 = false;
-  std::string p = precision_csv;
-  std::size_t i = 0;
-  while (i < p.size()) {
-    auto j = p.find(',', i);
-    auto tok = p.substr(i, j == std::string::npos ? std::string::npos : j - i);
-    if      (tok == "fp32") cfg.run_trt_fp32 = true;
-    else if (tok == "fp16") cfg.run_trt_fp16 = true;
-    else if (tok == "int8") cfg.run_trt_int8 = true;
-    else if (!tok.empty()) {
-      std::cerr << "[bench] WARN unknown precision token '" << tok
-                << "' (expected fp32 | fp16 | int8)\n";
-    }
-    if (j == std::string::npos) break;
-    i = j + 1;
+                  const std::string& int8_calib_cache,
+                  const std::string& data, const std::string& names_csv,
+                  const std::string& scale_cli) {
+  // Parse precision CSV once — defaults to fp32+fp16, accepts int8.
+  bool fp32 = false, fp16 = false, int8 = false;
+  for (const auto& tok : split_csv(precision_csv)) {
+    if      (tok == "fp32") fp32 = true;
+    else if (tok == "fp16") fp16 = true;
+    else if (tok == "int8") int8 = true;
+    else if (!tok.empty()) LOG_WARN("bench") << "unknown precision '" << tok
+                                             << "' (expected fp32|fp16|int8)";
   }
-  auto rows = yolocpp::engine::run_benchmark(cfg);
-  yolocpp::engine::print_benchmark(rows);
-  return 0;
+
+  // `weights` may be a comma-separated list — benchmark each model.
+  auto models = split_csv(weights);
+  if (models.empty()) { LOG_ERROR("bench") << "no model given"; return 2; }
+  const bool have_map = !data.empty();
+  if (have_map) LOG_INFO("bench") << "mAP enabled on " << data
+                                  << " (one reference mAP per model)";
+
+  std::vector<ModelBench> reports;
+  for (const auto& spec : models) {
+    std::string w;
+    try { w = resolve_weights(spec); }
+    catch (const std::exception& e) { LOG_ERROR("bench") << "skip " << spec << ": " << e.what(); continue; }
+
+    yolocpp::engine::BenchConfig cfg;
+    cfg.weights = w; cfg.source = source; cfg.imgsz = imgsz;
+    cfg.warmup_iters = warmup; cfg.iters = iters; cfg.cache_dir = cache;
+    cfg.device = device; cfg.batch_size = batch_size; cfg.scale = scale_cli;
+    cfg.int8_calib_dir = int8_calib_dir; cfg.int8_calib_cache = int8_calib_cache;
+    cfg.run_trt_fp32 = fp32; cfg.run_trt_fp16 = fp16; cfg.run_trt_int8 = int8;
+
+    ModelBench rep;
+    rep.name = std::filesystem::path(spec).stem().string();
+    try { rep.formats = yolocpp::engine::run_benchmark(cfg); }
+    catch (const std::exception& e) { LOG_ERROR("bench") << "skip " << spec << ": " << e.what(); continue; }
+    rep.params_m = bench_params_m(w);
+    if (have_map) std::tie(rep.map50, rep.map95) =
+        bench_map(w, data, imgsz, device, scale_cli, names_csv);
+
+    print_model_formats(rep, have_map);
+    reports.push_back(std::move(rep));
+  }
+
+  if (reports.size() > 1) print_leaderboard(reports, have_map);
+  std::cout << "\n";
+  return reports.empty() ? 1 : 0;
 }
 
 // ── New-style (kv) parser dispatcher ─────────────────────────────────────
