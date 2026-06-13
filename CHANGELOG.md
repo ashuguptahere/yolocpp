@@ -4,6 +4,26 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.100.2] — 2026-06-08
+
+### Changed
+- **Dependencies centralized + CMake-pulled** (new `cmake/dependencies.cmake`,
+  included from the root `CMakeLists.txt`). One module is now the single source
+  of truth for every dependency pin (version / URL / sha256). CMake itself pulls
+  and sha256-verifies the portable single headers — **CLI11, rapidyaml, clay,
+  cpp-httplib** — at configure time via `file(DOWNLOAD … EXPECTED_HASH)`,
+  reusing `third_party/<lib>/` when present (CLI11 + rapidyaml stay committed for
+  offline builds; verified the download path pulls + checks the hash when a
+  vendored header is absent). LibTorch is pulled via FetchContent from the pinned
+  cu130 zip, reusing `third_party/libtorch` when present so existing trees don't
+  re-download 1.7 GB. The `.deb` GPU stack (TensorRT, OpenCV) can't be
+  CMake-pulled, so their versions are pinned in the module and
+  `scripts/install_third_party.sh` keeps doing the `dpkg-deb -x` extraction — its
+  redundant single-header fetch blocks are removed (CMake owns those now).
+  vcpkg was evaluated and not adopted: it has no port for the cu130 LibTorch or
+  the proprietary TensorRT 10.14 runtime, so it couldn't own the heavy stack
+  anyway. `audit_deps.sh` (which already scans `cmake/*.cmake`) stays green.
+
 ## [0.100.1] — 2026-06-08
 
 ### Added

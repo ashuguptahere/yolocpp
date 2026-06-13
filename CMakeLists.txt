@@ -104,42 +104,12 @@ set(_yolocpp_rpath
   "${YOLOCPP_THIRD_PARTY}/opencv/lib/x86_64-linux-gnu"
 )
 
-# ---- LibTorch -------------------------------------------------------------
-if(NOT DEFINED Torch_DIR AND EXISTS "${YOLOCPP_THIRD_PARTY}/libtorch/share/cmake/Torch")
-  set(Torch_DIR "${YOLOCPP_THIRD_PARTY}/libtorch/share/cmake/Torch" CACHE PATH "")
-endif()
-find_package(Torch REQUIRED)
-message(STATUS "LibTorch: ${TORCH_LIBRARIES}")
-
-# ---- CUDA toolkit (we already enabled language CUDA above) ----------------
-find_package(CUDAToolkit REQUIRED)
-message(STATUS "CUDA Toolkit: ${CUDAToolkit_VERSION} @ ${CUDAToolkit_INCLUDE_DIRS}")
-
-# ---- TensorRT (optional at config time, hard-required at link time) -------
-find_package(TensorRT REQUIRED)
-message(STATUS "TensorRT: ${TensorRT_VERSION_STRING} @ ${TensorRT_INCLUDE_DIRS}")
-
-# ---- OpenCV ---------------------------------------------------------------
-# Vendored layout (extracted from Ubuntu .debs):
-#   third_party/opencv/lib -> .../usr/lib (symlink)
-#   third_party/opencv/lib/x86_64-linux-gnu/cmake/opencv4/OpenCVConfig.cmake
-foreach(_p
-    "${YOLOCPP_THIRD_PARTY}/opencv/lib/x86_64-linux-gnu/cmake/opencv4"
-    "${YOLOCPP_THIRD_PARTY}/opencv/lib/cmake/opencv4")
-  if(NOT DEFINED OpenCV_DIR AND EXISTS "${_p}/OpenCVConfig.cmake")
-    set(OpenCV_DIR "${_p}" CACHE PATH "" FORCE)
-  endif()
-endforeach()
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
-message(STATUS "OpenCV: ${OpenCV_VERSION} @ ${OpenCV_INCLUDE_DIRS}")
-
-# ---- CLI11 (header-only vendored) -----------------------------------------
-add_library(CLI11 INTERFACE)
-target_include_directories(CLI11 INTERFACE "${YOLOCPP_THIRD_PARTY}/CLI11")
-
-# ---- rapidyaml (header-only vendored) -------------------------------------
-add_library(rapidyaml INTERFACE)
-target_include_directories(rapidyaml INTERFACE "${YOLOCPP_THIRD_PARTY}/rapidyaml")
+# ---- all third-party deps (pins + acquisition centralized) ----------------
+# CMake-pulled + pinned: CLI11, rapidyaml, clay, cpp-httplib (single headers),
+# LibTorch (cu130 zip). find_package: CUDA, TensorRT, OpenCV. Targets exposed:
+# Torch, CUDA::*, TensorRT::*, OpenCV, and INTERFACE libs CLI11/rapidyaml/clay/
+# httplib. See cmake/dependencies.cmake.
+include(dependencies)
 
 # ---- internal config header -----------------------------------------------
 configure_file(
@@ -277,11 +247,7 @@ if(YOLOCPP_BUILD_WEB)
     src/web/web_ui.cpp
     src/web/clay_impl.c
   )
-  target_link_libraries(yolocpp_web PRIVATE yolocpp_core)
-  target_include_directories(yolocpp_web PRIVATE
-    "${YOLOCPP_THIRD_PARTY}/clay"
-    "${YOLOCPP_THIRD_PARTY}/httplib"
-  )
+  target_link_libraries(yolocpp_web PRIVATE yolocpp_core clay httplib)
   target_compile_features(yolocpp_web PRIVATE cxx_std_20)
 endif()
 

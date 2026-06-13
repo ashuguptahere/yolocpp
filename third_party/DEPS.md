@@ -20,6 +20,16 @@ challenged before it lands. Maintained as part of #48 (deps audit).
 
 Total: **~5.5 GB on disk**, ~99 % of which is libtorch + TensorRT.
 
+**Pins live in [`cmake/dependencies.cmake`](../cmake/dependencies.cmake)** — the
+single source of truth. CMake pulls + sha256-verifies the portable single
+headers (CLI11, rapidyaml, clay, cpp-httplib) at configure time, or reuses
+`third_party/<lib>/` when present (CLI11 + rapidyaml are committed for offline
+builds). LibTorch is pulled by FetchContent from the pinned cu130 zip (reused
+from `third_party/libtorch` when present). The `.deb` GPU stack (TensorRT,
+OpenCV) and the system CUDA toolkit can't be CMake-pulled; their versions are
+pinned in that module and `scripts/install_third_party.sh` does the extraction.
+This table mirrors those pins for humans.
+
 `clay` + `cpp-httplib` back the optional `yolocpp_web` target (build with
 `-DYOLOCPP_BUILD_WEB=ON`, default on). Both are header-only, permissively
 licensed (zlib / MIT), and pulled in only by `src/web/`. They add no runtime

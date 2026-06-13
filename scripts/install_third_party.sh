@@ -85,59 +85,11 @@ if [[ ! -d opencv ]]; then
   rm -rf opencv_debs
 fi
 
-# --- CLI11 --------------------------------------------------------------------
-# Pinned to an exact tag (DEPS.md "No latest" rule) + sha256-verified so a
-# compromised mirror / MITM can't swap the header under us.
-CLI11_VER="v2.6.2"
-CLI11_SHA="227a16fe5f9f8ada80c3c409492475536f597e7bd83a6c26eacc3c8c149a9295"
-mkdir -p CLI11
-if [[ ! -f CLI11/CLI11.hpp ]]; then
-  echo "==> downloading CLI11 single-header (${CLI11_VER})"
-  curl -sL -o CLI11/CLI11.hpp \
-    "https://github.com/CLIUtils/CLI11/releases/download/${CLI11_VER}/CLI11.hpp"
-  echo "${CLI11_SHA}  CLI11/CLI11.hpp" | sha256sum -c - \
-    || { echo "ERROR: CLI11.hpp sha256 mismatch"; exit 1; }
-fi
-
-# --- rapidyaml ----------------------------------------------------------------
-# Single-header amalgamation of biojppm/rapidyaml — used to parse the upstream
-# data.yaml (path/train/val/names) for `data=...yaml` resolution. ryml is the
-# fastest serial YAML parser in C++ (no SIMD parser exists for YAML at the
-# spec-conforming level — ryml is the practical equivalent).
-RYML_SHA="6c068513694cba1885da23c96d6f8e1bf19bf090ee186efe9565f3db71903d63"
-mkdir -p rapidyaml
-if [[ ! -f rapidyaml/ryml_all.hpp ]]; then
-  echo "==> downloading rapidyaml v0.11.1 single-header"
-  curl -sL -o rapidyaml/ryml_all.hpp \
-    "https://github.com/biojppm/rapidyaml/releases/download/v0.11.1/rapidyaml-0.11.1.hpp"
-  echo "${RYML_SHA}  rapidyaml/ryml_all.hpp" | sha256sum -c - \
-    || { echo "ERROR: ryml_all.hpp sha256 mismatch"; exit 1; }
-fi
-
-# --- clay (UI layout for the web console) -------------------------------------
-# Single-header layout engine (zlib). Backs `yolocpp_web`'s server-side
-# Clay→HTML dashboard. Pinned to the v0.14 release tag.
-CLAY_SHA="c97241cc423af3fa11267978adce9cbb46274a2ad0709a5d4b2b1092dc27599d"
-mkdir -p clay
-if [[ ! -f clay/clay.h ]]; then
-  echo "==> downloading clay v0.14 single-header"
-  curl -sL -o clay/clay.h \
-    "https://raw.githubusercontent.com/nicbarker/clay/v0.14/clay.h"
-  echo "${CLAY_SHA}  clay/clay.h" | sha256sum -c - \
-    || { echo "ERROR: clay.h sha256 mismatch"; exit 1; }
-fi
-
-# --- cpp-httplib (web console HTTP server) ------------------------------------
-# Single-header HTTP/1.1 server (MIT). Pinned to the v0.46.1 release tag.
-HTTPLIB_SHA="6ea64fcedb27668134c442b087ef854a487edc5e1328d8fbc3e919b2f55b5663"
-mkdir -p httplib
-if [[ ! -f httplib/httplib.h ]]; then
-  echo "==> downloading cpp-httplib v0.46.1 single-header"
-  curl -sL -o httplib/httplib.h \
-    "https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.46.1/httplib.h"
-  echo "${HTTPLIB_SHA}  httplib/httplib.h" | sha256sum -c - \
-    || { echo "ERROR: httplib.h sha256 mismatch"; exit 1; }
-fi
+# --- single-header libs (CLI11, rapidyaml, clay, cpp-httplib) -----------------
+# No longer fetched here: the build pulls + sha-verifies them at configure time
+# via cmake/dependencies.cmake (the single source of truth for every pin), or
+# reuses third_party/<lib>/ when present (CLI11 + rapidyaml are committed for
+# offline builds). Nothing to do in this script for them.
 
 echo "==> third-party install OK"
 echo "    $TP/libtorch  -> LibTorch $(cat "$TP/libtorch/build-version" 2>/dev/null || echo unknown)"
