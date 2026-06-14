@@ -38,8 +38,8 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 ### 1.4 Task heads on v8 / v11 / v26 (Phase 3 + 6A + 6B)
 - ✅ classify — predict + train + val.
 - ✅ segment — predict + train + val. Val mask-mAP@0.5 is a real per-class AP (conf-sorted greedy match to same-class GT by mask IoU>0.5, predicted masks cropped to box). **Fixed**: it previously divided the 0/1 GT masks by 255 → empty GT → flat 0; now yolov8n-seg/coco8-seg reports 0.223.
-- ✅ pose — predict + train + val (kpt L1 + visibility BCE, OKS-mAP). **Fixed**: LibTorch keypoint decode built the anchor in feature units but decoded in pixel space → keypoints collapsed toward the origin (v8/v11/v26); now `(cell+0.5)*stride`, matching the ONNX emitter (bus.jpg x-range −142..171 → −2..650).
-- ✅ obb — predict + train + val (cosine angular loss, rotated-IoU mAP).
+- ✅ pose — predict + train + val. Val OKS-mAP@0.5 is now a real AP (per-keypoint COCO sigmas, per-instance area, conf-sorted greedy match; was recall with constant sigma=1/50px area → degenerate). yolov8n-pose/coco8-pose = 0.181. **Fixed**: LibTorch keypoint decode built the anchor in feature units but decoded in pixel space → keypoints collapsed toward the origin (v8/v11/v26); now `(cell+0.5)*stride`, matching the ONNX emitter (bus.jpg x-range −142..171 → −2..650).
+- ✅ obb — predict + train + val. Val is now a real per-class rotated AP@0.5 (conf-sorted greedy `cv::RotatedRect`-IoU match; was recall). ⚠️ **follow-up**: yolov8n-obb on dota8 reports rotated mAP@0.5=0 even though obb *predict* yields 135 boxes on the same image — predictions exist but don't reach IoU 0.5 with the dota8 GT (likely a val GT angle/format mismatch; was also 0 as recall, so separate from the metric fix).
 - ✅ All 75 (version × task × scale) combinations for v8/v11/v26 load the upstream-shipped weights and produce non-empty output on bus.jpg.
 - ✅ Task ONNX export — graph emitters for segment proto / pose kpt decode / OBB dist2rbox / classify head. ONNX max\|Δ\| ≤ 0.004 across tasks.
 

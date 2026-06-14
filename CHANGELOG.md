@@ -4,6 +4,28 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.18] — 2026-06-14
+
+### Fixed
+- **Pose + OBB validation reported recall as "mAP@0.5" (latent, from the hunt).**
+  Both `validate_pose` and `validate_obb` counted a GT as matched if ANY
+  prediction overlapped it — no confidence sorting, no false-positive penalty —
+  i.e. recall, not average precision. And `validate_pose`'s OKS used a constant
+  `sigma=1` + constant 50px area (scale/keypoint-blind).
+  - **Pose**: now a real **OKS AP@0.5** — per-keypoint COCO sigmas, per-instance
+    area from the GT bbox, confidence-sorted greedy matching → per-prediction
+    TP/FP → AP. Verified on yolov8n-pose / coco8-pose: `OKS mAP@0.5 = 0.181`
+    (was a degenerate recall of 1.0).
+  - **OBB**: now a real **per-class rotated AP@0.5** (conf-sorted greedy match by
+    `cv::RotatedRect` IoU > 0.5). Shares the verified pose/seg AP machinery.
+
+### Notes
+- A **separate pre-existing issue** surfaced (filed under §3 obb): yolov8n-obb on
+  dota8 reports rotated mAP@0.5 = 0 even though obb *predict* yields 135 boxes on
+  the same image — the predictions exist but don't reach IoU 0.5 with the dota8
+  GT (likely a val GT angle/format mismatch; it was also 0 under the old recall
+  metric, so it is independent of this fix). Follow-up.
+
 ## [0.101.17] — 2026-06-14
 
 ### Fixed

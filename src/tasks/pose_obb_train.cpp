@@ -10,8 +10,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <random>
 #include <sstream>
+#include <utility>
+#include <vector>
 #include <stdexcept>
 
 #include "yolocpp/inference/letterbox.hpp"
@@ -270,7 +273,15 @@ PoseValResult validate_pose_t(M& model,
                              const PoseDataset& dataset,
                              torch::Device device) {
   model->to(device); model->eval();
-  int n_pred = 0, n_gt = 0, n_matched = 0;
+  // COCO 17-keypoint OKS sigmas (per-keypoint falloff). Previously the OKS used
+  // a constant sigma=1 and a constant 50px area scale → scale/keypoint-blind;
+  // and the metric was recall (every GT matched by ANY prediction), not AP.
+  static const std::vector<float> kSigma = {
+      0.026f,0.025f,0.025f,0.035f,0.035f,0.079f,0.079f,0.072f,0.072f,
+      0.062f,0.062f,0.107f,0.107f,0.087f,0.087f,0.089f,0.089f};
+  const int K = dataset.num_kpts();
+  std::vector<std::pair<float,int>> dets;   // (conf, tp) — single "person" class
+  int n_pred = 0, n_gt = 0;
   for (size_t i = 0; i < dataset.size(); ++i) {
     auto ex = dataset.get(i, /*seed=*/i + 1);
     auto x  = ex.img.unsqueeze(0).to(device);
@@ -281,46 +292,75 @@ PoseValResult validate_pose_t(M& model,
       pred = std::get<0>(o);
       kpts = std::get<1>(o);
     }
-    // Threshold detection conf at 0.25 and pick top per anchor.
-    auto p = pred.transpose(1, 2)[0].to(torch::kCPU);
-    auto cf = p.slice(1, 4, p.size(1)).max(1);
-    auto conf = std::get<0>(cf);
-    auto mask = conf > 0.25f;
-    auto idx = torch::nonzero(mask).flatten();
-    n_gt += (int)ex.targets.size(0);
-    if (idx.numel() == 0) continue;
+    auto p    = pred.transpose(1, 2)[0].to(torch::kCPU);
+    auto conf = std::get<0>(p.slice(1, 4, p.size(1)).max(1));
+    auto idx  = torch::nonzero(conf.gt(0.05f)).flatten();   // low thr for PR curve
+    const int G = (int)ex.targets.size(0);
+    n_gt += G;
+    if (idx.numel() == 0 || G == 0) continue;
 
-    auto kpts_cpu = kpts.transpose(1, 2)[0].to(torch::kCPU)
-                       .index_select(0, idx);                    // [k, K*3]
-    auto K = dataset.num_kpts();
-    auto k2 = kpts_cpu.reshape({-1, K, 3});
-    n_pred += (int)k2.size(0);
+    auto k2 = kpts.transpose(1, 2)[0].to(torch::kCPU)
+                  .index_select(0, idx).reshape({-1, K, 3}).contiguous();   // [k,K,3]
+    auto sel_conf = conf.index_select(0, idx).contiguous();
+    const int k = (int)idx.numel();
+    n_pred += k;
 
-    // For each GT, find any prediction within OKS=0.5.
-    auto gt = ex.keypoints;                                       // [G, K, 3]
-    if (gt.size(0) == 0) continue;
-    for (int g = 0; g < (int)gt.size(0); ++g) {
-      auto g_xy = gt[g].slice(1, 0, 2);
-      auto g_v  = gt[g].select(1, 2) > 0.5f;
-      double best_oks = 0.0;
-      for (int p_i = 0; p_i < (int)k2.size(0); ++p_i) {
-        auto p_xy = k2[p_i].slice(1, 0, 2);
-        auto d2 = (p_xy - g_xy).pow(2).sum(1);                    // [K]
-        auto sigma2 = 1.0;  // simplified
-        auto oks_per = torch::exp(-d2 / (2 * sigma2 * 50 * 50));
-        oks_per = oks_per * g_v.to(oks_per.dtype());
-        double oks = oks_per.sum().template item<double>() /
-                     std::max<double>(1.0, g_v.sum().template item<int64_t>());
-        best_oks = std::max(best_oks, oks);
+    auto gt_kp  = ex.keypoints.to(torch::kCPU).contiguous();   // [G,K,3]
+    auto tgt_cpu = ex.targets.to(torch::kCPU).contiguous();    // [G,5] cls,cx,cy,w,h
+    auto kacc  = k2.accessor<float, 3>();
+    auto gacc  = gt_kp.accessor<float, 3>();
+    auto tacc  = tgt_cpu.accessor<float, 2>();
+
+    // OKS[k][G] = mean over visible GT keypoints of exp(-d²/(2·area·σ²)).
+    std::vector<std::vector<float>> oks(k, std::vector<float>(G, 0.0f));
+    for (int g = 0; g < G; ++g) {
+      double area = std::max(1.0, (double)tacc[g][3] * (double)tacc[g][4]);  // bbox w*h
+      for (int j = 0; j < k; ++j) {
+        double acc = 0.0; int vis = 0;
+        for (int kp = 0; kp < K; ++kp) {
+          if (gacc[g][kp][2] <= 0.5f) continue;  // GT keypoint not visible
+          ++vis;
+          double dx = (double)kacc[j][kp][0] - (double)gacc[g][kp][0];
+          double dy = (double)kacc[j][kp][1] - (double)gacc[g][kp][1];
+          double s  = (kp < (int)kSigma.size()) ? kSigma[kp] : 0.05f;
+          acc += std::exp(-(dx*dx + dy*dy) / (2.0 * area * s * s + 1e-9));
+        }
+        oks[j][g] = vis ? (float)(acc / vis) : 0.0f;
       }
-      if (best_oks > 0.5) ++n_matched;
+    }
+    // Greedy match predictions (conf desc) to best unmatched GT, OKS > 0.5.
+    auto order = std::get<1>(sel_conf.sort(/*dim=*/0, /*descending=*/true)).contiguous();
+    auto oa  = order.accessor<int64_t, 1>();
+    auto cfa = sel_conf.accessor<float, 1>();
+    std::vector<bool> used(G, false);
+    for (int oi = 0; oi < k; ++oi) {
+      int j = (int)oa[oi];
+      float best = 0.0f; int bg = -1;
+      for (int g = 0; g < G; ++g)
+        if (!used[g] && oks[j][g] > best) { best = oks[j][g]; bg = g; }
+    int tp = (best > 0.5f && bg >= 0) ? 1 : 0;
+      if (tp) used[bg] = true;
+      dets.push_back({cfa[j], tp});
     }
   }
+  // AP@OKS0.5 (single person class) — area under the recall→precision curve.
+  std::sort(dets.begin(), dets.end(),
+            [](const std::pair<float,int>& a, const std::pair<float,int>& b) {
+              return a.first > b.first;
+            });
+  double tp = 0, fp = 0, ap = 0, prev_r = 0;
+  for (auto& d : dets) {
+    if (d.second) tp += 1; else fp += 1;
+    double recall = n_gt ? tp / n_gt : 0.0;
+    double precision = tp / (tp + fp);
+    ap += (recall - prev_r) * precision;
+    prev_r = recall;
+  }
   PoseValResult r;
-  r.n_pred    = n_pred;
-  r.n_gt      = n_gt;
-  r.n_matched = n_matched;
-  r.oks_map_50 = n_gt ? (double)n_matched / n_gt : 0.0;
+  r.n_pred     = n_pred;
+  r.n_gt       = n_gt;
+  r.n_matched  = (int)tp;
+  r.oks_map_50 = n_gt ? ap : 0.0;
   return r;
 }
 
@@ -506,6 +546,11 @@ OBBValResult validate_obb_t(M& model,
                            const OBBDataset& dataset,
                            torch::Device device) {
   model->to(device); model->eval();
+  // Real per-class rotated AP@0.5 (was recall: each GT matched by ANY
+  // prediction, no confidence sorting, no FP penalty). Greedy-match
+  // confidence-sorted predictions to same-class GT by rotated IoU > 0.5.
+  std::map<int, std::vector<std::pair<float,int>>> det_by_class;  // cls → (conf, tp)
+  std::map<int, int> gt_count;
   int n_pred = 0, n_gt = 0, n_matched = 0;
   for (size_t i = 0; i < dataset.size(); ++i) {
     auto ex = dataset.get(i, /*seed=*/i + 1);
@@ -516,52 +561,87 @@ OBBValResult validate_obb_t(M& model,
       auto o = model->forward_eval(x);
       pred = std::get<0>(o); ang = std::get<1>(o);
     }
-    n_gt += (int)ex.targets.size(0);
+    const int G = (int)ex.targets.size(0);
+    n_gt += G;
     auto p = pred.transpose(1, 2)[0].to(torch::kCPU);
     auto cf = p.slice(1, 4, p.size(1)).max(1);
     auto conf = std::get<0>(cf);
     auto cidx = std::get<1>(cf);
-    auto mask = conf > 0.25f;
-    auto idx  = torch::nonzero(mask).flatten();
-    if (idx.numel() == 0) continue;
-    n_pred += (int)idx.numel();
-    auto box = p.slice(1, 0, 4).index_select(0, idx);
-    auto a_cpu = ang.to(torch::kCPU)[0].index_select(0, idx);
-    auto cidx_sel = cidx.index_select(0, idx);
+    auto idx  = torch::nonzero(conf.gt(0.05f)).flatten();   // low thr for PR curve
+    torch::Tensor gt_targets = ex.targets.to(torch::kCPU).contiguous();
+    if (G > 0) {
+      auto ta = gt_targets.accessor<float, 2>();
+      for (int g = 0; g < G; ++g) gt_count[(int)ta[g][0]]++;
+    }
+    if (idx.numel() == 0 || G == 0) continue;
+    auto box      = p.slice(1, 0, 4).index_select(0, idx).contiguous();
+    auto a_cpu    = ang.to(torch::kCPU)[0].index_select(0, idx).contiguous();
+    auto cidx_sel = cidx.index_select(0, idx).contiguous();
+    auto sel_conf = conf.index_select(0, idx).contiguous();
+    const int k = (int)idx.numel();
+    n_pred += k;
     auto a_b = box.accessor<float, 2>();
     auto a_a = a_cpu.accessor<float, 1>();
     auto a_l = cidx_sel.accessor<int64_t, 1>();
+    auto cfa = sel_conf.accessor<float, 1>();
+    auto a_t = gt_targets.accessor<float, 2>();
 
-    // Greedy match: each GT matches if any prediction has rotated IoU > 0.5
-    // and same class.
-    if (ex.targets.size(0) == 0) continue;
-    auto a_t = ex.targets.accessor<float, 2>();
-    for (int g = 0; g < (int)ex.targets.size(0); ++g) {
-      cv::RotatedRect rg({a_t[g][1], a_t[g][2]},
-                         {a_t[g][3], a_t[g][4]},
-                         a_t[g][5] * 180.f / (float)M_PI);
-      bool ok = false;
-      for (int j = 0; j < (int)box.size(0); ++j) {
-        if ((int)a_l[j] != (int)a_t[g][0]) continue;
-        float cx = (a_b[j][0] + a_b[j][2]) / 2;
-        float cy = (a_b[j][1] + a_b[j][3]) / 2;
-        float w  = a_b[j][2] - a_b[j][0];
-        float h  = a_b[j][3] - a_b[j][1];
-        cv::RotatedRect rp({cx, cy}, {w, h}, a_a[j] * 180.f / (float)M_PI);
+    // Pre-build rotated rects.
+    std::vector<cv::RotatedRect> prr(k), grr(G);
+    for (int j = 0; j < k; ++j) {
+      float cx = (a_b[j][0] + a_b[j][2]) / 2, cy = (a_b[j][1] + a_b[j][3]) / 2;
+      float w  = a_b[j][2] - a_b[j][0],       h  = a_b[j][3] - a_b[j][1];
+      prr[j] = cv::RotatedRect({cx, cy}, {w, h}, a_a[j] * 180.f / (float)M_PI);
+    }
+    for (int g = 0; g < G; ++g)
+      grr[g] = cv::RotatedRect({a_t[g][1], a_t[g][2]}, {a_t[g][3], a_t[g][4]},
+                               a_t[g][5] * 180.f / (float)M_PI);
+
+    // Greedy match predictions (conf desc) to best unmatched same-class GT.
+    auto order = std::get<1>(sel_conf.sort(/*dim=*/0, /*descending=*/true)).contiguous();
+    auto oa = order.accessor<int64_t, 1>();
+    std::vector<bool> used(G, false);
+    for (int oi = 0; oi < k; ++oi) {
+      int j = (int)oa[oi];
+      int c = (int)a_l[j];
+      float best = 0.0f; int bg = -1;
+      for (int g = 0; g < G; ++g) {
+        if (used[g] || (int)a_t[g][0] != c) continue;
         std::vector<cv::Point2f> inter;
-        if (cv::rotatedRectangleIntersection(rg, rp, inter) ==
-            cv::INTERSECT_NONE || inter.size() < 3)
+        if (cv::rotatedRectangleIntersection(grr[g], prr[j], inter) ==
+                cv::INTERSECT_NONE || inter.size() < 3)
           continue;
         double a_int = cv::contourArea(inter);
-        double a_uni = (double)rg.size.area() + (double)rp.size.area() - a_int;
-        if (a_uni > 0 && (a_int / a_uni) > 0.5) { ok = true; break; }
+        double a_uni = (double)grr[g].size.area() + (double)prr[j].size.area() - a_int;
+        float iou = (a_uni > 0) ? (float)(a_int / a_uni) : 0.0f;
+        if (iou > best) { best = iou; bg = g; }
       }
-      if (ok) ++n_matched;
+    int tp = (best > 0.5f && bg >= 0) ? 1 : 0;
+      if (tp) { used[bg] = true; ++n_matched; }
+      det_by_class[c].push_back({cfa[j], tp});
     }
+  }
+  // Per-class AP@0.5; mAP over classes with GT.
+  double sum_ap = 0.0; int n_cls = 0;
+  for (auto& [c, cnt] : gt_count) {
+    if (cnt <= 0) continue;
+    auto& d = det_by_class[c];
+    std::sort(d.begin(), d.end(),
+              [](const std::pair<float,int>& a, const std::pair<float,int>& b) {
+                return a.first > b.first;
+              });
+    double tp = 0, fp = 0, ap = 0, prev_r = 0;
+    for (auto& e : d) {
+      if (e.second) tp += 1; else fp += 1;
+      double recall = tp / cnt, precision = tp / (tp + fp);
+      ap += (recall - prev_r) * precision;
+      prev_r = recall;
+    }
+    sum_ap += ap; n_cls++;
   }
   OBBValResult r;
   r.n_pred = n_pred; r.n_gt = n_gt; r.n_matched = n_matched;
-  r.map_50 = n_gt ? (double)n_matched / n_gt : 0.0;
+  r.map_50 = n_cls ? sum_ap / n_cls : 0.0;
   return r;
 }
 
