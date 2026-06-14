@@ -175,3 +175,11 @@ set_target_properties(dump_v6_layers PROPERTIES
   BUILD_RPATH   "${_yolocpp_rpath}"
   INSTALL_RPATH "${_yolocpp_rpath}"
 )
+
+# Version-literal lint (#47C2): fail the test run if a stray 0.X.Y literal
+# slips in outside the allow-list (single source of truth is ./VERSION).
+# Shell-only — no yolocpp_core link. Wires the linter into ctest / CI.
+add_test(NAME test_version_literals
+         COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/check_version_literals.sh")
+set_tests_properties(test_version_literals PROPERTIES
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" TIMEOUT 60)

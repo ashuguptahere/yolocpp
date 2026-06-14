@@ -4,6 +4,20 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.3] — 2026-06-14
+
+### Fixed
+- **#47C2 — version-literal linter now passes and is wired into ctest.**
+  `scripts/check_version_literals.sh` was exiting 1 on 48 legitimate lines
+  (historical "landed/added/fixed 0.X.Y" refs, parenthesised/dated/range
+  snapshots, cmake `*_VERSION` dependency pins, C/C++ comments, `docs/`
+  prose). Extended the allow-list — case-insensitive verb matching, bare
+  `(0.X.Y` / `0.X.Y)` parentheticals, `0.X.Y–0.X.Y` ranges, `YYYY-MM-DD`
+  snapshot dates, `_VERSION` pins, comment lines, `docs/` exclusion — so it
+  now exits 0. A negative test confirms it still flags a stray current-version
+  literal in prose **and** in a non-comment code string. Registered as the
+  `test_version_literals` ctest so the lint runs as part of the suite / CI.
+
 ## [0.101.2] — 2026-06-08
 
 ### Changed

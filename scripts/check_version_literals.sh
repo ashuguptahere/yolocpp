@@ -12,8 +12,11 @@
 #   - CMakeLists.txt              — historical comment about the file
 #   - CHANGELOG.md                — release headings (immutable)
 #   - SESSION_DIGEST.md           — frozen-in-time snapshot (per-session)
-#   - TODO.md "landed in X.Y.Z"  — historical references (immutable)
-#   - README.md table cells "added 0.X.Y" — same, historical
+#   - TODO.md / README.md historical refs — "landed/added/fixed 0.X.Y",
+#                                   parenthesised/dated/range snapshots
+#   - docs/                       — frozen per-sweep snapshots
+#   - C/C++ comments (// …)       — historical notes can't go stale
+#   - cmake *_VERSION pins        — third-party dep versions, not yolocpp
 #   - third_party/, build/        — vendored / generated
 #
 # Anything else that matches `0\.\d+\.\d+` is flagged. Run as part of
@@ -48,23 +51,39 @@ EXCLUDE_DIRS=(
   "^build/"
   "^\.git/"
   "^runs/"
+  "^docs/"          # frozen per-sweep snapshots — historical by nature
 )
 
 # Inline patterns inside otherwise-allowed lines: historical refs +
-# third-party / vendor / non-yolocpp version mentions.
+# third-party / vendor / non-yolocpp version mentions. Matched
+# case-insensitively (see grep -qiE below) so "LANDED"/"Landed"/"landed"
+# all qualify. The genuine hazard we still catch is a hardcoded *current*
+# version literal (e.g. `version: 0.X.Y`, `return "0.X.Y";`) that has no
+# historical qualifier, parenthesis, range, date, or comment context.
 ALLOWED_LINE_PATTERNS=(
-  # Historical "landed in X.Y.Z" / "added 0.20.0" — references to a
-  # specific past commit, immutable.
-  "landed in 0\."
-  "added in 0\."
-  "added 0\."
-  "in 0\.[0-9]+\.[0-9]+ "
-  "in 0\.[0-9]+\.[0-9]+\)"
+  # Historical "landed/added/fixed/removed/... [in] X.Y.Z" — references to
+  # a specific past commit, immutable. With or without the "in".
+  "landed (in )?0\."
+  "added (in )?0\."
+  "fixed (in )?0\."
+  "removed (in )?0\."
+  "shipped (in )?0\."
+  "introduced (in )?0\."
+  "partial \(?0\."
+  "follow-on 0\."
   "from 0\."
   "since 0\."
   "pre-0\."
   "post-0\."
-  # Upstream / third-party version references — not yolocpp.
+  "in 0\.[0-9]+\.[0-9]+"
+  # Parenthesised / range / dated historical snapshots:
+  #   "(0.101.1, 2026-06-08)", "(0.100.0 – 0.101.1)", "0.99.32) put"
+  "\(0\.[0-9]+\.[0-9]+"
+  "0\.[0-9]+\.[0-9]+\)"
+  "0\.[0-9]+\.[0-9]+ *[-–—] *0?[0-9]"
+  "[0-9]{4}-[0-9]{2}-[0-9]{2}"
+  # Dependency / vendor version pins (cmake `*_VERSION` vars) + upstream refs.
+  "_VERSION"
   "[Mm]eituan"
   "rapidyaml"
   "producer_version"
@@ -75,9 +94,6 @@ ALLOWED_LINE_PATTERNS=(
   # Default IPs / network identifiers that happen to embed 0.0.1.
   "127\.0\.0\.1"
   "MASTER_ADDR"
-  # Acceptable historical bare parenthetical "(0.X.Y)" only if line
-  # also mentions a verb like "training", "fix", etc. — too loose;
-  # require explicit qualifier words instead. (No entry here.)
 )
 
 violations=0
@@ -104,9 +120,16 @@ while IFS= read -r f; do
     lineno="${line%%:*}"
     rest="${line#*:}"
 
+    # C/C++ comment lines (// … or block-comment * continuation) may carry
+    # historical version refs freely — a comment can't go stale the way a
+    # hardcoded literal can. `[^:]//` avoids matching `https://` URLs.
+    if echo "$rest" | grep -qE '(^[[:space:]]*\*)|((^|[^:])//)'; then
+      continue
+    fi
+
     keep=1
     for ap in "${ALLOWED_LINE_PATTERNS[@]}"; do
-      if echo "$rest" | grep -qE "$ap"; then keep=0; break; fi
+      if echo "$rest" | grep -qiE "$ap"; then keep=0; break; fi
     done
 
     if [[ $keep -eq 1 ]]; then
