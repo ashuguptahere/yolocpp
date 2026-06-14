@@ -2,6 +2,10 @@
 
 #include <opencv2/imgcodecs.hpp>
 
+#include "yolocpp/datasets/yolo_dataset.hpp"
+#include "yolocpp/engine/format_eval.hpp"
+#include "yolocpp/inference/nms.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -142,11 +146,14 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
       results.push_back(bench_one("PT (libtorch FP32)", img, p,
                                   cfg.warmup_iters, cfg.iters));
     }
-    if (!results.empty()) results.back().size_mb = file_mb(cfg.weights);
+    if (!results.empty()) {
+      results.back().size_mb = file_mb(cfg.weights);
+      results.back().artifact = cfg.weights;  // PT mAP filled by the caller
+    }
   }
 
   // Build/cache ONNX once if any TRT path is requested.
-  bool need_onnx = cfg.run_trt_fp32 || cfg.run_trt_fp16 || cfg.run_trt_int8;
+  bool need_onnx = cfg.run_trt_fp32 || cfg.run_trt_fp16 || cfg.run_trt_int8 || cfg.run_onnx;
   if (need_onnx && !fs::exists(onnx_path)) {
     build_onnx_for(cfg, version, scale_s, onnx_path);
   }
@@ -197,6 +204,25 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
     results.push_back(std::move(r));
   };
 
+  // Per-format mAP for a TRT engine over cfg.eval_ds (graph-agnostic — the
+  // engine handles any version). Single-image inference (within the engine's
+  // dynamic batch range). Sets artifact + map on the just-pushed result.
+  auto finish_trt = [&](const std::string& plan) {
+    results.back().artifact = plan;
+    results.back().size_mb = file_mb(plan);
+    if (!cfg.eval_ds) return;
+    try {
+      inference::TrtPredictor ep(plan, cfg.imgsz, 1);
+      auto m = eval_predictor(
+          [&ep](const cv::Mat& im, const inference::NMSConfig& nm) { return ep.predict(im, nm); },
+          *cfg.eval_ds, cfg.nc_eval);
+      results.back().map_50 = m.map_50;
+      results.back().map_50_95 = m.map_50_95;
+    } catch (const std::exception& e) {
+      std::cerr << "[bench] mAP failed for " << plan << ": " << e.what() << "\n";
+    }
+  };
+
   // ── TRT FP32 ────────────────────────────────────────────────────────────
   if (cfg.run_trt_fp32) {
     if (!fs::exists(trt32)) {
@@ -206,7 +232,7 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
       serialization::build_trt_engine(onnx_path, trt32, tcfg);
     }
     bench_trt("TRT FP32", trt32);
-    results.back().size_mb = file_mb(trt32);
+    finish_trt(trt32);
   }
 
   // ── TRT FP16 ────────────────────────────────────────────────────────────
@@ -218,7 +244,7 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
       serialization::build_trt_engine(onnx_path, trt16, tcfg);
     }
     bench_trt("TRT FP16", trt16);
-    results.back().size_mb = file_mb(trt16);
+    finish_trt(trt16);
   }
 
   // ── TRT INT8 ────────────────────────────────────────────────────────────
@@ -241,8 +267,45 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
         serialization::build_trt_engine(onnx_path, trt8, tcfg);
       }
       bench_trt("TRT INT8", trt8);
-      results.back().size_mb = file_mb(trt8);
+      finish_trt(trt8);
     }
+  }
+
+  // ── ONNX (cv::dnn) ──────────────────────────────────────────────────────
+  // OpenCV's ONNX importer — no onnxruntime dependency. CPU-only, so timing is
+  // a CPU number (labelled as such); the value here is the per-format mAP. The
+  // ONNX graph was already built above (need_onnx) when any export is requested.
+  if (cfg.run_onnx && fs::exists(onnx_path)) {
+    auto onnx_pred = make_onnx_predictor(onnx_path, cfg.imgsz, cfg.nc_eval);
+    BenchResult r;
+    r.backend = "ONNX (cv::dnn CPU)";
+    r.artifact = onnx_path;
+    r.size_mb = file_mb(onnx_path);
+    if (onnx_pred) {
+      cv::Mat im = cv::imread(cfg.source, cv::IMREAD_COLOR);
+      inference::NMSConfig nm;
+      for (int i = 0; i < std::min(cfg.warmup_iters, 3); ++i) onnx_pred(im, nm);
+      std::vector<double> t;
+      for (int i = 0; i < std::min(cfg.iters, 20); ++i) {
+        auto a = std::chrono::steady_clock::now();
+        auto d = onnx_pred(im, nm);
+        auto b = std::chrono::steady_clock::now();
+        t.push_back(std::chrono::duration<double, std::milli>(b - a).count());
+        r.num_detections = (int)d.size();
+      }
+      r.median_ms = detail::percentile(t, 50);
+      r.p95_ms = detail::percentile(t, 95);
+      r.mean_ms = detail::mean(t);
+      r.throughput_imgps = r.median_ms > 0 ? 1000.0 / r.median_ms : 0;
+      if (cfg.eval_ds) {
+        auto m = eval_predictor(onnx_pred, *cfg.eval_ds, cfg.nc_eval);
+        r.map_50 = m.map_50;
+        r.map_50_95 = m.map_50_95;
+      }
+    } else {
+      std::cerr << "[bench] ONNX skipped (cv::dnn could not load " << onnx_path << ")\n";
+    }
+    results.push_back(std::move(r));
   }
 
   return results;

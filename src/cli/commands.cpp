@@ -819,20 +819,31 @@ struct ModelBench {
 void print_model_formats(const ModelBench& r, bool have_map) {
   std::cout << "\n\033[1m" << r.name << "\033[0m";
   if (r.params_m >= 0) { char b[48]; std::snprintf(b, sizeof b, "  %.1fM params", r.params_m); std::cout << b; }
-  if (have_map && r.map50 >= 0) {
-    char b[80]; std::snprintf(b, sizeof b, "  mAP50 %.3f  mAP50-95 %.3f", r.map50, r.map95);
-    std::cout << b;
-  }
-  std::cout << "\n  Format                Size(MB)   ms/im      img/s    dets\n";
-  std::cout << "  ────────────────────  ────────  ────────  ────────  ─────\n";
+  std::cout << "\n  Format                Size(MB)   ms/im      img/s    dets";
+  if (have_map) std::cout << "    mAP50  mAP50-95";
+  std::cout << "\n  ────────────────────  ────────  ────────  ────────  ─────";
+  if (have_map) std::cout << "    ─────  ────────";
+  std::cout << "\n";
   for (const auto& f : r.formats) {
     // ms/im is per-image (throughput-normalized) so a batched TRT row is
     // comparable to single-image PT, not a per-call number.
-    double ms_im = f.throughput_imgps > 0 ? 1000.0 / f.throughput_imgps : f.median_ms;
-    char line[256];
-    std::snprintf(line, sizeof line, "  %-20s  %8.1f  %8.3f  %8.1f  %5d\n",
-                  f.backend.c_str(), f.size_mb, ms_im, f.throughput_imgps,
-                  f.num_detections);
+    char line[320];
+    int off;
+    if (f.throughput_imgps > 0) {
+      double ms_im = 1000.0 / f.throughput_imgps;
+      off = std::snprintf(line, sizeof line, "  %-20s  %8.1f  %8.3f  %8.1f  %5d",
+                          f.backend.c_str(), f.size_mb, ms_im, f.throughput_imgps,
+                          f.num_detections);
+    } else {  // not timed (e.g. cv::dnn couldn't load the ONNX graph)
+      off = std::snprintf(line, sizeof line, "  %-20s  %8.1f  %8s  %8s  %5s",
+                          f.backend.c_str(), f.size_mb, "-", "-", "-");
+    }
+    if (have_map) {
+      if (f.map_50 >= 0) off += std::snprintf(line + off, sizeof line - off,
+                                              "    %.3f     %.3f", f.map_50, f.map_50_95);
+      else off += std::snprintf(line + off, sizeof line - off, "        -         -");
+    }
+    std::snprintf(line + off, sizeof line - off, "\n");
     std::cout << line;
   }
 }
@@ -873,22 +884,42 @@ int cmd_benchmark(const std::string& weights, const std::string& source,
                   const std::string& int8_calib_cache,
                   const std::string& data, const std::string& names_csv,
                   const std::string& scale_cli) {
-  // Parse precision CSV once — defaults to fp32+fp16, accepts int8.
-  bool fp32 = false, fp16 = false, int8 = false;
+  // Parse format/precision CSV: fp32|fp16|int8 → TRT precisions, onnx → ONNX.
+  bool fp32 = false, fp16 = false, int8 = false, onnx = false;
   for (const auto& tok : split_csv(precision_csv)) {
     if      (tok == "fp32") fp32 = true;
     else if (tok == "fp16") fp16 = true;
     else if (tok == "int8") int8 = true;
-    else if (!tok.empty()) LOG_WARN("bench") << "unknown precision '" << tok
-                                             << "' (expected fp32|fp16|int8)";
+    else if (tok == "onnx") onnx = true;
+    else if (!tok.empty()) LOG_WARN("bench") << "unknown format '" << tok
+                                             << "' (expected fp32|fp16|int8|onnx)";
   }
 
   // `weights` may be a comma-separated list — benchmark each model.
   auto models = split_csv(weights);
   if (models.empty()) { LOG_ERROR("bench") << "no model given"; return 2; }
   const bool have_map = !data.empty();
-  if (have_map) LOG_INFO("bench") << "mAP enabled on " << data
-                                  << " (one reference mAP per model)";
+
+  // Build the eval dataset once (shared across models). PT mAP comes from the
+  // registry validator; TRT + ONNX mAP are measured per format inside
+  // run_benchmark via cfg.eval_ds.
+  std::unique_ptr<yolocpp::datasets::YoloDataset> eval_ds;
+  int eval_nc = 80;
+  if (have_map) {
+    try {
+      auto names = split_csv(names_csv);
+      if (names.empty()) names = yolocpp::inference::coco_names();
+      eval_nc = static_cast<int>(names.size());
+      yolocpp::datasets::AugConfig aug; aug.augment = false;
+      eval_ds = std::make_unique<yolocpp::datasets::YoloDataset>(
+          make_dataset(data, "val", imgsz, names, aug));
+      LOG_INFO("bench") << "per-format mAP on " << data << " (" << eval_ds->size()
+                        << " val images, nc=" << eval_nc << ")";
+    } catch (const std::exception& e) {
+      LOG_WARN("bench") << "mAP disabled — dataset load failed: " << e.what();
+    }
+  }
+  const bool map_on = have_map && eval_ds;
 
   std::vector<ModelBench> reports;
   for (const auto& spec : models) {
@@ -902,20 +933,28 @@ int cmd_benchmark(const std::string& weights, const std::string& source,
     cfg.device = device; cfg.batch_size = batch_size; cfg.scale = scale_cli;
     cfg.int8_calib_dir = int8_calib_dir; cfg.int8_calib_cache = int8_calib_cache;
     cfg.run_trt_fp32 = fp32; cfg.run_trt_fp16 = fp16; cfg.run_trt_int8 = int8;
+    cfg.run_onnx = onnx;
+    if (map_on) { cfg.eval_ds = eval_ds.get(); cfg.nc_eval = eval_nc; }
 
     ModelBench rep;
     rep.name = std::filesystem::path(spec).stem().string();
     try { rep.formats = yolocpp::engine::run_benchmark(cfg); }
     catch (const std::exception& e) { LOG_ERROR("bench") << "skip " << spec << ": " << e.what(); continue; }
     rep.params_m = bench_params_m(w);
-    if (have_map) std::tie(rep.map50, rep.map95) =
-        bench_map(w, data, imgsz, device, scale_cli, names_csv);
 
-    print_model_formats(rep, have_map);
+    // PT mAP via the registry validator (TRT/ONNX rows were scored in
+    // run_benchmark). Stamp it onto the PT format row + the model summary.
+    if (map_on) {
+      std::tie(rep.map50, rep.map95) = bench_map(w, data, imgsz, device, scale_cli, names_csv);
+      for (auto& f : rep.formats)
+        if (f.backend.rfind("PT", 0) == 0) { f.map_50 = rep.map50; f.map_50_95 = rep.map95; }
+    }
+
+    print_model_formats(rep, map_on);
     reports.push_back(std::move(rep));
   }
 
-  if (reports.size() > 1) print_leaderboard(reports, have_map);
+  if (reports.size() > 1) print_leaderboard(reports, map_on);
   std::cout << "\n";
   return reports.empty() ? 1 : 0;
 }

@@ -187,6 +187,7 @@ add_library(yolocpp_core
   src/engine/trainer.cpp
   src/engine/validator.cpp
   src/metrics/map.cpp
+  src/engine/format_eval.cpp
 )
 target_include_directories(yolocpp_core
   PUBLIC

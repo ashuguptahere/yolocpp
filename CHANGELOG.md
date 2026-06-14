@@ -4,6 +4,27 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.1] — 2026-06-08
+
+### Added
+- **Per-format mAP in the benchmark** (was one reference value per model). Each
+  export format is now scored independently over `--data`'s val split:
+  - **PyTorch** via the registry validator (`--mode val`'s dispatch).
+  - **TRT FP32 / FP16 / INT8** via a new `engine::eval_predictor` over
+    `TrtPredictor` — graph-agnostic, so it works for all 14 versions and makes
+    INT8's accuracy delta actually visible. Verified on coco8: PT/TRT-FP32
+    0.896/0.683, FP16 0.897/0.685, INT8 0.925/0.692 (measured separately).
+  - **ONNX** via `cv::dnn` (OpenCV's importer — no onnxruntime dep) when the
+    graph loads. NOTE: OpenCV 4.6's importer rejects our DFL decode's opset-13
+    `ReduceSum`, so ONNX mAP currently shows `-` with a logged reason for the
+    detect family — true ONNX-runtime mAP would need onnxruntime (a deliberately
+    avoided dependency). The path is wired and degrades gracefully.
+  `--bench-precision` gained an **`onnx`** token; `BenchResult` gained
+  `map_50/map_50_95/artifact`; `BenchConfig` gained `eval_ds`/`run_onnx`. New
+  `engine::eval_predictor` + `make_onnx_predictor` (`src/engine/format_eval.cpp`).
+  Per-format mAP columns added to the benchmark table; OpenCV `dnn` component
+  added to the build.
+
 ## [0.101.0] — 2026-06-08
 
 ### Added

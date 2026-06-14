@@ -378,9 +378,13 @@ yolocpp --mode download --dataset coco8
 each is timed across formats (PyTorch + the requested TRT precisions via
 `--bench-precision fp32,fp16,int8`), printing a per-model table (format · size ·
 ms/im · img/s) and, for >1 model, a leaderboard (params · best ms/im · img/s),
-Ultralytics-style. Pass `--data <data.yaml>` to add a per-model reference
-mAP50 / mAP50-95 column. Defaults to batch=1 (single-image latency) unless
-`--batch` is given. Add `--debug` (or `YOLOCPP_LOG=debug`) for verbose logs.
+Ultralytics-style. Pass `--data <data.yaml>` to score **mAP50 / mAP50-95 per
+format** — PyTorch via the validator, TRT fp32/fp16/int8 via the engine over the
+val split (so INT8's accuracy delta is visible). Add `onnx` to
+`--bench-precision` to also time/score the ONNX graph via OpenCV `cv::dnn` (no
+onnxruntime dep; falls back gracefully when the importer can't handle a graph).
+Defaults to batch=1 (single-image latency) unless `--batch` is given. Add
+`--debug` (or `YOLOCPP_LOG=debug`) for verbose logs.
 
 Common flags:
 

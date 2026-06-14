@@ -18,6 +18,8 @@
 
 #include "yolocpp/inference/predictor.hpp"
 
+namespace yolocpp::datasets { class YoloDataset; }
+
 namespace yolocpp::engine {
 
 struct BenchConfig {
@@ -32,6 +34,7 @@ struct BenchConfig {
   bool        run_trt_fp32 = true;
   bool        run_trt_fp16 = true;
   bool        run_trt_int8 = false;  // requires `int8_calib_dir`
+  bool        run_onnx     = false;  // ONNX (cv::dnn) timing/size row
   // YOLO version + scale dispatch. When empty, inferred from the
   // weights filename (`cli::version_from_filename` / `scale_from_filename`).
   // The PT path constructs the correct model (Yolo3/4/5/6/7/8/9/10/11/
@@ -49,16 +52,24 @@ struct BenchConfig {
   // is true. Standard choice: val split of the deploy dataset.
   std::string int8_calib_dir = "";
   std::string int8_calib_cache = "";
+  // When set, each non-PT format is scored over this eval set (per-format
+  // mAP). PT mAP is filled by the caller (registry validator). Null ⇒ speed
+  // only.
+  const datasets::YoloDataset* eval_ds = nullptr;
+  int nc_eval = 80;
 };
 
 struct BenchResult {
   std::string backend;
-  double      median_ms;
-  double      p95_ms;
-  double      mean_ms;
-  double      throughput_imgps;   // 1000 / median
-  int         num_detections;
+  double      median_ms = 0.0;
+  double      p95_ms = 0.0;
+  double      mean_ms = 0.0;
+  double      throughput_imgps = 0.0;   // 1000 / median
+  int         num_detections = 0;
   double      size_mb = 0.0;      // on-disk size of this format's artefact
+  std::string artifact;           // the file backing this format (.pt/.trt/.onnx)
+  double      map_50    = -1.0;    // per-format mAP (<0 = not measured)
+  double      map_50_95 = -1.0;
   // Detections from this backend (used for accuracy delta vs PT).
   std::vector<inference::Detection> dets;
 };

@@ -101,5 +101,5 @@ foreach(_p
     set(OpenCV_DIR "${_p}" CACHE PATH "" FORCE)
   endif()
 endforeach()
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio dnn)
 message(STATUS "OpenCV ${OpenCV_VERSION} (pin ${YOLOCPP_OPENCV_VERSION}) @ ${OpenCV_INCLUDE_DIRS}")
