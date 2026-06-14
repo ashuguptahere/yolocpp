@@ -229,7 +229,7 @@ YoloExample VocDataset::get(std::size_t idx, std::uint64_t aug_seed) const {
     cy = (float)(cy * lb.gain + lb.pad_y);
     w  = (float)(w  * lb.gain);
     h  = (float)(h  * lb.gain);
-    if (flip) cx = (float)imgsz_ - 1.f - cx;
+    if (flip) cx = (float)imgsz_ - cx;  // w - cx (not w-1), match YoloDataset+upstream
     a[i][1] = cx; a[i][2] = cy; a[i][3] = w; a[i][4] = h;
   }
   ex.targets = t;

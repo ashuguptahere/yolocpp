@@ -4,6 +4,26 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.23] — 2026-06-15
+
+### Fixed
+- **Bbox horizontal-flip off-by-one in the VOC / COCO / Flat loaders (latent,
+  from hunt #2).** They used `cx = imgsz - 1 - cx`, but the 0.99.0 flip fix
+  (`cx = imgsz - cx`, per ultralytics `instance.py` — `w - cx`, not `w-1`) only
+  landed in `YoloDataset`. The three secondary loaders kept the off-by-one,
+  shifting every flipped box ~1px left of the `cv::flip`'d content. (These
+  loaders are currently dead on the live path — `make_dataset` funnels them
+  through `YoloDataset` — so this is a public-API/correctness fix, not a live
+  training regression.) All four loaders now match.
+
+### Deferred / disputed
+- Hunt #2 also flagged v12 `A2C2f` gamma init as `ones(c2)` vs upstream
+  `0.01*ones`. **Not applied** — it contradicts the documented CLAUDE.md parity
+  rule ("v13 gamma = 0.01\*ones, NOT ones like v12"), i.e. the maintainer
+  recorded v12=ones as a deliberate v12-vs-v13 distinction. Only affects
+  from-scratch v12 training (pretrained loads gamma from the checkpoint). Needs
+  a Python upstream check before changing.
+
 ## [0.101.22] — 2026-06-15
 
 ### Fixed
