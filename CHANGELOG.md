@@ -4,6 +4,18 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.28] — 2026-06-15
+
+### Fixed
+- **v5 `u`-form name resolved to a nonexistent `yolov5…uu.pt` URL (latent, from
+  hunt #3).** `looks_like_upstream_weight` accepts the anchor-free `u` spelling
+  (`yolo5nu.pt`), but `upstream_basename` unconditionally spliced a `u` before
+  the extension, turning `yolo5nu.pt` into `yolov5nuu.pt` (404) — so that
+  accepted input form couldn't download even though the canonical `yolo5n.pt`
+  could. Now the `u` is only appended when the stem doesn't already end in one;
+  both `yolo5n.pt` and `yolo5nu.pt` map to the real asset `yolov5nu.pt`.
+  Verified end-to-end (`--model yolo5nu.pt` now downloads + predicts).
+
 ## [0.101.27] — 2026-06-15
 
 ### Fixed

@@ -126,11 +126,14 @@ std::string upstream_basename(const std::string& base) {
     // (`yolov5<scale>u.pt`); our DFL/anchor-free v5 head loads it
     // directly. The classic anchor-based `yolov5<scale>.pt` is absent
     // from the assets release (404), so splice the 'u' in before the
-    // extension.
+    // extension — UNLESS the caller already gave the 'u' form
+    // (`yolo5nu.pt`, which `looks_like_upstream_weight` accepts), which
+    // would otherwise double into the nonexistent `yolov5nuu.pt`.
     auto dot = rest.rfind('.');
     std::string stem = (dot == std::string::npos) ? rest : rest.substr(0, dot);
     std::string ext  = (dot == std::string::npos) ? "" : rest.substr(dot);
-    return "yolov5" + stem + "u" + ext;
+    if (stem.empty() || stem.back() != 'u') stem += "u";
+    return "yolov5" + stem + ext;
   }
   return "yolov" + num + rest;     // re-insert the 'v'
 }
