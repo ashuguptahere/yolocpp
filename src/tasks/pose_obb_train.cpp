@@ -400,14 +400,38 @@ OBBLabelExample OBBDataset::get(std::size_t idx, uint64_t seed) const {
   int n_rows = 0;
   while (std::getline(f, line)) {
     std::istringstream iss(line);
-    int cls; float cx, cy, w, h, ang = 0.f;
-    if (!(iss >> cls >> cx >> cy >> w >> h)) continue;
-    iss >> ang;  // optional; default 0
-    cx = (float)((cx * ex.orig_w) * lb.gain + lb.pad_x);
-    cy = (float)((cy * ex.orig_h) * lb.gain + lb.pad_y);
-    w  = (float)((w  * ex.orig_w) * lb.gain);
-    h  = (float)((h  * ex.orig_h) * lb.gain);
-    if (flip) { cx = (float)imgsz_ - 1.f - cx; ang = -ang; }
+    int cls;
+    if (!(iss >> cls)) continue;
+    std::vector<float> v;
+    float t;
+    while (iss >> t) v.push_back(t);
+    float cx, cy, w, h, ang;
+    if (v.size() >= 8) {
+      // DOTA / YOLO-OBB: 8-point normalized polygon (x1 y1 … x4 y4) → fit a
+      // rotated box with cv::minAreaRect. (The old parser read these corners as
+      // cx,cy,w,h,angle → garbage GT, so obb train + val were meaningless.)
+      std::vector<cv::Point2f> pts(4);
+      for (int kk = 0; kk < 4; ++kk) {
+        float px = (float)(v[2 * kk]     * ex.orig_w * lb.gain + lb.pad_x);
+        float py = (float)(v[2 * kk + 1] * ex.orig_h * lb.gain + lb.pad_y);
+        if (flip) px = (float)imgsz_ - 1.f - px;
+        pts[(std::size_t)kk] = {px, py};
+      }
+      cv::RotatedRect rr = cv::minAreaRect(pts);
+      cx = rr.center.x; cy = rr.center.y;
+      w = rr.size.width; h = rr.size.height;
+      ang = rr.angle * (float)M_PI / 180.f;  // radians
+    } else if (v.size() >= 4) {
+      // Legacy normalized cx,cy,w,h[,angle].
+      cx  = (float)(v[0] * ex.orig_w * lb.gain + lb.pad_x);
+      cy  = (float)(v[1] * ex.orig_h * lb.gain + lb.pad_y);
+      w   = (float)(v[2] * ex.orig_w * lb.gain);
+      h   = (float)(v[3] * ex.orig_h * lb.gain);
+      ang = (v.size() >= 5) ? v[4] : 0.f;
+      if (flip) { cx = (float)imgsz_ - 1.f - cx; ang = -ang; }
+    } else {
+      continue;
+    }
     rows.push_back((float)cls);
     rows.push_back(cx); rows.push_back(cy);
     rows.push_back(w);  rows.push_back(h);

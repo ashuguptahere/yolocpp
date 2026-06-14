@@ -4,6 +4,20 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.19] — 2026-06-14
+
+### Fixed
+- **OBB dataset parsed DOTA labels wrong — obb val *and* train ran on garbage
+  GT.** `OBBDataset::get` read each label line as `cls cx cy w h angle`, but
+  DOTA / YOLO-OBB labels are 8-point normalized polygons
+  (`class x1 y1 … x4 y4`) — so it interpreted polygon corners as box params →
+  meaningless GT boxes. This was the real cause of obb val reporting rotated
+  mAP@0.5 = 0 (filed as a follow-up in 0.101.18) even though obb *predict*
+  produced 135 boxes. Now parses the polygon and fits `cv::minAreaRect`
+  (cx,cy,w,h,angle in radians); a 5-number `cx,cy,w,h[,angle]` legacy form still
+  works. Verified: yolov8n-obb / dota8 rotated mAP@0.5 = 0 → **0.749**, and obb
+  train runs on correct rotated boxes.
+
 ## [0.101.18] — 2026-06-14
 
 ### Fixed
