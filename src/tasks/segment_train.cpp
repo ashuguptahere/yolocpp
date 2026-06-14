@@ -346,53 +346,27 @@ void train_segment_t(M model,
       auto tgt = b.targets.to(device);
       auto masks = b.masks;  // kept on CPU until needed in compute_mask_loss
 
-      // Forward — we need (1) raw per-level features for the detect loss and
-      // (2) coefs + protos for the mask loss. Run the segment forward path
-      // and additionally re-run the detect head's feature pass.
-      // Simpler: call backbone+neck once via forward_eval but we only have
-      // a wrapper. Instead, run forward_eval (which gives decoded preds + coefs
-      // + protos), and recover detect-loss feature path by running detect
-      // head's forward_features on the same intermediate feats.
-      auto feats_for_det = std::vector<torch::Tensor>{};
-      // Use forward_train style: we need feats. Easiest path: monkey through
-      // the model — pull intermediate detect-head inputs via a reimplementation.
-      // To avoid that, reuse forward_eval and treat seg as if detect features
-      // are *unused* — instead, use the simpler training signal:
-      //   • detect loss is computed on the same "feats" we feed Detect inside
-      //     Segment::forward — but we only get the decoded output.
-      // Workaround: re-run the model in detect-style via Segment's internal
-      // detect head. Add a public helper next iteration; for now, use the
-      // raw concat-form output from forward_eval for the cls/box loss approx
-      // by re-encoding it as per-level features.
-      // Simpler & correct: skip mask loss for the first `warmup_epochs`
-      // and rely on detect loss only. Then add mask loss once detect signal
-      // is meaningful.
-      auto out_tuple = model->forward_eval(x);
-      auto coefs    = std::get<1>(out_tuple);
-      auto protos   = std::get<2>(out_tuple);
-
-      // Build a synthetic per-level feats from the model's last layer:
-      // we recover feats by re-evaluating just the Detect inner head.
-      // Head is always the last layer in the ModuleList (idx 22 for v8,
-      // 23 for v11). Use model->size() - 1 to stay version-agnostic.
+      // Training forward (§5): forward_train_seg returns the RAW per-level
+      // detect features (for the box/cls/dfl loss) plus the mask coefs +
+      // prototypes (for the mask loss) in one pass. Previously the detect
+      // loss was skipped (det_total = 0) because the feats weren't exposed —
+      // segment training optimised mask loss only, which left box/cls/dfl
+      // un-trained.
+      auto [feats, coefs, protos] = model->forward_train_seg(x);
       auto* seg_head =
           model->model[model->model->size() - 1]->template as<models::SegmentImpl>();
-      // Run forward backbone+neck up through layer 21 to get det inputs.
-      // Reuse the model's forward by stepping the ModuleList inline.
-      torch::Tensor decoded = std::get<0>(out_tuple);
-      // We synthesize feats by reverse: Segment::forward built feats already.
-      // To avoid duplicating that, we just compute detect loss against the
-      // *single concat-form output*, treating it as if it were the model's
-      // pre-decoded prediction. This means we minimize a proxy detect loss
-      // only sufficient for the synthetic overfit test. For real training,
-      // pull feats explicitly (TODO: expose forward_train_seg).
-      torch::Tensor det_total = torch::zeros({}, x.options());
 
+      // Detect loss (box + cls + dfl) on the raw per-level features —
+      // identical to the detect path (V8DetectionLoss).
+      auto det = det_loss(feats, tgt, model->stride, cfg.imgsz);
+      torch::Tensor det_total = det.total;
+
+      // Mask loss from coefficients + prototypes.
       torch::Tensor mask_loss = compute_mask_loss(
           coefs, protos, tgt, masks, cfg.imgsz, seg_head->nm,
           model->stride);
 
-      auto loss = mask_loss * cfg.mask_gain + det_total;
+      auto loss = det_total + mask_loss * cfg.mask_gain;
       optim.zero_grad();
       loss.backward();
       torch::nn::utils::clip_grad_norm_(model->parameters(), 10.0);
@@ -402,10 +376,12 @@ void train_segment_t(M model,
       sum_m += mask_loss.template item<double>();
       if (gstep % cfg.log_every == 0)
         std::cout << "[seg-train] e=" << epoch << " s=" << step
+                  << " det=" << det_total.template item<double>()
                   << " mask=" << mask_loss.template item<double>() << "\n";
     }
     auto t1 = std::chrono::steady_clock::now();
     std::cout << "[seg-train] epoch " << epoch
+              << " avg_det=" << (sum_d / steps)
               << " avg_mask=" << (sum_m / steps)
               << " in " << std::chrono::duration<double>(t1 - t0).count() << "s\n";
   }

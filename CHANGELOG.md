@@ -4,6 +4,20 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.11] — 2026-06-14
+
+### Fixed
+- **§5 — `forward_train_seg` exposed; segment training now optimizes the detect
+  loss.** The segment trainer set `det_total = 0` because it couldn't reach the
+  per-level detect features — so box/cls/dfl were never trained (mask loss
+  only). Added `SegmentImpl::forward_train` (returns raw per-level feats + mask
+  coefs + prototypes) and `Yolo8Segment::forward_train_seg` /
+  `Yolo11Segment::forward_train_seg`; the trainer now runs `V8DetectionLoss` on
+  the feats **and** the mask loss in one forward pass (and logs `det`/`avg_det`).
+  Verified on yolov8n-seg / coco8-seg: det loss is non-zero and decreasing
+  (epoch 0 → 1: 23.5 → 15.3) where it was a flat 0 before; task-train ctests
+  green. Resolves the lone tracked in-code TODO (`segment_train.cpp:388`).
+
 ## [0.101.10] — 2026-06-14
 
 ### Added

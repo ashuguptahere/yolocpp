@@ -35,6 +35,10 @@ struct Yolo11SegmentImpl : torch::nn::Module {
   std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
       forward_eval(torch::Tensor x);
 
+  // Training forward (§5): (per-level raw feats, mask_coefs, prototypes).
+  std::tuple<std::vector<torch::Tensor>, torch::Tensor, torch::Tensor>
+      forward_train_seg(torch::Tensor x);
+
   int load_from_state_dict(
       const std::vector<std::pair<std::string, at::Tensor>>& entries);
 };

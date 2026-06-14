@@ -401,7 +401,7 @@ These live as inline comments in the codebase. Each should either be tracked as 
 
 | location | note | mapped to |
 |----------|------|-----------|
-| `src/tasks/segment_train.cpp:388` | `pull feats explicitly (TODO: expose forward_train_seg).` | §5 (segment trainer cleanup) |
+| ~~`src/tasks/segment_train.cpp:388`~~ | ✅ resolved — `forward_train_seg` exposed; segment trainer now computes the detect loss (was mask-only). | §5 (done) |
 
 Note: the `legacy stub holder` in `src/models/yolo26.cpp` and the `Object stub` in `pt_loader.cpp` are not TODOs — they're intentional sentinels.
 
@@ -416,7 +416,7 @@ These don't map to a single YOLO version.
 - ✅ **Multi-threaded data prefetch** — landed 0.94.0 (`BatchPrefetcher`, N worker threads, `--workers` flag).
 - ❌ **TRT INT8 calibration** + dynamic-shape multi-batch profiles — easy on top of `TrtBuildConfig` once a calibration set exists.
 - ❌ **Two-GPU DDP validation** — wiring is in place + world_size=1 verified, but no two-GPU box has run training yet.
-- ❌ **`forward_train_seg` factor-out** — segment trainer currently reaches into the segment head to pull feats; a clean accessor would let it ride the same templated trainer pattern as detect.
+- ✅ **`forward_train_seg` factor-out** — `SegmentImpl::forward_train` returns raw per-level feats + coefs + protos; `Yolo8Segment/Yolo11Segment::forward_train_seg` expose it. Segment trainer now runs `V8DetectionLoss` on the feats **and** the mask loss (was mask-only — det loss was hardcoded 0). Verified on yolov8n-seg/coco8-seg (det loss non-zero + decreasing).
 - 🟡 **Benchmark CLI for non-detect tasks** — **PT path done** (`--mode benchmark --task <task>` → `cmd_benchmark_task`: forward timing + `--data` accuracy via `validate_*`; verified on yolov8n-{cls,seg,pose,obb}). **Remaining:** non-detect TRT/ONNX formats need task-specific output decode in `TrtPredictor` (masks/keypoints/rotated boxes).
 
 ---

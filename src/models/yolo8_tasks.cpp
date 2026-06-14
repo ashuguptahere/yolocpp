@@ -80,6 +80,25 @@ SegmentImpl::forward(std::vector<torch::Tensor> x) {
   return {decoded, coefs, protos};
 }
 
+std::tuple<std::vector<torch::Tensor>, torch::Tensor, torch::Tensor>
+SegmentImpl::forward_train(std::vector<torch::Tensor> x) {
+  // Same as forward() but returns the RAW per-level detect features (no
+  // decode) so the detect loss can run on them (§5). Mask coefs + protos
+  // are computed identically.
+  detect->stride = stride;
+  auto feats = detect->forward_features(x);   // per-level [N, no, h_i, w_i]
+
+  std::vector<torch::Tensor> mc;
+  for (int i = 0; i < nl; ++i) {
+    auto* seq = cv4[i]->as<torch::nn::SequentialImpl>();
+    auto y    = seq->forward(x[i]);                     // [N, nm, h_i, w_i]
+    mc.push_back(y.reshape({y.size(0), nm, -1}));
+  }
+  auto coefs  = torch::cat(mc, /*dim=*/2);              // [N, nm, A]
+  auto protos = proto->forward(x[0]);                   // [N, nm, h_p, w_p]
+  return {feats, coefs, protos};
+}
+
 // ─── PoseImpl ─────────────────────────────────────────────────────────────
 PoseImpl::PoseImpl(int nc_, int num_kpts_, int kpt_dim_,
                    std::vector<int> ch_, bool legacy)
@@ -408,6 +427,15 @@ Yolo8SegmentImpl::forward_eval(torch::Tensor x) {
   auto* seg = model[22]->as<SegmentImpl>();
   seg->stride = stride;
   return seg->forward(det_in);
+}
+
+std::tuple<std::vector<torch::Tensor>, torch::Tensor, torch::Tensor>
+Yolo8SegmentImpl::forward_train_seg(torch::Tensor x) {
+  auto outs = forward_backbone_neck(model, x);
+  std::vector<torch::Tensor> det_in = {outs[15], outs[18], outs[21]};
+  auto* seg = model[22]->as<SegmentImpl>();
+  seg->stride = stride;
+  return seg->forward_train(det_in);
 }
 
 int Yolo8SegmentImpl::load_from_state_dict(

@@ -49,6 +49,15 @@ struct SegmentImpl : torch::nn::Module {
   //   prototypes:    [N, nm, h_p, w_p]
   std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
       forward(std::vector<torch::Tensor> x);
+
+  // Training forward (§5): like forward() but returns the RAW per-level detect
+  // features instead of the decoded prediction, so the detect loss (box/cls/
+  // dfl) can be computed alongside the mask loss.
+  //   feats:       per-level [N, 4*reg_max + nc, h_i, w_i]
+  //   mask_coefs:  [N, nm, A]
+  //   prototypes:  [N, nm, h_p, w_p]
+  std::tuple<std::vector<torch::Tensor>, torch::Tensor, torch::Tensor>
+      forward_train(std::vector<torch::Tensor> x);
 };
 TORCH_MODULE(Segment);
 
@@ -102,6 +111,9 @@ struct Yolo8SegmentImpl : torch::nn::Module {
   // Returns (decoded, mask_coefs, prototypes)
   std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
       forward_eval(torch::Tensor x);
+  // Training forward (§5): (per-level raw feats, mask_coefs, prototypes).
+  std::tuple<std::vector<torch::Tensor>, torch::Tensor, torch::Tensor>
+      forward_train_seg(torch::Tensor x);
   int load_from_state_dict(
       const std::vector<std::pair<std::string, at::Tensor>>& entries);
 };
