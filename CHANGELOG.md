@@ -4,6 +4,25 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.9] — 2026-06-14
+
+### Added
+- **`runs/val/validate.csv`** — `--mode val` now appends one row per run
+  (`timestamp, weights, data, imgsz, mAP50, mAP50-95, mAP50-95_{small,medium,
+  large}`) so you can track how a model's val metrics change across
+  checkpoints/runs — the val analogue of the trainer's per-epoch CSV. Header
+  written once when the file is new; the per-run `runs/val/<stem>_results.txt`
+  is unchanged. Verified: two val runs → two accumulated rows.
+
+### Changed
+- **Training per-epoch CSV renamed `results.csv` → `train.csv`** (paired with
+  `validate.csv`). Same upstream-compatible column layout; the `results.png`
+  renderer now reads `train.csv`. README + TODO updated.
+
+### Deferred
+- **#55** (trackers + SAHI) marked deferred at the maintainer's request — to be
+  picked up later.
+
 ## [0.101.8] — 2026-06-14
 
 ### Fixed

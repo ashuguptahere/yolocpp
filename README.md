@@ -212,9 +212,9 @@ Cross-cutting infrastructure that's already wired:
   from cwd / cache / state-dict shape / filename — pass `model=`
   alone and the rest is inferred (renamed `best.pt` / `last.pt`
   works).
-- Run artefacts: `results.csv`, `args.yaml`, `confusion_matrix.png`,
-  `BoxPR/BoxF1/BoxP/BoxR_curve.png`, `labels.jpg`, `results.png`,
-  `train_batch{0,1,2}.jpg`, `best.pt` at peak mAP@0.5:0.95,
+- Run artefacts: `train.csv` (per-epoch training log), `args.yaml`,
+  `confusion_matrix.png`, `BoxPR/BoxF1/BoxP/BoxR_curve.png`, `labels.jpg`,
+  `results.png`, `train_batch{0,1,2}.jpg`, `best.pt` at peak mAP@0.5:0.95,
   `patience=N` early-stop.
 - `runs/<mode>/` default output convention (predict / val / export
   all live alongside `runs/train/`).

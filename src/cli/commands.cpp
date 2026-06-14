@@ -31,6 +31,7 @@
 #include <regex>
 #include <fstream>
 #include <memory>
+#include <ctime>
 
 #include <iostream>
 #include <set>
@@ -211,6 +212,28 @@ void write_val_results(const std::string& weights, const std::string& data,
       << sml->map_50_95_large  << "\n";
   }
   std::cout << "[val] wrote " << out_path << "\n";
+
+  // Append a row to runs/val/validate.csv — the val analogue of the
+  // trainer's per-epoch train.csv. Each `--mode val` run adds one row so
+  // you can track how a model's val metrics change across checkpoints/runs.
+  // Header is written once when the file is new.
+  auto csv_path = std::string("runs/val/validate.csv");
+  bool fresh = !std::filesystem::exists(csv_path);
+  std::ofstream c(csv_path, std::ios::app);
+  if (fresh)
+    c << "timestamp,weights,data,imgsz,mAP50,mAP50-95,"
+         "mAP50-95_small,mAP50-95_medium,mAP50-95_large\n";
+  std::time_t now = std::time(nullptr);
+  char ts[32] = {0};
+  std::strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+  c << ts << ',' << weights << ',' << data << ',' << imgsz << ','
+    << map_50 << ',' << map_50_95 << ',';
+  if (sml)
+    c << sml->map_50_95_small << ',' << sml->map_50_95_medium << ','
+      << sml->map_50_95_large << '\n';
+  else
+    c << ",,\n";
+  std::cout << "[val] appended row to " << csv_path << "\n";
 }
 
 int cmd_predict(const std::string& weights, const std::string& source,

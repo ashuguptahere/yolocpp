@@ -1446,12 +1446,14 @@ void TrainerT<M>::run() {
     std::cout << "[trainer] saved → " << ckpt << "\n";
   };
 
-  // Open results.csv. Columns match the upstream Ultralytics layout
-  // so downstream tooling (results.png renderer, external plotters)
-  // can read either framework's output. P/R/F1 are sampled at the
-  // best-F1 confidence threshold (max of the F1 curve averaged across
-  // classes), then averaged across classes weighted by GT count.
-  std::ofstream csv((fs::path(cfg_.save_dir) / "results.csv").string());
+  // Open train.csv (per-epoch training log). Columns still match the
+  // upstream Ultralytics results.csv layout so downstream tooling (the
+  // results.png renderer, external plotters) can read it — only the
+  // filename differs (paired with runs/val/validate.csv). P/R/F1 are
+  // sampled at the best-F1 confidence threshold (max of the F1 curve
+  // averaged across classes), then averaged across classes weighted by
+  // GT count.
+  std::ofstream csv((fs::path(cfg_.save_dir) / "train.csv").string());
   csv << "epoch,time,train/box_loss,train/cls_loss,train/dfl_loss,"
          "metrics/precision(B),metrics/recall(B),metrics/F1(B),"
          "metrics/mAP50(B),metrics/mAP50-95(B),lr0\n";
@@ -1802,7 +1804,7 @@ void TrainerT<M>::run() {
     }
 
     if (is_rank0(ddp)) {
-      // results.csv row (rank 0 only).
+      // train.csv row (rank 0 only).
       csv << epoch << "," << sec << ","
           << (sum_box / steps) << "," << (sum_cls / steps) << ","
           << (sum_dfl / steps) << ","
@@ -1884,8 +1886,8 @@ void TrainerT<M>::run() {
       render_labels_histogram(vo.gts, names,
                               (fs::path(sd) / "labels.jpg").string());
 
-      // 4) results.png — training curves from results.csv we just wrote.
-      render_results_png((fs::path(sd) / "results.csv").string(),
+      // 4) results.png — training curves from train.csv we just wrote.
+      render_results_png((fs::path(sd) / "train.csv").string(),
                          (fs::path(sd) / "results.png").string());
     }
   }

@@ -52,7 +52,8 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 - ✅ Save-dir auto-increments (`runs/train` → `train2` → `train3`).
 - ✅ `best.pt` saved at peak val mAP@0.5:0.95.
 - ✅ Auto-attach val split when `<root>/images/val` exists.
-- ✅ `results.csv` per-epoch (upstream-shape header).
+- ✅ `train.csv` per-epoch training log (upstream-shape header; renamed from `results.csv`).
+- ✅ `runs/val/validate.csv` — appended per `--mode val` run (timestamp, weights, data, imgsz, mAP50/50-95 + S/M/L), to track val metrics across checkpoints/runs.
 - ✅ `patience=N` early stopping when val mAP plateaus.
 - ✅ `runs/<run>/args.yaml` reproducibility dump (timestamped, 107-key upstream-shape).
 - ✅ `runs/<run>/confusion_matrix.png` rendered at end.
@@ -262,7 +263,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 
 | # | scope | priority | session-cost estimate | blockers |
 |---|-------|----------|------------------------|----------|
-| #55  | Trackers + SAHI integration | medium | 3 sessions | needs a clean abstract `Tracker` base; design first |
+| #55  | ⏸️ **deferred** (maintainer will return to it) — Trackers + SAHI integration. Needs a clean abstract `Tracker` base first; ~3 sessions (SORT/OC-SORT/ByteTrack/BoT-SORT/NvSORT + SAHI). | medium | 3 sessions (deferred) | needs a clean abstract `Tracker` base; design first |
 | #55A | Centralised abstract `Tracker` base (`update(det) → tracks`) | — | within #55 | — |
 | #55B | SORT | — | within #55 | — |
 | #55C | DeepSORT (re-id embedder) | — | within #55 | — |
