@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.17] — 2026-06-14
+
+### Fixed
+- **CLI / parity latent bugs (from the hunt):**
+  - **classify/obb predict ignored `--nc`** (hardcoded 1000 / 15). Now honour
+    `--nc`, falling back to the ImageNet-1000 / DOTA-15 default when it wasn't
+    set (mirrors the export sentinel). Verified classify/obb predict still work.
+  - **OBB val + benchmark letterboxed DOTA images to 640** instead of the 1024
+    the predict path already used → silently under-reported rotated mAP. Now
+    `(imgsz==640) ? 1024`.
+  - **Benchmark TF32-clear was hardcoded to `version == "v10"`**, skipping v13
+    (whose `V13AAttn` accumulation also needs TF32 cleared for TRT per CLAUDE.md).
+    Now uses the registry `trt_disable_tf32` flag — covering v10, v13, and any
+    future version that declares it.
+
 ## [0.101.16] — 2026-06-14
 
 ### Fixed

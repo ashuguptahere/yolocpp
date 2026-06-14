@@ -578,9 +578,10 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     return 0;
   }
   if (task == "obb") {
+    int sz = (imgsz == 640) ? 1024 : imgsz;  // OBB/DOTA default 1024 (cf. predict)
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::dota_names();
-    yolocpp::tasks::OBBDataset ds(data, "val", imgsz, names, /*augment=*/false);
+    yolocpp::tasks::OBBDataset ds(data, "val", sz, names, /*augment=*/false);
     yolocpp::models::Yolo8OBB m(parse_scale(scale), ds.num_classes(), /*ne=*/1);
     load(m);
     auto r = yolocpp::tasks::validate_obb(m, ds, dev);
@@ -703,12 +704,13 @@ int cmd_benchmark_task(const std::string& task, const std::string& weights,
     metric_name = "OKS-mAP@0.5";
     if (have_map) metric = yolocpp::tasks::validate_pose(m, *ds, dev).oks_map_50;
   } else if (task == "obb") {
+    sz = (imgsz == 640) ? 1024 : imgsz;  // OBB/DOTA default 1024
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::dota_names();
     int nc = static_cast<int>(names.size());
     std::unique_ptr<yolocpp::tasks::OBBDataset> ds;
     if (have_map) {
-      ds = std::make_unique<yolocpp::tasks::OBBDataset>(data_root, "val", imgsz, names, false);
+      ds = std::make_unique<yolocpp::tasks::OBBDataset>(data_root, "val", sz, names, false);
       nc = ds->num_classes();
     }
     yolocpp::models::Yolo8OBB m(parse_scale(scale), nc, /*ne=*/1);
@@ -1553,9 +1555,12 @@ int predict_one_image(const std::string& task, const std::string& weights,
 
   if (task == "classify") {
     int sz = (imgsz == 640) ? 224 : imgsz;  // classify default 224
+    // Honour --nc; fall back to the ImageNet 1000 default when --nc wasn't set
+    // (the global default is the detect 80). Was hardcoded to 1000, ignoring --nc.
+    int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;
     if (is_v26) {
       yolocpp::inference::Yolo26ClassifyPredictor p(
-          weights, sz, device, /*nc=*/1000,
+          weights, sz, device, /*nc=*/cls_nc,
           yolocpp::models::yolo26_scale_from_letter(scale_s));
       cv::Mat img = cv::imread(source, cv::IMREAD_COLOR);
       if (img.empty()) throw std::runtime_error("could not read " + source);
@@ -1567,7 +1572,7 @@ int predict_one_image(const std::string& task, const std::string& weights,
     }
     if (is_v11) {
       yolocpp::inference::Yolo11ClassifyPredictor p(
-          weights, sz, device, /*nc=*/1000,
+          weights, sz, device, /*nc=*/cls_nc,
           yolocpp::models::yolo11_scale_from_letter(scale_s));
       cv::Mat img = cv::imread(source, cv::IMREAD_COLOR);
       if (img.empty()) throw std::runtime_error("could not read " + source);
@@ -1577,7 +1582,7 @@ int predict_one_image(const std::string& task, const std::string& weights,
         std::cout << "  " << cid << "  " << prob << "\n";
       return 0;
     }
-    yolocpp::inference::ClassifyPredictor p(weights, sz, device, /*nc=*/1000,
+    yolocpp::inference::ClassifyPredictor p(weights, sz, device, /*nc=*/cls_nc,
                                              parse_scale(scale_s));
     cv::Mat img = cv::imread(source, cv::IMREAD_COLOR);
     if (img.empty()) throw std::runtime_error("could not read " + source);
@@ -1636,9 +1641,11 @@ int predict_one_image(const std::string& task, const std::string& weights,
   }
   if (task == "obb") {
     int sz = (imgsz == 640) ? 1024 : imgsz;  // OBB default 1024
+    // Honour --nc; fall back to the DOTA 15 default when --nc wasn't set.
+    int obb_nc = (nc < 0 || nc == 80) ? 15 : nc;
     if (is_v26) {
       yolocpp::inference::Yolo26OBBPredictor p(
-          weights, sz, device, /*nc=*/15,
+          weights, sz, device, /*nc=*/obb_nc,
           yolocpp::models::yolo26_scale_from_letter(scale_s));
       auto insts = p.predict_to_file(source, out, c);
       std::cout << "[obb] (v26) " << insts.size() << " rotated boxes, wrote " << out << "\n";
@@ -1646,13 +1653,13 @@ int predict_one_image(const std::string& task, const std::string& weights,
     }
     if (is_v11) {
       yolocpp::inference::Yolo11OBBPredictor p(
-          weights, sz, device, /*nc=*/15,
+          weights, sz, device, /*nc=*/obb_nc,
           yolocpp::models::yolo11_scale_from_letter(scale_s));
       auto insts = p.predict_to_file(source, out, c);
       std::cout << "[obb] (v11) " << insts.size() << " rotated boxes, wrote " << out << "\n";
       return 0;
     }
-    yolocpp::inference::OBBPredictor p(weights, sz, device, /*nc=*/15,
+    yolocpp::inference::OBBPredictor p(weights, sz, device, /*nc=*/obb_nc,
                                         parse_scale(scale_s));
     auto insts = p.predict_to_file(source, out, c);
     std::cout << "[obb] " << insts.size() << " rotated boxes, wrote " << out << "\n";

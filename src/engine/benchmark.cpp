@@ -158,14 +158,21 @@ std::vector<BenchResult> run_benchmark(const BenchConfig& cfg) {
     build_onnx_for(cfg, version, scale_s, onnx_path);
   }
 
-  // Helper that fills in the per-batch profile + v10 TF32 quirk.
+  // Helper that fills in the per-batch profile + the TF32-clear quirk. The
+  // versions that need TF32 cleared for TRT (v10 RepVGGDW, v13 V13AAttn) are
+  // declared via the registry's `trt_disable_tf32` flag — honour that instead
+  // of a hardcoded "v10" string (which silently skipped v13).
+  const bool trt_no_tf32 = [&] {
+    const auto* a = yolocpp::registry::Registry::instance().find(version);
+    return a && a->trt_disable_tf32;
+  }();
   auto with_batch_profile = [&](serialization::TrtBuildConfig& tcfg) {
     tcfg.imgsz = cfg.imgsz;
     tcfg.builder_opt_level = 1;
     tcfg.batch_min = 1;
     tcfg.batch_opt = cfg.batch_size;
     tcfg.batch_max = cfg.batch_size;
-    if (version == "v10") tcfg.tf32 = false;
+    if (trt_no_tf32) tcfg.tf32 = false;
   };
 
   // True batched throughput at batch=N: call predict_batch(N copies of
