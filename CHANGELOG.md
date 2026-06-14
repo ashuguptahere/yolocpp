@@ -4,6 +4,16 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.2] — 2026-06-08
+
+### Changed
+- **Docs sync for the 0.100–0.101 batch.** `TODO.md` §1.20 records the landed
+  work (web console, logger, deps centralization, multi-model + per-format
+  benchmark) and the snapshot line now points at the live state; new task **#70**
+  files the open ONNX-runtime-mAP decision (onnxruntime dep vs DFL-as-Conv
+  emitter rewrite) as the next session's starting point. `SESSION_DIGEST.md`
+  gains a current-session digest above the frozen prior one.
+
 ## [0.101.1] — 2026-06-08
 
 ### Added

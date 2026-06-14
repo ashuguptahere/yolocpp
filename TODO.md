@@ -6,7 +6,7 @@ This file is maintained as part of recurring task **#33** (gap-audit) — see CL
 
 The current release version is **always read from `CMakeLists.txt` `project(... VERSION ...)`** (which flows into `build/generated/yolocpp/config.hpp` as `YOLOCPP_VERSION_STRING` and out via `yolocpp info`). Do not duplicate it into prose snapshots in this file — the only places a literal version belongs are `CMakeLists.txt`, `CHANGELOG.md` headings, and historical "landed in X.Y.Z" lines.
 
-> **Latest snapshot**: every numbered task #12..#45 closed except recurring #33. Full matrix sweep (`scripts/full_matrix_sweep.sh`) reports `PASS=164 FAIL=0 SKIP=0`. ctest 39/39 green. New roadmap tasks **#46..#63** below were filed 2026-05-01 from the user's next-batch requirement list. See `SESSION_DIGEST.md` for the per-version landing map across the previous session.
+> **Latest snapshot** (0.101.1, 2026-06-08): every numbered task #12..#45 closed except recurring #33; ctest 39/39 green. Recent batch (§1.20): `yolocpp_web` browser console (0.100.0), `yolocpp::log` (0.100.1), deps centralized in `cmake/dependencies.cmake` via FetchContent/`file(DOWNLOAD)` — vcpkg rejected (0.100.2), multi-model+format benchmark (0.101.0), per-format mAP for PT+TRT (0.101.1). **Next session starts at #70** — true ONNX-runtime mAP (decision pending: onnxruntime dep vs DFL-as-Conv emitter rewrite). See `SESSION_DIGEST.md` for the per-version landing map.
 
 Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started · 🔁 recurring
 
@@ -158,6 +158,13 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 - ✅ Versioning + changelog policy (pre-1.0, `0.MINOR.PATCH`) — `CHANGELOG.md`, `CMakeLists.txt` `VERSION`, CLAUDE.md policy section.
 - ✅ Periodic gap-audit (recurring TODO) — task #33 + CLAUDE.md `## Periodic gap-audit` section.
 
+### 1.20 Web console + tooling batch (0.100.0 – 0.101.1)
+- ✅ **`yolocpp_web` console (0.100.0)** — server-side Clay→HTML UI + cpp-httplib backend to run train/val/predict/export from a browser (`src/web/`). Native backend (no LibTorch in browser); jobs run one-at-a-time on a worker thread via the public `YOLO` API; `cli::resolve_weights()` before the ctor. clay impl built as C. New header deps clay (zlib) + cpp-httplib (MIT).
+- ✅ **`yolocpp::log` (0.100.1)** — dependency-free leveled logger (`include/yolocpp/core/log.hpp`), `LOG_DEBUG/INFO/WARN/ERROR("tag") << …`, TTY colour, friendly errors via `<< log::hint("…")`. Verbosity: `YOLOCPP_LOG=debug|info|warn|error|silent` or `--debug`/`--verbose`. resolve.cpp converted (candidate-path traces).
+- ✅ **Deps centralized in `cmake/dependencies.cmake` (0.100.2)** — single pin source; CMake pulls + sha256-verifies the portable single headers (CLI11/rapidyaml/clay/cpp-httplib) via `file(DOWNLOAD … EXPECTED_HASH)`, reusing `third_party/` when present; LibTorch via FetchContent zip. TRT/OpenCV `.deb` versions pinned in-module, extraction stays in the install script. **vcpkg evaluated + rejected** (no cu130 LibTorch / TensorRT port).
+- ✅ **Multi-model + format benchmark (0.101.0)** — `--mode benchmark -m a.pt,b.pt` → per-model format table (Format · Size MB · ms/im · img/s · dets) + leaderboard (params · best speed). `--data` adds per-model mAP; batch defaults to 1 (latency).
+- ✅ **Per-format mAP (0.101.1)** — each format scored independently over `--data`: PT via registry validator; TRT fp32/fp16/int8 via `engine::eval_predictor` over `TrtPredictor` (graph-agnostic → all versions; INT8 drop visible). ONNX via `cv::dnn` (graceful fallback — see #70). `BenchResult` gained `map_50/map_50_95/size_mb/artifact`.
+
 ---
 
 ## 2. Pending / in-flight tasks (session task numbers)
@@ -275,6 +282,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #56I | Scaled-YOLOv4 | — | within #56 | — |
 | #56J | DAMO-YOLO | — | within #56 | — |
 | #56K | Centralised model zoo umbrella for non-YOLO open-source CV models that share the same license profile (commercial-friendly) | — | within #56 | — |
+| #70 | **True ONNX-runtime mAP in `--mode benchmark`** (per-format mAP for PT + TRT fp32/fp16/int8 landed 0.101.1). ONNX is wired via OpenCV `cv::dnn` but **OpenCV 4.6's importer rejects our DFL decode's opset-13 `ReduceSum`** → ONNX mAP shows `-` (graceful) for the detect family. Two paths, pick one: **(1)** add onnxruntime (clean, but a deliberately-avoided dep — needs maintainer sign-off + DEPS.md row + audit-whitelist), or **(2)** re-emit DFL as a `Conv` instead of softmax+ReduceSum in all 14 ONNX emitters (cv::dnn-compatible + TRT-compatible, but needs re-validating ONNX parity across every version). Decision pending — **this is where the next session starts.** | medium | (1) ~half session · (2) ~1 session | maintainer decision on dep vs emitter rewrite |
 
 ### Group V — performance + hardware
 

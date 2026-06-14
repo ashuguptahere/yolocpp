@@ -1,4 +1,28 @@
-# Session digest — 2026-05-01
+# Session digest — 2026-06-08 (current)
+
+End-state of the most recent session. For the live version see `./VERSION` /
+`yolocpp --version`. ctest 39/39 green; git tree clean.
+
+**Where the next session starts: TODO #70** — true ONNX-runtime mAP in
+`--mode benchmark`. Per-format mAP for PyTorch + TRT (fp32/fp16/int8) landed
+(0.101.1); ONNX is wired via OpenCV `cv::dnn` but OpenCV 4.6's importer rejects
+our DFL decode's opset-13 `ReduceSum`, so ONNX mAP shows `-` (graceful). Pending
+maintainer decision: **(1)** add onnxruntime (new dep, needs sign-off) or
+**(2)** re-emit DFL as a `Conv` across all 14 ONNX emitters (no new dep, needs
+parity re-validation). Memory: `project_deps_log_bench.md`.
+
+| ver | scope | what landed |
+|-----|-------|-------------|
+| 0.99.68–0.99.71 | data/fix | v5 resolver u-form 404 fix + v1 bf16 train-crash fix + models/ test skip-gating; 1-epoch metrics re-runs (batch-8 + baseline-matched batch-16) + delta CSVs under `docs/data/`; sweep hardened (`VARIANTS_FILE`, CUDA-OOM batch-halving, sci-notation/CRLF fixes). |
+| 0.100.0 | feature | **`yolocpp_web`** browser console — server-side Clay→HTML UI + cpp-httplib backend (`src/web/`); jobs via the public `YOLO` API; no LibTorch in the browser. |
+| 0.100.1 | feature | **`yolocpp::log`** — leveled, colour, friendly errors; `YOLOCPP_LOG` / `--debug`. resolve.cpp traced. |
+| 0.100.2 | build | **deps centralized** in `cmake/dependencies.cmake` — CMake pins + pulls headers (`file(DOWNLOAD … EXPECTED_HASH)`) + LibTorch (FetchContent); vcpkg evaluated + rejected (no cu130 LibTorch / TensorRT port). |
+| 0.101.0 | feature | **multi-model + format benchmark** — `-m a.pt,b.pt` → per-model format table + leaderboard; `--data` mAP; batch defaults to 1. |
+| 0.101.1 | feature | **per-format mAP** — PT (validator) + TRT fp32/fp16/int8 (`engine::eval_predictor` over `TrtPredictor`, all versions, INT8 drop visible); ONNX via `cv::dnn` (graceful fallback — TODO #70). |
+
+---
+
+# Session digest — 2026-05-01 (previous)
 
 Frozen snapshot of the prior session's end-state (the version stamp in
 this header is **historical** — refers to that session's release). For
