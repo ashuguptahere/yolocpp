@@ -1759,6 +1759,7 @@ void TrainerT<M>::run() {
       val_nms.conf_thresh = 0.001f;
       val_nms.iou_thresh  = 0.7f;
       val_nms.max_det     = 300;
+      val_nms.multi_label = true;  // match standalone val + upstream (was single-label)
       last_vo = std::make_unique<ValidationOutput>(
           validate_with_records(ema_, *cfg_.val_dataset, device_, val_nms));
       auto _vt1 = std::chrono::steady_clock::now();

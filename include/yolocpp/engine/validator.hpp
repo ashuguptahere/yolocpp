@@ -50,7 +50,8 @@ ValidationOutput validate_with_records(
     inference::NMSConfig nms_cfg = {.conf_thresh = 0.001f,
                                    .iou_thresh  = 0.7f,
                                    .max_det     = 300,
-                                   .max_nms     = 30000});
+                                   .max_nms     = 30000,
+                                   .multi_label = true});  // match validate() + upstream
 
 // Render a confusion matrix to a PNG. `names` should have length nc;
 // last row/column is "background" added automatically.

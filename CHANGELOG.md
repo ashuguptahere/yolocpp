@@ -4,6 +4,20 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.20] — 2026-06-15
+
+### Fixed
+- **In-training validation used single-label NMS while standalone val + upstream
+  use multi-label** (latent, from hunt #2). `validate()` defaults
+  `NMSConfig.multi_label = true`, but `validate_with_records()` (used for the
+  per-epoch val that selects `best.pt`) omitted it → fell back to the struct
+  default `false`, and the trainer's explicit `val_nms` never set it. So the
+  in-training mAP — and thus which epoch is saved as `best.pt` — was computed
+  with a different (single-label) NMS than the standalone `--mode val` path.
+  Added `.multi_label = true` to both. Verified the det set expands on the same
+  weights (coco8: 764 → 778 post-NMS detections); the AP delta is dataset-
+  dependent (negligible on coco8's 4 images, material on real multi-class sets).
+
 ## [0.101.19] — 2026-06-14
 
 ### Fixed
