@@ -78,5 +78,6 @@ TORCH_MODULE(Yolo2);
 // Default anchor sets in grid-cell units (13×13 grid at 416 input).
 std::vector<float> yolo2_voc_anchors();
 std::vector<float> yolo2_coco_anchors();
+std::vector<float> yolo2_tiny_voc_anchors();
 
 }  // namespace yolocpp::models

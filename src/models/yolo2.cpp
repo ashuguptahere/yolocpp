@@ -69,10 +69,26 @@ std::vector<float> yolo2_coco_anchors() {
           9.77052f, 9.16828f};
 }
 
+// yolov2-tiny-voc.cfg ships its OWN k-means anchor set — distinct from full
+// yolov2-voc. (yolov2-tiny.cfg for COCO, by contrast, reuses the full COCO
+// anchors, so there is no separate tiny-coco set.)
+std::vector<float> yolo2_tiny_voc_anchors() {
+  return {1.08f,  1.19f,
+          3.42f,  4.41f,
+          6.63f,  11.38f,
+          9.42f,  5.11f,
+          16.62f, 10.52f};
+}
+
 Yolo2Impl::Yolo2Impl(Yolo2Scale s, int nc_, std::vector<float> anchors_)
     : scale(s), nc(nc_), anchors(std::move(anchors_)) {
   if (anchors.empty()) {
-    anchors = (nc == 80) ? yolo2_coco_anchors() : yolo2_voc_anchors();
+    if (nc == 80)
+      anchors = yolo2_coco_anchors();          // tiny + full COCO share anchors
+    else if (scale == Yolo2Scale::Tiny)
+      anchors = yolo2_tiny_voc_anchors();       // tiny-voc has its own set
+    else
+      anchors = yolo2_voc_anchors();
   }
   const int na  = num_anchors();
   const int out_c = na * (5 + nc);

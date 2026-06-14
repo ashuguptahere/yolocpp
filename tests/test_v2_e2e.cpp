@@ -60,6 +60,24 @@ int main() {
     EXPECT(out.size(2) == 5 * 13 * 13,      "v2-tiny A");
     std::cout << "[v2-e2e] tiny forward shape OK (out=" << out.sizes() << ")\n";
   }
+  // 3b) Default-anchor selection. yolov2-tiny-voc.cfg ships its own k-means
+  //     anchor set, distinct from full yolov2-voc; tiny+full COCO share one.
+  //     Picking the wrong set silently mis-decodes every tiny-voc box.
+  {
+    EXPECT((models::Yolo2(models::Yolo2Scale::Tiny, 20)->anchors ==
+            models::yolo2_tiny_voc_anchors()),
+           "v2 tiny+VOC uses the tiny-voc anchor set");
+    EXPECT((models::Yolo2(models::Yolo2Scale::Full, 20)->anchors ==
+            models::yolo2_voc_anchors()),
+           "v2 full+VOC uses the full-voc anchor set");
+    EXPECT((models::Yolo2(models::Yolo2Scale::Tiny, 80)->anchors ==
+            models::yolo2_coco_anchors()),
+           "v2 tiny+COCO shares the full COCO anchor set");
+    EXPECT((models::Yolo2(models::Yolo2Scale::Full, 80)->anchors ==
+            models::yolo2_coco_anchors()),
+           "v2 full+COCO uses the COCO anchor set");
+    std::cout << "[v2-e2e] default-anchor selection OK\n";
+  }
 
   // 4) Predict on bus.jpg if a pre-converted `data/yolo2*.pt` is
   //    available. `tools/convert_weights` produces these from

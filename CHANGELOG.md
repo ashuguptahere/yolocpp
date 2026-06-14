@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.26] — 2026-06-15
+
+### Fixed
+- **yolo2-tiny-voc decoded boxes with full-yolo2-voc anchors (latent, from hunt
+  #3).** `Yolo2Impl`'s default-anchor selection keyed only on `nc` (`80 → COCO,
+  else VOC`), ignoring the variant. But `yolov2-tiny-voc.cfg` ships its own
+  k-means anchor set (`1.08,1.19, 3.42,4.41, 6.63,11.38, 9.42,5.11,
+  16.62,10.52`) distinct from full `yolov2-voc` — so every tiny-voc detection
+  was decoded against the wrong priors (mis-sized/mis-placed boxes). (tiny-coco
+  is unaffected: `yolov2-tiny.cfg` reuses the full COCO anchors.) Added
+  `yolo2_tiny_voc_anchors()` and selected it for the `Tiny`+VOC case. Fix flows
+  through predict, the `.weights` converter, and ONNX/TRT export (all build the
+  holder via this ctor). Guarded by a weights-free anchor-selection leg in
+  `test_v2_e2e`.
+
 ## [0.101.25] — 2026-06-15
 
 ### Fixed
