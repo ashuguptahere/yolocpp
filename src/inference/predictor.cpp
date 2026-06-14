@@ -57,19 +57,27 @@ Predictor::Predictor(const std::string& weights, int imgsz, std::string device,
     : model_(scale, nc),
       device_(resolve_device(std::move(device))),
       imgsz_(imgsz) {
-  // Try the upstream `.pt` format first; fall back to torch::save
-  // archives (which is what our trainer emits via
-  // `torch::save(ema_, ...)`).
+  // Try the upstream `.pt` format first; fall back to torch::save archives
+  // (what our trainer emits via `torch::save(ema_, ...)`) only when the file
+  // can't be parsed as a state-dict pickle at all. A *successful* parse whose
+  // tensors don't match the constructed architecture is a real error (wrong
+  // --version/--scale) — let it propagate to the CLI's clean error handler
+  // instead of masking it behind the torchscript loader's cryptic miniz error.
+  serialization::StateDict sd;
+  bool parsed = false;
   try {
-    auto sd = serialization::load_state_dict(weights);
-    int copied = model_->load_from_state_dict(sd.entries);
-    std::cout << "[predictor] loaded " << copied
-              << " tensors from " << weights << "\n";
+    sd = serialization::load_state_dict(weights);
+    parsed = true;
   } catch (const std::exception& e) {
-    std::cerr << "[predictor] upstream-format load failed (" << e.what()
+    std::cerr << "[predictor] upstream-format parse failed (" << e.what()
               << "); trying torch::save format...\n";
     torch::load(model_, weights);
     std::cout << "[predictor] loaded torch::save archive: " << weights << "\n";
+  }
+  if (parsed) {
+    int copied = model_->load_from_state_dict(sd.entries);
+    std::cout << "[predictor] loaded " << copied
+              << " tensors from " << weights << "\n";
   }
 
   model_->to(device_);

@@ -701,6 +701,24 @@ int Yolo8DetectImpl::load_from_state_dict(
   }
   if (copied == 0)
     throw std::runtime_error("load_from_state_dict: copied 0 tensors");
+  // Architecture-mismatch backstop. A correct load fills essentially every
+  // destination tensor by name (custom-nc only re-shapes the few cls-head
+  // convs, which land in skipped_shape — still name-matched). If most of our
+  // tensors found no same-name source, the checkpoint is for a different
+  // architecture — e.g. a versionless v11 checkpoint that the "v8" filename
+  // default built as Yolo8Detect. Fail loudly instead of running a partly
+  // initialised model that predicts garbage / scores mAP 0.
+  const int total   = static_cast<int>(ours.size());
+  const int matched = copied + skipped_shape;
+  if (total > 0 && matched < total * 6 / 10) {
+    throw std::runtime_error(
+        "load_from_state_dict: only " + std::to_string(matched) + "/" +
+        std::to_string(total) +
+        " tensors matched by name — checkpoint architecture does not match "
+        "the constructed model. A trained checkpoint with no version in its "
+        "filename (e.g. best.pt) defaults to v8; pass --version/--scale "
+        "explicitly to load it as the right YOLO version.");
+  }
   if (skipped_shape > 0) {
     std::cerr << "[yolo8 load] skipped " << skipped_shape
               << " tensors with shape mismatch (cls head re-purposed for custom nc); "

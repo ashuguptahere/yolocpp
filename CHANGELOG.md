@@ -4,6 +4,28 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.24] — 2026-06-15
+
+### Fixed
+- **Versionless non-v8 checkpoint silently loaded as `Yolo8Detect` → garbage
+  predictions / mAP 0 (latent HIGH, from hunt #3).** A trained checkpoint
+  whose filename carries no version token (e.g. `best.pt`) and has no sibling
+  `args.yaml` falls through `version_from_filename` to the `"v8"` default. The
+  unified Predictor then built a `Yolo8Detect` and `load_from_state_dict`
+  copied only the by-name-matching subset (e.g. 138/355 tensors for a v11
+  checkpoint) **without complaint**, leaving the rest random-initialised — so
+  `val` reported mAP 0 and `predict` drew nonsense, with no error. Added an
+  architecture-mismatch backstop in `Yolo8DetectImpl::load_from_state_dict`:
+  when the by-name match fraction falls below 60% of the constructed model's
+  tensors, it now throws an actionable error telling the user to pass
+  `--version`/`--scale`. Custom-`nc` loads are unaffected (only the few cls-head
+  convs reshape; they stay name-matched). Also fixed the Predictor's two-stage
+  loader so a *successful* state-dict parse whose tensors don't match the
+  architecture propagates that clean error instead of cascading into the
+  TorchScript `torch::save` fallback's cryptic miniz stack dump. Repro
+  (`cp data/yolo11n.pt /tmp/best.pt; val --model /tmp/best.pt --scale n`) now
+  exits 1 with a one-line `[error]` instead of silently scoring 0.
+
 ## [0.101.23] — 2026-06-15
 
 ### Fixed
