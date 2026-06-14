@@ -67,6 +67,7 @@ set_target_properties(dump_v10_forward PROPERTIES
 )
 
 yolocpp_add_test(smoke_test         smoke_test.cpp smoke_kernel.cu)
+yolocpp_add_test(test_pt_save_layout test_pt_save_layout.cpp)
 yolocpp_add_test(test_registry      test_registry.cpp)
 yolocpp_add_test(test_api           test_api.cpp)
 set_tests_properties(test_api PROPERTIES

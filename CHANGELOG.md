@@ -4,6 +4,29 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.25] — 2026-06-15
+
+### Fixed
+- **`save_state_dict` recorded channels_last (NHWC) strides over NCHW storage
+  bytes → corrupt `.pt` for any strides-respecting reader (latent, from hunt
+  #3).** The pickle emitter read `t.strides()` from each source tensor, but the
+  raw storage records are written from a `.contiguous()` (row-major NCHW) copy.
+  The trainer puts every 4D conv param into channels_last memory format on CUDA
+  (`trainer.cpp` `to_nhwc`), so every checkpoint saved from CUDA training
+  recorded NHWC strides describing NCHW bytes — a transposed/scrambled tensor
+  when reconstructed via `_rebuild_tensor_v2` by PyTorch or any upstream-format
+  reader. Latent for us only because our own loader is strides-agnostic
+  (`pt_loader.cpp` `(void)strides` — assumes contiguous). Fixed by materialising
+  every tensor to CPU + row-major-contiguous **once** up front in
+  `save_state_dict`, so the emitted sizes/strides and the storage bytes are
+  derived from the same layout by construction. New regression test
+  `test_pt_save_layout` asserts a channels_last save and its `.contiguous()`
+  twin produce a byte-identical `data.pkl` (and round-trips to the right
+  values); it fails on the pre-fix emitter.
+
+### Added
+- `tests/test_pt_save_layout.cpp` — guards the `.pt` save-layout fix above.
+
 ## [0.101.24] — 2026-06-15
 
 ### Fixed

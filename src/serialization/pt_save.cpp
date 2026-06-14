@@ -280,14 +280,26 @@ std::string build_data_pkl(
 void save_state_dict(
     const std::string& path,
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
+  // Materialise every tensor to CPU + row-major-contiguous ONCE, up front, so
+  // the pickle metadata (sizes/strides emitted by build_data_pkl) and the raw
+  // storage bytes (written below) are guaranteed to describe the same layout.
+  // A 4D conv weight in channels_last (NHWC) memory format — which the trainer
+  // puts every conv param into on CUDA — would otherwise record NHWC strides
+  // over NCHW-contiguous storage bytes, scrambling the tensor for any
+  // strides-respecting reader (PyTorch / upstream interop).
+  std::vector<std::pair<std::string, at::Tensor>> cpu_entries;
+  cpu_entries.reserve(entries.size());
+  for (const auto& [name, t] : entries)
+    cpu_entries.emplace_back(name, t.detach().to(torch::kCPU).contiguous());
+
   caffe2::serialize::PyTorchStreamWriter writer(path);
-  // 1) data.pkl
-  auto pkl = build_data_pkl(entries);
+  // 1) data.pkl — strides come from the contiguous copies above.
+  auto pkl = build_data_pkl(cpu_entries);
   writer.writeRecord("data.pkl", pkl.data(), pkl.size());
 
   // 2) data/<id> for each tensor — raw little-endian contiguous bytes.
-  for (size_t i = 0; i < entries.size(); ++i) {
-    auto t   = entries[i].second.detach().to(torch::kCPU).contiguous();
+  for (size_t i = 0; i < cpu_entries.size(); ++i) {
+    auto& t  = cpu_entries[i].second;
     auto sz  = t.numel() * t.element_size();
     auto rec = "data/" + std::to_string(i);
     writer.writeRecord(rec, t.data_ptr(), sz);
