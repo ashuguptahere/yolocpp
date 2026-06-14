@@ -4,6 +4,19 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.16] — 2026-06-14
+
+### Fixed
+- **Trainer metadata + momentum-warmup honesty (latent bugs from the hunt):**
+  - `args.yaml` hardcoded `optimizer: auto` and `deterministic: true` regardless
+    of `--optimizer` / `--strict-deterministic`. Now reports the real
+    `cfg_.optimizer` / `cfg_.deterministic` (verified: `auto`/`false` by default,
+    `sgd`/`true` when requested).
+  - **`warmup_momentum` was emitted to `args.yaml` but never applied** — SGD
+    momentum stayed pinned at `cfg_.momentum` for the whole run. Now ramps
+    `warmup_momentum → momentum` over the warmup steps, then holds (SGD only;
+    AdamW has no momentum knob).
+
 ## [0.101.15] — 2026-06-14
 
 ### Fixed

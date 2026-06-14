@@ -1203,10 +1203,10 @@ void TrainerT<M>::run() {
     y << "name:\n";
     emit("exist_ok",    "false");
     emit("pretrained",  kv_lookup("model").empty() ? "true" : "true");
-    emit("optimizer",   "auto");
+    emit("optimizer",   cfg_.optimizer.empty() ? "auto" : cfg_.optimizer);
     emit("verbose",     "true");
     emit("seed",        std::to_string(cfg_.seed));
-    emit("deterministic","true");
+    emit("deterministic", cfg_.deterministic ? "true" : "false");
     emit("single_cls",  "false");
     emit("rect",        "false");
     emit("cos_lr",      "false");
@@ -1380,6 +1380,8 @@ void TrainerT<M>::run() {
   auto optim_ptr = make_optimizer(opt_kind, pg.decay, pg.bias, pg.bn,
                                   cfg_.lr0, cfg_.momentum, cfg_.weight_decay);
   auto& optim = *optim_ptr;
+  // Momentum warmup (#10) applies to SGD only (AdamW has no momentum knob).
+  const bool is_sgd = dynamic_cast<torch::optim::SGD*>(&optim) != nullptr;
 
   using Traits = LossTraits<M>;
   auto loss = Traits::make(model_);
@@ -1528,6 +1530,18 @@ void TrainerT<M>::run() {
       gs[0].options().set_lr(lr_main);
       gs[1].options().set_lr(lr_bias);
       gs[2].options().set_lr(lr_main);
+      // Momentum warmup (#10): ramp SGD momentum warmup_momentum→momentum over
+      // the warmup, then hold at momentum. Was emitted to args.yaml but never
+      // applied — the momentum stayed pinned at cfg_.momentum the whole run.
+      if (is_sgd) {
+        double m = (gstep < warmup_steps)
+            ? cfg_.warmup_momentum +
+                  (cfg_.momentum - cfg_.warmup_momentum) *
+                      ((double)gstep / (double)warmup_steps)
+            : cfg_.momentum;
+        for (auto& g : gs)
+          static_cast<torch::optim::SGDOptions&>(g.options()).momentum(m);
+      }
 
       // YOLOCPP_PROFILE_STEP=1 env var enables per-step phase timing
       // (prefetch wait / HtoD / forward / backward / post) every 20
