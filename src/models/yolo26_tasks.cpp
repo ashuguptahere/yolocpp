@@ -99,8 +99,10 @@ Pose26Impl::forward(std::vector<torch::Tensor> x) {
   std::vector<torch::Tensor> anc;
   for (int i = 0; i < nl; ++i) {
     int h = (int)x[i].size(2), w = (int)x[i].size(3);
-    auto sx = (torch::arange(w, opts) + 0.5);
-    auto sy = (torch::arange(h, opts) + 0.5);
+    // Anchor xy in PIXELS = (cell + 0.5) * stride (see yolo8_tasks.cpp note);
+    // the decode below assumes pixels, so build in pixels, not feature units.
+    auto sx = (torch::arange(w, opts) + 0.5) * stride[i];
+    auto sy = (torch::arange(h, opts) + 0.5) * stride[i];
     auto gx = sx.reshape({1, w}).expand({h, w});
     auto gy = sy.reshape({h, 1}).expand({h, w});
     auto a  = torch::stack({gx, gy}, -1).reshape({h * w, 2});

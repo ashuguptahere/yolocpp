@@ -274,10 +274,13 @@ torch::Tensor compute_mask_loss(const torch::Tensor& coefs,
   // GT masks: pick the rows in `valid`, downsample to (h_p, w_p), float.
   std::vector<torch::Tensor> gts;
   gts.reserve(valid.size());
-  auto masks_cpu = masks.to(torch::kFloat32) / 255.0f;
+  // GT masks are stored as 0/1 (fillPoly value 1) — NOT 0/255. Dividing by
+  // 255 here collapsed every GT to ~0.004 → `(gt > 0.5)` made the whole target
+  // all-zero → the mask head was trained to predict empty masks (the train-side
+  // twin of the validator /255 bug). Keep them 0/1.
+  auto masks_cpu = masks.to(torch::kFloat32);
   for (int i : valid) gts.push_back(masks_cpu[i]);
   auto gt = torch::stack(gts, 0).unsqueeze(1);                         // [P, 1, H, W]
-  // GT masks were stored as 0/1 (no /255 needed, but normalize defensively).
   gt = gt.clamp(0.0, 1.0);
   gt = torch::nn::functional::interpolate(
       gt,

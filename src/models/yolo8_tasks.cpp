@@ -141,8 +141,12 @@ PoseImpl::forward(std::vector<torch::Tensor> x) {
   for (int i = 0; i < nl; ++i) {
     int h = (int)x[i].size(2), w = (int)x[i].size(3);
     hwi.push_back(h * w);
-    auto sx = (torch::arange(w, opts) + 0.5);
-    auto sy = (torch::arange(h, opts) + 0.5);
+    // Anchor xy in PIXELS = (cell + 0.5) * stride. The decode below
+    // (`xy*2*stride + (anchor_pix - 0.5*stride)`) needs pixels — building it
+    // in feature units (no *stride) compressed every keypoint toward the
+    // origin and disagreed with the (correct) ONNX emitter.
+    auto sx = (torch::arange(w, opts) + 0.5) * stride[i];
+    auto sy = (torch::arange(h, opts) + 0.5) * stride[i];
     auto gx = sx.reshape({1, w}).expand({h, w});
     auto gy = sy.reshape({h, 1}).expand({h, w});
     auto a  = torch::stack({gx, gy}, -1).reshape({h * w, 2});

@@ -4,6 +4,25 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.15] — 2026-06-14
+
+### Fixed
+- **Two high-severity latent task-correctness bugs** (green tests didn't catch
+  them — found by an adversarial bug-hunt sweep):
+  - **Segment mask training trained the mask head on all-zero targets.**
+    `compute_mask_loss` divided the 0/1 GT masks by 255 → `(gt > 0.5)` made
+    every target empty → BCE pushed all mask logits negative regardless of the
+    real instance (loss still decreased, so it was silent). The train-side twin
+    of the validator bug fixed in 0.101.14. Removed the `/255`. Initial mask
+    loss on yolov8n-seg / coco8-seg rose 0.13 (degenerate) → 0.80 (real signal).
+  - **Pose keypoint decode was off by a factor of `stride`** in the LibTorch
+    forward (v8/v11 `PoseImpl`, v26 `Pose26Impl`): the per-anchor xy was built
+    in feature/cell units, but the decode `xy*2*stride + (anchor − 0.5*stride)`
+    needs pixels, so keypoints collapsed toward the origin and disagreed with
+    the (correct) ONNX emitter. Built the anchor in pixels `(cell+0.5)*stride`.
+    Verified on bus.jpg: keypoint x-range `[−142, 171]` (compressed) → `[−2,
+    650]` (spans the 640px image, on the people).
+
 ## [0.101.14] — 2026-06-14
 
 ### Fixed
