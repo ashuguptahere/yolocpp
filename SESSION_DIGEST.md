@@ -1,18 +1,32 @@
-# Session digest — 2026-06-08 (current)
+# Session digest — 2026-06-14 (current)
 
 End-state of the most recent session. For the live version see `./VERSION` /
-`yolocpp --version`. ctest 39/39 green; git tree clean.
+`yolocpp --version`. ctest 40/40 green; work landed on branch
+`claude/todo-sweep` (8 commits off `main`; not pushed). This session was an
+audit-driven sweep through TODO §2A: closed several documented gaps, corrected
+ledger drift, and advanced #70.
 
-**Where the next session starts: TODO #70** — true ONNX-runtime mAP in
-`--mode benchmark`. Per-format mAP for PyTorch + TRT (fp32/fp16/int8) landed
-(0.101.1); ONNX is wired via OpenCV `cv::dnn` but OpenCV 4.6's importer rejects
-our DFL decode's opset-13 `ReduceSum`, so ONNX mAP shows `-` (graceful). Pending
-maintainer decision: **(1)** add onnxruntime (new dep, needs sign-off) or
-**(2)** re-emit DFL as a `Conv` across all 14 ONNX emitters (no new dep, needs
-parity re-validation). Memory: `project_deps_log_bench.md`.
+**Where the next session starts: the remaining large/blocked items.**
+- **#5** benchmark for non-detect tasks (classify/seg/pose/obb) — needs
+  task-aware PT/TRT predictors + per-task mAP (top-1 / mask-mAP / OKS /
+  rotated-IoU); larger than the "small extension" the ledger implied.
+- **#55** trackers (SORT/OC-SORT/ByteTrack/BoT-SORT/NvSORT + SAHI) — needs a
+  clean abstract `Tracker` base first; multi-session.
+- **#70** is now *partial*: the cv::dnn parse blocker is fixed (DFL `ReduceSum`
+  → axes-attribute), but cv::dnn 4.6's forward still can't run the decode
+  subgraph (internal shape assertion) — true ONNX mAP needs the onnxruntime dep
+  (maintainer decision).
+- Hard-blocked: v12/v13 task heads (#60, COCO training), #58/#59 deploy
+  (devices), two-GPU DDP (hardware), #50 license, #61 publish.
 
 | ver | scope | what landed |
 |-----|-------|-------------|
+| 0.101.3 | fix | **#47C2** version-literal linter passes (allow-list extended for historical/vendor/dep/comment forms) + wired as the `test_version_literals` ctest. |
+| 0.101.4 | build+docs | **#57F** Ninja `STATUS` hint (ccache/mold auto-detect already wired); reconciled audit closeouts **#51D2** (`--strict-deterministic`, verified), **#52B** (`examples/` ships 7 snippets). |
+| 0.101.5 | feature | **#51F2** INT8 export wired through the CLI + API (`-p int8 --int8-calib <dir>` → existing `ImgDirCalibrator`); int4/nvfp4 still reject. Verified yolo11n INT8 (5 dets, FP16 parity). |
+| 0.101.6 | feature | **#52A3** `YOLO::predict_many()` → per-input dets keyed by path; `examples/predict_directory` demonstrates it. |
+| 0.101.7 | fix | **#57G** `close_mosaic` actually wired (was advertised in `args.yaml` but never disabled mosaic) — trainer flips a shared dataset mosaic gate off for the last N epochs (mosaic+mixup); `--close-mosaic N` flag + short-run guard. |
+| 0.101.8 | fix | **#70 (partial)** DFL `ReduceSum` → axes-attribute (cv::dnn-parseable, TRT bit-identical); benchmark ONNX predictor probes + degrades to an honest `-` (cv::dnn forward can't run the decode graph — needs onnxruntime). |
 | 0.99.68–0.99.71 | data/fix | v5 resolver u-form 404 fix + v1 bf16 train-crash fix + models/ test skip-gating; 1-epoch metrics re-runs (batch-8 + baseline-matched batch-16) + delta CSVs under `docs/data/`; sweep hardened (`VARIANTS_FILE`, CUDA-OOM batch-halving, sci-notation/CRLF fixes). |
 | 0.100.0 | feature | **`yolocpp_web`** browser console — server-side Clay→HTML UI + cpp-httplib backend (`src/web/`); jobs via the public `YOLO` API; no LibTorch in the browser. |
 | 0.100.1 | feature | **`yolocpp::log`** — leveled, colour, friendly errors; `YOLOCPP_LOG` / `--debug`. resolve.cpp traced. |
