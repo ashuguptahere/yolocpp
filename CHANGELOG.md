@@ -4,6 +4,20 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.14] — 2026-06-14
+
+### Fixed
+- **Segment validation mask-mAP@0.5 was always 0 — now a real per-class AP.**
+  `validate_segment` divided the **0/1** GT masks by 255 before thresholding →
+  every GT mask became empty → 0 IoU matches → `mask mAP@0.5` was a flat 0
+  regardless of model quality. Fixed the GT scale, added the missing
+  `crop_mask` step (predicted masks are zeroed outside their boxes, like
+  upstream — an uncropped proto mask rarely reaches IoU 0.5), and replaced the
+  recall proxy with a true per-class AP@0.5 (conf-sorted greedy matching to
+  same-class GT by mask IoU > 0.5, capped at 100 dets/image). Verified:
+  yolov8n-seg / coco8-seg now reports mask mAP@0.5 = **0.223** (was 0.000) via
+  both `--mode val` and `--mode benchmark`; seg ctests green.
+
 ## [0.101.13] — 2026-06-14
 
 ### Fixed

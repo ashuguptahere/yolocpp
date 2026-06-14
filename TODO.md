@@ -37,7 +37,7 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 
 ### 1.4 Task heads on v8 / v11 / v26 (Phase 3 + 6A + 6B)
 - ✅ classify — predict + train + val.
-- ✅ segment — predict + train + val (mask BCE loss, mask-mAP@0.5).
+- ✅ segment — predict + train + val. Val mask-mAP@0.5 is a real per-class AP (conf-sorted greedy match to same-class GT by mask IoU>0.5, predicted masks cropped to box). **Fixed**: it previously divided the 0/1 GT masks by 255 → empty GT → flat 0; now yolov8n-seg/coco8-seg reports 0.223.
 - ✅ pose — predict + train + val (kpt L1 + visibility BCE, OKS-mAP).
 - ✅ obb — predict + train + val (cosine angular loss, rotated-IoU mAP).
 - ✅ All 75 (version × task × scale) combinations for v8/v11/v26 load the upstream-shipped weights and produce non-empty output on bus.jpg.

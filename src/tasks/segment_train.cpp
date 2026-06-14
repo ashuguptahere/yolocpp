@@ -9,6 +9,9 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <utility>
+#include <vector>
 #include <iostream>
 #include <random>
 #include <sstream>
@@ -396,70 +399,146 @@ SegValResult validate_segment_t(M& model,
                                torch::Device device) {
   model->to(device);
   model->eval();
-  // For mask mAP we'd need per-image NMS + mask matching. For now,
-  // we report coverage: for each GT instance, find any prediction whose
-  // mask IoU exceeds 0.5; mAP@0.5 is the fraction matched.
-  int matched = 0, total_gt = 0, total_pred = 0;
+  // Real per-class mask AP@0.5. Per image: decode the predicted instance
+  // masks, CROP each to its predicted box (the upstream `crop_mask` step —
+  // without it a mask spans the whole proto activation and rarely reaches
+  // IoU 0.5), then greedily match preds (highest-conf first) to unmatched GT
+  // of the SAME class by mask IoU > 0.5 → TP/FP. AP@0.5 = area under the
+  // per-class precision/recall step curve; mAP averages classes with GT.
+  // (Previously this divided the 0/1 GT masks by 255 → all-empty GT → 0
+  //  matches → mAP always 0, and never cropped predicted masks.)
+  const int sz = dataset.imgsz();
+  const int max_det = 100;
+  std::map<int, std::vector<std::pair<float, int>>> det_by_class;  // cls → (conf, tp)
+  std::map<int, int> gt_count;
+  int total_pred = 0, total_gt = 0;
+
   for (size_t i = 0; i < dataset.size(); ++i) {
     auto ex = dataset.get(i, /*seed=*/i + 1);
-    auto x = ex.img.unsqueeze(0).to(device);
+    auto x  = ex.img.unsqueeze(0).to(device);
     torch::Tensor pred, coefs, protos;
     {
       torch::NoGradGuard ng;
       auto out = model->forward_eval(x);
-      pred   = std::get<0>(out);
-      coefs  = std::get<1>(out);
-      protos = std::get<2>(out);
+      pred = std::get<0>(out); coefs = std::get<1>(out); protos = std::get<2>(out);
     }
 
-    // Build predicted masks at proto resolution → resize to imgsz.
-    auto p = pred.transpose(1, 2).contiguous().to(torch::kCPU)[0];
-    auto box = p.slice(1, 0, 4);
-    auto cls = p.slice(1, 4, p.size(1));
-    auto best = cls.max(1);
-    auto conf = std::get<0>(best);
-    auto mask = conf > 0.25f;
-    auto idx  = torch::nonzero(mask).flatten();
-    if (idx.numel() == 0) {
-      total_gt += (int)ex.targets.size(0);
-      continue;
+    // GT masks (0/1 at full input res) + per-instance class.
+    auto gt = ex.masks.to(torch::kCPU).to(torch::kFloat32).gt(0.5f).to(torch::kFloat32);
+    const int G = (int)gt.size(0);
+    total_gt += G;
+    torch::Tensor gt_cls;
+    if (G > 0) {
+      gt_cls = ex.targets.slice(1, 0, 1).to(torch::kCPU).reshape({-1}).contiguous();
+      auto gca = gt_cls.accessor<float, 1>();
+      for (int g = 0; g < G; ++g) gt_count[(int)gca[g]]++;
     }
-    auto sel_coefs = coefs.transpose(1, 2)[0].to(torch::kCPU)
-                         .index_select(0, idx);     // [k, nm]
-    auto p_cpu = protos.to(torch::kCPU)[0];
+
+    // Decode predictions: [1, 4+nc, A] → [A, 4+nc] (xyxy px + sigmoid cls).
+    auto p     = pred.transpose(1, 2).contiguous().to(torch::kCPU)[0];
+    auto boxes = p.slice(1, 0, 4);
+    auto clsm  = p.slice(1, 4, p.size(1));
+    auto best  = clsm.max(1);
+    auto conf  = std::get<0>(best);
+    auto cid   = std::get<1>(best);
+    auto idx   = torch::nonzero(conf.gt(0.05f)).flatten();   // low thr for the PR curve
+    if (idx.numel() == 0 || G == 0) continue;
+    // Cap to the top-`max_det` by confidence (COCO-style).
+    if (idx.numel() > max_det) {
+      auto top = std::get<1>(conf.index_select(0, idx).sort(0, true)).slice(0, 0, max_det);
+      idx = idx.index_select(0, top).contiguous();
+    }
+
+    auto sel_coefs = coefs.transpose(1, 2)[0].to(torch::kCPU).index_select(0, idx);  // [k,nm]
+    auto sel_box   = boxes.index_select(0, idx).contiguous();                        // [k,4]
+    auto sel_conf  = conf.index_select(0, idx).contiguous();                         // [k]
+    auto sel_cls   = cid.index_select(0, idx).contiguous();                          // [k]
+    const int k = (int)idx.numel();
+    total_pred += k;
+
+    // proto-masks → sigmoid → resize to (sz,sz) → threshold 0.5.
+    auto p_cpu  = protos.to(torch::kCPU)[0];
     auto h_p = p_cpu.size(1), w_p = p_cpu.size(2);
     auto p_flat = p_cpu.reshape({p_cpu.size(0), h_p * w_p});
-    auto masks  = sel_coefs.matmul(p_flat).reshape({-1, h_p, w_p}).sigmoid();
+    auto m = sel_coefs.matmul(p_flat).reshape({-1, h_p, w_p}).sigmoid();
+    m = torch::nn::functional::interpolate(
+            m.unsqueeze(1),
+            torch::nn::functional::InterpolateFuncOptions()
+                .size(std::vector<int64_t>{(int64_t)sz, (int64_t)sz})
+                .mode(torch::kBilinear).align_corners(false))
+            .squeeze(1).gt(0.5f).to(torch::kFloat32);          // [k, sz, sz]
 
-    // Resize predicted masks to (imgsz, imgsz).
-    masks = torch::nn::functional::interpolate(
-        masks.unsqueeze(1),
-        torch::nn::functional::InterpolateFuncOptions()
-            .size(std::vector<int64_t>{(int64_t)dataset.imgsz(), (int64_t)dataset.imgsz()})
-            .mode(torch::kBilinear)
-            .align_corners(false))
-        .squeeze(1).gt(0.5f).to(torch::kFloat32);
+    // crop_mask: zero everything outside each predicted box.
+    {
+      auto ba = sel_box.accessor<float, 2>();
+      for (int j = 0; j < k; ++j) {
+        int x1 = std::clamp((int)std::floor(ba[j][0]), 0, sz);
+        int y1 = std::clamp((int)std::floor(ba[j][1]), 0, sz);
+        int x2 = std::clamp((int)std::ceil(ba[j][2]),  0, sz);
+        int y2 = std::clamp((int)std::ceil(ba[j][3]),  0, sz);
+        auto mj = m[j];
+        if (y1 > 0)  mj.slice(0, 0, y1).zero_();
+        if (y2 < sz) mj.slice(0, y2, sz).zero_();
+        if (x1 > 0)  mj.slice(1, 0, x1).zero_();
+        if (x2 < sz) mj.slice(1, x2, sz).zero_();
+      }
+    }
 
-    total_pred += (int)masks.size(0);
-    auto gt = (ex.masks.to(torch::kFloat32) / 255.0f).gt(0.5f).to(torch::kFloat32);
-    total_gt += (int)gt.size(0);
+    // Pairwise mask IoU [k, G].
+    auto m_flat = m.reshape({k, -1});
+    auto g_flat = gt.reshape({G, -1});
+    auto inter  = m_flat.matmul(g_flat.t());
+    auto m_a    = m_flat.sum(1, true);
+    auto g_a    = g_flat.sum(1, true).t();
+    auto iou    = (inter / (m_a + g_a - inter + 1e-7f)).contiguous();   // [k, G]
 
-    // Compute mask IoU pairwise; greedy match.
-    auto m_flat = masks.reshape({masks.size(0), -1});
-    auto g_flat = gt.reshape({gt.size(0), -1});
-    if (g_flat.size(0) == 0) continue;
-    auto inter = m_flat.matmul(g_flat.t());                          // [P, G]
-    auto m_a = m_flat.sum(1, true);
-    auto g_a = g_flat.sum(1, true).t();
-    auto iou = inter / (m_a + g_a - inter + 1e-7f);
-    auto best_per_gt = iou.max(0);
-    auto best_iou    = std::get<0>(best_per_gt);
-    matched += (int)best_iou.gt(0.5f).sum().template item<int64_t>();
+    // Greedy match: preds by conf desc → best unmatched same-class GT, IoU>0.5.
+    auto order = std::get<1>(sel_conf.sort(/*dim=*/0, /*descending=*/true)).contiguous();
+    auto oa  = order.accessor<int64_t, 1>();
+    auto ia  = iou.accessor<float, 2>();
+    auto sca = sel_cls.accessor<int64_t, 1>();
+    auto cfa = sel_conf.accessor<float, 1>();
+    auto gca = gt_cls.accessor<float, 1>();
+    std::vector<bool> gt_used(G, false);
+    for (int oi = 0; oi < k; ++oi) {
+      int j = (int)oa[oi];
+      int c = (int)sca[j];
+      float best_iou = 0.0f; int best_g = -1;
+      for (int g = 0; g < G; ++g) {
+        if (gt_used[g] || (int)gca[g] != c) continue;
+        if (ia[j][g] > best_iou) { best_iou = ia[j][g]; best_g = g; }
+      }
+      int tp = (best_iou > 0.5f && best_g >= 0) ? 1 : 0;
+      if (tp) gt_used[best_g] = true;
+      det_by_class[c].push_back({cfa[j], tp});
+    }
   }
+
+  // Per-class AP@0.5 (area under the recall→precision step curve); mAP over
+  // classes that have at least one GT instance.
+  double sum_ap = 0.0; int n_cls = 0;
+  for (auto& [c, cnt] : gt_count) {
+    if (cnt <= 0) continue;
+    auto& dets = det_by_class[c];
+    std::sort(dets.begin(), dets.end(),
+              [](const std::pair<float, int>& a, const std::pair<float, int>& b) {
+                return a.first > b.first;
+              });
+    double tp = 0, fp = 0, ap = 0, prev_r = 0;
+    for (auto& d : dets) {
+      if (d.second) tp += 1; else fp += 1;
+      double recall    = tp / cnt;
+      double precision = tp / (tp + fp);
+      ap += (recall - prev_r) * precision;
+      prev_r = recall;
+    }
+    sum_ap += ap; n_cls++;
+  }
+
   SegValResult r;
-  r.map_50           = total_gt ? (double)matched / total_gt : 0.0;
-  r.n_predictions    = total_pred;
-  r.n_ground_truths  = total_gt;
+  r.map_50          = n_cls ? sum_ap / n_cls : 0.0;
+  r.n_predictions   = total_pred;
+  r.n_ground_truths = total_gt;
   return r;
 }
 
