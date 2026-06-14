@@ -75,6 +75,22 @@ std::vector<inference::Detection> YOLO::predict(const PredictArgs& a) {
   return dets;
 }
 
+std::vector<std::pair<std::string, std::vector<inference::Detection>>>
+YOLO::predict_many(const PredictArgs& a) {
+  auto device = resolve_device(a.device, default_device_);
+  auto task   = resolve_task(a.task, default_task_);
+  std::vector<std::pair<std::string, std::vector<inference::Detection>>> per_img;
+  int rc = cli::cmd_predict_task(task, weights_, a.source, a.out, a.imgsz,
+                                  device, a.scale, a.nc, a.conf, a.iou,
+                                  /*version_hint=*/"", /*out_dets=*/nullptr,
+                                  &per_img);
+  if (rc != 0) {
+    throw std::runtime_error("yolocpp::YOLO::predict_many failed (rc=" +
+                              std::to_string(rc) + ")");
+  }
+  return per_img;
+}
+
 ValResult YOLO::val(const ValArgs& a) {
   auto device = resolve_device(a.device, default_device_);
   auto task   = resolve_task(a.task, default_task_);

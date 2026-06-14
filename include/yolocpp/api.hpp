@@ -132,6 +132,14 @@ class YOLO {
   // vector (use the on-disk annotated mp4 instead).
   std::vector<inference::Detection> predict(const PredictArgs& a);
 
+  // #52A3: like predict(), but returns per-input dets keyed by input path
+  // (sorted, the same order they're written to disk). For a single image
+  // the vector has one entry; for a dir/glob it has one per image. Throws
+  // on error. Video/URL/Webcam sources return an empty vector (per-frame
+  // dets live in the on-disk mp4).
+  std::vector<std::pair<std::string, std::vector<inference::Detection>>>
+  predict_many(const PredictArgs& a);
+
   // Run validation. Returns mAP@0.5 and mAP@0.5:0.95 (detect) or
   // task-specific scalar metrics that we squeeze into the same
   // struct (top-1 accuracy fills map_50; top-5 fills map_50_95 for

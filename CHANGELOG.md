@@ -4,6 +4,17 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.6] — 2026-06-14
+
+### Added
+- **#52A3 — `YOLO::predict_many()`.** Returns per-input detections keyed by
+  image path (`vector<{path, dets}>`), in sorted order, for Image/Dir/Glob
+  sources — so dir/glob predict via the API no longer collapses to just the
+  last image's dets. Threaded via a new opt-in per-image collector on
+  `cmd_predict_task` (CLI behaviour unchanged). `examples/predict_directory`
+  now demonstrates it. Verified on coco8 val (4 imgs → 2/2/8/2 dets, matching
+  the per-image annotated output).
+
 ## [0.101.5] — 2026-06-14
 
 ### Added

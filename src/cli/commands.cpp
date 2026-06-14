@@ -1115,7 +1115,10 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
                      std::string device, std::string scale_s, int nc,
                      float conf, float iou,
                      const std::string& version_hint,
-                     std::vector<yolocpp::inference::Detection>* out_dets) {
+                     std::vector<yolocpp::inference::Detection>* out_dets,
+                     std::vector<std::pair<std::string,
+                         std::vector<yolocpp::inference::Detection>>>*
+                         out_dets_per_image) {
   // Auto-resolve scale from the weights filename when the caller
   // didn't pass --scale. The registry's per-version `predict_to_file`
   // hooks need a scale letter (`yolo11s.pt` → "s") to construct the
@@ -1269,16 +1272,19 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     } else {
       this_out = out;
     }
+    // #52A3: when a per-image collector is supplied, capture this image's
+    // dets into a local sink and key them by input path; otherwise fall back
+    // to the single `out_dets` (which holds the LAST image for multi-input).
+    std::vector<yolocpp::inference::Detection> this_dets;
+    std::vector<yolocpp::inference::Detection>* sink =
+        out_dets_per_image ? &this_dets : out_dets;
     int sub_rc = predict_one_image(task, weights, in, this_out, imgsz,
                                     device, scale_s, nc, conf, iou,
-                                    version_hint, out_dets);
+                                    version_hint, sink);
+    if (out_dets_per_image)
+      out_dets_per_image->emplace_back(in, std::move(this_dets));
     if (sub_rc != 0) rc = sub_rc;  // last non-zero wins, but keep going
   }
-  // For multi-input runs, `out_dets` ends up holding the LAST
-  // processed image's dets (each loop iter overwrites). The CLI
-  // ignores it; the API uses it for single-image predict + treats
-  // multi-input as "intermediate writes to disk only". Future
-  // enhancement (#52A3) could collect per-input dets in a map.
   return rc;
 }
 

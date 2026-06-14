@@ -30,7 +30,15 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
                      std::string device, std::string scale_s, int nc,
                      float conf, float iou,
                      const std::string& version_hint = "",
-                     std::vector<inference::Detection>* out_dets = nullptr);
+                     std::vector<inference::Detection>* out_dets = nullptr,
+                     // #52A3: when set, each fanned-out image's dets are
+                     // collected here as {input_path, dets}, in sorted order
+                     // (dir/glob/single Image paths). Mutually exclusive with
+                     // out_dets in practice; the Video/URL/Webcam loop leaves
+                     // it empty (per-frame dets live in the on-disk mp4).
+                     std::vector<std::pair<std::string,
+                         std::vector<inference::Detection>>>*
+                         out_dets_per_image = nullptr);
 
 int cmd_val(const std::string& weights, const std::string& root,
             const std::string& names_csv, int imgsz, std::string device,
