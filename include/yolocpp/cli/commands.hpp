@@ -70,6 +70,14 @@ int cmd_train_task(const std::string& task, const std::string& data,
                    const std::string& scale_s, const std::string& save_dir,
                    const std::string& weights);
 
+// Benchmark a non-detect task (classify/segment/pose/obb) — #5. PT forward
+// timing + (with `data`) the task's accuracy metric via `validate_*`. The
+// detect path stays in `cmd_benchmark`.
+int cmd_benchmark_task(const std::string& task, const std::string& weights,
+                       const std::string& data, const std::string& names_csv,
+                       int imgsz, const std::string& device,
+                       const std::string& scale_s, int warmup, int iters);
+
 int cmd_export(const std::string& weights, const std::string& format,
                const std::string& out, int imgsz, const std::string& scale_s_in,
                int nc, const std::string& input_name, bool fp16,

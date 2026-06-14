@@ -348,6 +348,13 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
 
   if (mode == "benchmark") {
     if (!need(mode, "model",  !weights.empty())) return 2;
+    // Non-detect tasks route to the PT task benchmark (#5) — forward timing +
+    // optional --data metric. No --source needed (timing uses a synthetic
+    // input; the metric comes from --data).
+    if (task != "detect") {
+      return cmd_benchmark_task(task, weights, data, names_csv, imgsz, device,
+                                scale_s, warmup, iters);
+    }
     if (!need(mode, "source", !source.empty()))  return 2;
     // Benchmark defaults to batch=1 (single-image latency, Ultralytics-style)
     // unless --batch was given explicitly — the global default of 16 is a

@@ -32,6 +32,10 @@
 #include <fstream>
 #include <memory>
 #include <ctime>
+#include <chrono>
+#include <algorithm>
+#include <iomanip>
+#include <functional>
 
 #include <iostream>
 #include <set>
@@ -577,6 +581,156 @@ int cmd_val_task(const std::string& task, const std::string& weights,
   }
   std::cerr << "[error] cmd_val_task: unknown task '" << task << "'\n";
   return 2;
+}
+
+// Benchmark a non-detect task (classify/segment/pose/obb) — #5. The detect
+// benchmark stays in `cmd_benchmark` (registry-routed, multi-format PT + TRT
+// fp32/fp16/int8 + ONNX). Non-detect TRT/ONNX would need task-specific output
+// decode in `TrtPredictor` (masks / keypoints / rotated boxes) — a separate
+// extension — so this path is PT-only: it times the forward pass (synced via a
+// host copy, same as the detect bench) and, when `--data` is given, reports the
+// task's accuracy metric via the existing `validate_*` functions. Uses the v8
+// task families (the architectures whose task heads ship with weights upstream).
+int cmd_benchmark_task(const std::string& task, const std::string& weights,
+                       const std::string& data, const std::string& names_csv,
+                       int imgsz, const std::string& device,
+                       const std::string& scale_s, int warmup, int iters) {
+  namespace fs = std::filesystem;
+  auto dev = pick_device(device);
+  // Auto-resolve scale from the weights filename when --scale isn't given
+  // (yolov8n-seg.pt → "n"), mirroring cmd_export / the detect benchmark.
+  std::string scale = scale_s.empty()
+                          ? yolocpp::cli::scale_from_filename(weights)
+                          : scale_s;
+  if (scale.empty()) scale = "n";
+  auto load = [&](auto& m) {
+    if (!weights.empty()) {
+      auto sd = yolocpp::serialization::load_state_dict(weights);
+      int n = m->load_from_state_dict(sd.entries);
+      LOG_INFO("bench") << "loaded " << n << " weights from " << weights;
+    }
+  };
+  double size_mb = 0.0;
+  { std::error_code ec; auto n = fs::file_size(weights, ec);
+    if (!ec) size_mb = static_cast<double>(n) / 1e6; }
+  const bool have_map = !data.empty();
+  if (warmup <= 0) warmup = 5;
+  if (iters  <= 0) iters  = 50;
+
+  // Resolve a `.yaml` --data to its root directory — the task datasets want a
+  // directory (same as the task trainers/validators).
+  std::string data_root = data;
+  if (have_map) {
+    std::string ext = fs::path(data).extension().string();
+    for (auto& c : ext) c = static_cast<char>(std::tolower((unsigned char)c));
+    if (ext == ".yaml" || ext == ".yml") {
+      try { data_root = yolocpp::cli::resolve_dataset(data); }
+      catch (const std::exception& e) { LOG_ERROR("bench") << e.what(); return 2; }
+    }
+  }
+
+  // Median ms over `iters` forwards; each run_once() ends with a host copy
+  // (.cpu()) so GPU work is synchronised before the timer stops — matching the
+  // detect bench (whose predict()'s final .cpu() in NMS provides the barrier).
+  auto time_fwd = [&](const std::function<void()>& run_once) -> double {
+    for (int i = 0; i < warmup; ++i) run_once();
+    std::vector<double> ts; ts.reserve(iters);
+    for (int i = 0; i < iters; ++i) {
+      auto t0 = std::chrono::steady_clock::now();
+      run_once();
+      auto t1 = std::chrono::steady_clock::now();
+      ts.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    std::sort(ts.begin(), ts.end());
+    return ts[ts.size() / 2];
+  };
+  auto input = [&](int s) {
+    return torch::zeros({1, 3, s, s},
+        torch::TensorOptions().dtype(torch::kFloat32).device(dev));
+  };
+
+  int    sz = imgsz;
+  double ms = -1.0, metric = -1.0;
+  std::string metric_name = "metric";
+
+  if (task == "classify") {
+    sz = (imgsz == 640) ? 224 : imgsz;
+    int nc = 1000;  // ImageNet default when no --data
+    std::unique_ptr<yolocpp::tasks::ClassifyDataset> ds;
+    if (have_map) {
+      ds = std::make_unique<yolocpp::tasks::ClassifyDataset>(data_root, "val", sz, false);
+      nc = ds->num_classes();
+    }
+    yolocpp::models::Yolo8Classify m(parse_scale(scale), nc);
+    load(m); m->to(dev); m->eval();
+    auto x = input(sz);
+    ms = time_fwd([&]{ c10::InferenceMode g; m->forward(x).cpu(); });
+    metric_name = "top1-acc";
+    if (have_map) metric = yolocpp::tasks::validate_classify(m, *ds, dev).top1_acc;
+  } else if (task == "segment") {
+    auto names = split_csv(names_csv);
+    if (names.empty()) names = yolocpp::inference::coco_names();
+    int nc = static_cast<int>(names.size());
+    std::unique_ptr<yolocpp::tasks::SegDataset> ds;
+    if (have_map) {
+      ds = std::make_unique<yolocpp::tasks::SegDataset>(data_root, "val", imgsz, names, false);
+      nc = ds->num_classes();
+    }
+    yolocpp::models::Yolo8Segment m(parse_scale(scale), nc);
+    load(m); m->to(dev); m->eval();
+    auto x = input(sz);
+    ms = time_fwd([&]{ c10::InferenceMode g;
+                       auto [d, c, p] = m->forward_eval(x); (void)c; (void)p; d.cpu(); });
+    metric_name = "mask-mAP@0.5";
+    if (have_map) metric = yolocpp::tasks::validate_segment(m, *ds, dev).map_50;
+  } else if (task == "pose") {
+    std::unique_ptr<yolocpp::tasks::PoseDataset> ds;
+    if (have_map)
+      ds = std::make_unique<yolocpp::tasks::PoseDataset>(data_root, "val", imgsz, 17, 3, false);
+    yolocpp::models::Yolo8Pose m(parse_scale(scale), /*nc=*/1, 17, 3);
+    load(m); m->to(dev); m->eval();
+    auto x = input(sz);
+    ms = time_fwd([&]{ c10::InferenceMode g;
+                       auto [d, k] = m->forward_eval(x); (void)k; d.cpu(); });
+    metric_name = "OKS-mAP@0.5";
+    if (have_map) metric = yolocpp::tasks::validate_pose(m, *ds, dev).oks_map_50;
+  } else if (task == "obb") {
+    auto names = split_csv(names_csv);
+    if (names.empty()) names = yolocpp::inference::dota_names();
+    int nc = static_cast<int>(names.size());
+    std::unique_ptr<yolocpp::tasks::OBBDataset> ds;
+    if (have_map) {
+      ds = std::make_unique<yolocpp::tasks::OBBDataset>(data_root, "val", imgsz, names, false);
+      nc = ds->num_classes();
+    }
+    yolocpp::models::Yolo8OBB m(parse_scale(scale), nc, /*ne=*/1);
+    load(m); m->to(dev); m->eval();
+    auto x = input(sz);
+    ms = time_fwd([&]{ c10::InferenceMode g;
+                       auto [d, a] = m->forward_eval(x); (void)a; d.cpu(); });
+    metric_name = "rotated-mAP@0.5";
+    if (have_map) metric = yolocpp::tasks::validate_obb(m, *ds, dev).map_50;
+  } else {
+    LOG_ERROR("bench") << "cmd_benchmark_task: unknown task '" << task << "'";
+    return 2;
+  }
+
+  const double imgps = ms > 0 ? 1000.0 / ms : 0.0;
+  std::cout << "\n  Task: " << task << "   model: " << weights
+            << "   scale: " << scale
+            << "   imgsz: " << sz
+            << "   device: " << (dev.is_cuda() ? "cuda" : "cpu") << "\n"
+            << "  Format     Size(MB)   ms/im     img/s    " << metric_name << "\n"
+            << "  ────────   ────────   ──────    ──────   ────────────\n";
+  std::cout << std::fixed << std::setprecision(2)
+            << "  PyTorch    " << std::setw(8) << size_mb
+            << "   " << std::setw(6) << ms
+            << "   " << std::setw(6) << imgps << "   ";
+  if (have_map) std::cout << std::setprecision(4) << metric << "\n";
+  else          std::cout << "—  (pass --data for " << metric_name << ")\n";
+  std::cout << "  [note] non-detect TRT/ONNX formats are a separate extension "
+               "(task-specific output decode); PT-only here (#5).\n";
+  return 0;
 }
 
 // Train a non-detect task. Same v8-family caveat as `cmd_val_task`.

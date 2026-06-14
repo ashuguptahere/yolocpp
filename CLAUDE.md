@@ -324,7 +324,7 @@ predict (CLI)   ✓        ✓          ✓         ✓         ✓
 val (CLI)       ✓        ✓          ✓         ✓         ✓
 ONNX export     ✓        ✓          ✓         ✓         ✓
 TRT export      ✓        ✓          ✓         ✓         ✓
-benchmark       ✓        gap        gap       gap       gap
+benchmark       ✓        ✓(PT)      ✓(PT)     ✓(PT)     ✓(PT)
 ```
 
 Only v8 / v11 / v26 ship the full 5-task weight family upstream;

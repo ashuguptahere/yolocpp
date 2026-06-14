@@ -417,7 +417,7 @@ These don't map to a single YOLO version.
 - ❌ **TRT INT8 calibration** + dynamic-shape multi-batch profiles — easy on top of `TrtBuildConfig` once a calibration set exists.
 - ❌ **Two-GPU DDP validation** — wiring is in place + world_size=1 verified, but no two-GPU box has run training yet.
 - ❌ **`forward_train_seg` factor-out** — segment trainer currently reaches into the segment head to pull feats; a clean accessor would let it ride the same templated trainer pattern as detect.
-- ❌ **Benchmark CLI for non-detect tasks** — currently detect-only; classify/seg/pose/obb benchmarks are a small extension.
+- 🟡 **Benchmark CLI for non-detect tasks** — **PT path done** (`--mode benchmark --task <task>` → `cmd_benchmark_task`: forward timing + `--data` accuracy via `validate_*`; verified on yolov8n-{cls,seg,pose,obb}). **Remaining:** non-detect TRT/ONNX formats need task-specific output decode in `TrtPredictor` (masks/keypoints/rotated boxes).
 
 ---
 

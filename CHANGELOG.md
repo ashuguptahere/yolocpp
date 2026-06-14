@@ -4,6 +4,28 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.10] — 2026-06-14
+
+### Added
+- **#5 — benchmark for non-detect tasks (classify/segment/pose/obb).**
+  `--mode benchmark --task <task>` routes to a new PT task benchmark
+  (`cmd_benchmark_task`): times the forward pass (synced via a host copy — the
+  same barrier the detect bench gets from `predict()`'s final `.cpu()`) and,
+  with `--data`, reports the task's accuracy metric (top-1 / mask-mAP@0.5 /
+  OKS-mAP@0.5 / rotated-mAP@0.5) via the existing `validate_*` functions.
+  `--data` accepts a directory or `.yaml`; scale auto-resolves from the filename.
+  No `--source` needed (timing uses a synthetic input). Verified on
+  yolov8n-{cls,seg,pose,obb}: classify@224 ~1.6k img/s, seg/pose/obb@640
+  ~450–550 img/s; segment mAP matches standalone `--mode val` exactly. CLAUDE.md
+  task-coverage matrix updated (benchmark non-detect: gap → ✓(PT)).
+  **Scope:** PT-only — non-detect TRT/ONNX needs task-specific output decode in
+  `TrtPredictor` (masks/keypoints/rotated boxes), a separate extension.
+
+### Notes
+- Observed (not fixed): `cmd_val_task` (non-detect `--mode val`) requires
+  `--scale` — it doesn't auto-resolve from the filename the way the new
+  benchmark-task path does. Minor follow-up.
+
 ## [0.101.9] — 2026-06-14
 
 ### Added
