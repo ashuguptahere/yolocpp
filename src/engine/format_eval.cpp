@@ -51,6 +51,28 @@ ImagePredictor make_onnx_predictor(const std::string& onnx_path, int imgsz, int 
                       << ") — skipping ONNX mAP";
     return {};
   }
+  // Probe forward: cv::dnn 4.6 now PARSES our graph (the DFL ReduceSum is
+  // emitted axes-as-attribute, #70) but its forward can still fail on the
+  // anchor/stride decode subgraph's shape handling. Run one dummy forward;
+  // if it throws (or the output isn't the expected [1, 4+nc, A]), degrade to
+  // "skipped" so the benchmark prints "-" rather than a misleading 0.000.
+  // True ONNX-runtime mAP for the detect family is gated on adding
+  // onnxruntime (a deliberately-avoided dep — maintainer decision, #70).
+  try {
+    cv::Mat probe = cv::dnn::blobFromImage(
+        cv::Mat::zeros(imgsz, imgsz, CV_8UC3), 1.0 / 255.0,
+        cv::Size(imgsz, imgsz), cv::Scalar(), /*swapRB=*/true, /*crop=*/false);
+    net->setInput(probe);
+    cv::Mat po = net->forward();
+    if (po.dims != 3)
+      throw std::runtime_error("unexpected forward output dims=" +
+                               std::to_string(po.dims));
+  } catch (const std::exception& e) {
+    LOG_WARN("bench")
+        << "ONNX parses but cv::dnn can't run the decode graph (" << e.what()
+        << ") — skipping ONNX mAP (needs onnxruntime; see #70)";
+    return {};
+  }
 
   return [net, imgsz, nc](const cv::Mat& bgr,
                           const inference::NMSConfig& nm) -> std::vector<inference::Detection> {

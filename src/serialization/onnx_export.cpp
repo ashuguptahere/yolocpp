@@ -719,9 +719,12 @@ std::string emit_detect(GraphBuilder& g,
                                {1, 1, (int64_t)reg_max, 1});
   auto wmul = g.node("Mul", {dfl_soft, proj}, {}, prefix + ".dfl.wmul");
   // Sum along reg_max (axis=2) → [N, 4, A]
-  auto axes_red = g.add_init_int64(prefix + ".dfl.red", {2});
-  auto dist = g.node("ReduceSum", {wmul, axes_red},
-                     {attr_int("keepdims", 0)}, prefix + ".dfl.dist");
+  // axes-as-attribute (opset-11 ReduceSum) so OpenCV's cv::dnn importer can
+  // load the graph (#70) — cv::dnn 4.6 rejects the opset-13 axes-as-input
+  // form. Same op, same math, bit-identical output; TRT accepts both.
+  auto dist = g.node("ReduceSum", {wmul},
+                     {attr_int("keepdims", 0), attr_ints("axes", {2})},
+                     prefix + ".dfl.dist");
 
   // Build per-anchor stride tensor [1, 1, A] and anchor xy [1, 2, A].
   std::vector<float> stride_per_a(total_A);
@@ -1507,9 +1510,12 @@ std::string emit_detect_obb_dfl(GraphBuilder& g,
   auto proj = g.add_init_float(prefix + ".dfl.proj", proj_v,
                                {1, 1, (int64_t)reg_max, 1});
   auto wmul = g.node("Mul", {dfl_soft, proj}, {}, prefix + ".dfl.wmul");
-  auto axes_red = g.add_init_int64(prefix + ".dfl.red", {2});
-  auto dist = g.node("ReduceSum", {wmul, axes_red},
-                     {attr_int("keepdims", 0)}, prefix + ".dfl.dist");
+  // axes-as-attribute (opset-11 ReduceSum) so OpenCV's cv::dnn importer can
+  // load the graph (#70) — cv::dnn 4.6 rejects the opset-13 axes-as-input
+  // form. Same op, same math, bit-identical output; TRT accepts both.
+  auto dist = g.node("ReduceSum", {wmul},
+                     {attr_int("keepdims", 0), attr_ints("axes", {2})},
+                     prefix + ".dfl.dist");
 
   // Build per-anchor feature-unit anchors and stride [1, A].
   std::vector<float> anc_x(total_A), anc_y(total_A), strd_a(total_A);
@@ -5195,10 +5201,9 @@ static std::string emit_v6_effidehead(GraphBuilder& g,
                         prefix + ".level." + std::to_string(i) + ".dfl_sm");
       auto mul = g.node("Mul", {sm, proj_name}, {},
                          prefix + ".level." + std::to_string(i) + ".dfl_mul");
-      auto axes_bin = g.add_init_int64(
-          prefix + ".level." + std::to_string(i) + ".dfl_ax", {2});
-      reg = g.node("ReduceSum", {mul, axes_bin},
-                    {attr_int("keepdims", 0)},
+      // axes-as-attribute ReduceSum so cv::dnn can load it (#70).
+      reg = g.node("ReduceSum", {mul},
+                    {attr_int("keepdims", 0), attr_ints("axes", {2})},
                     prefix + ".level." + std::to_string(i) + ".dfl_proj");
     } else {
       reg = reg_raw;

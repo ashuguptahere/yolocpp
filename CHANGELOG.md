@@ -4,6 +4,29 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.8] — 2026-06-14
+
+### Fixed
+- **#70 (partial) — ONNX DFL `ReduceSum` now emits axes-as-attribute.** All
+  three DFL ReduceSum sites (detect, OBB, the per-level path) switched from the
+  opset-13 axes-as-input form (which OpenCV 4.6's cv::dnn rejects: "Unsupported
+  ReduceSum operation of opset 13") to the opset-11 axes-as-attribute form
+  already used for ReduceMean/ReduceMax. Pure serialization change — same op,
+  same math, bit-identical output; TRT parity preserved (verified: v8n + v11n
+  TRT FP16 unchanged at 5 dets, mAP 0.871/0.572). The graph now parses in
+  cv::dnn and is more portable for any ONNX consumer.
+
+### Notes
+- True ONNX-runtime mAP for the detect family is still not achieved: cv::dnn
+  4.6 now *parses* the graph but its *forward* throws an internal shape
+  assertion (`shape_utils.hpp:170 total()`) on the anchor/stride decode
+  subgraph — a cv::dnn limitation independent of DFL (the Conv-rewrite path the
+  TODO floated would not fix it). The benchmark's ONNX predictor now probes a
+  dummy forward at load and degrades to an honest "-" with the precise reason
+  ("parses but cv::dnn can't run the decode graph … needs onnxruntime") instead
+  of a misleading 0.000. Closing #70 fully needs the onnxruntime dependency
+  (maintainer decision) or decode-graph surgery to dodge cv::dnn's shapes.
+
 ## [0.101.7] — 2026-06-14
 
 ### Fixed
