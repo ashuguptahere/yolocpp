@@ -4,6 +4,26 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.27] — 2026-06-15
+
+### Fixed
+- **v7 ReOrg ONNX emitter scrambled channels (latent, from hunt #3).** The v7
+  P6 variants (w6/e6/d6/e6e) start with a `ReOrg` layer = PyTorch
+  `pixel_unshuffle(2)`, whose output channel index is `c*4 + (sy*2 + sx)` (the
+  original channel is the slowest-varying group — "CRD" order). The emitter
+  used a bare ONNX `SpaceToDepth`, which is **DCR-only** (`(sy*2 + sx)*4? · C +
+  c` — block index slowest), so the exported graph's ReOrg output channels were
+  a permutation of what the model produces. Every downstream conv (weights
+  trained against the pixel_unshuffle layout) then consumed scrambled input
+  channels → wrong detections from exported ONNX/TRT for all four v7 P6
+  variants. Fixed by following `SpaceToDepth` with a reshape → transpose →
+  reshape that regroups DCR (`block*C + c`) → CRD (`c*4 + block`). New
+  `test_v7_reorg_onnx` proves the emitted op sequence equals `pixel_unshuffle`
+  (and that bare SpaceToDepth does not), plus a structural v7-w6 export check.
+
+### Added
+- `tests/test_v7_reorg_onnx.cpp` — guards the v7 ReOrg ONNX channel order.
+
 ## [0.101.26] — 2026-06-15
 
 ### Fixed

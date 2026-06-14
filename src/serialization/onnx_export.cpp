@@ -5590,11 +5590,32 @@ static std::string emit_downc(GraphBuilder& g, const std::string& in,
   return g.node("Concat", {a, b}, {attr_int("axis", 1)}, prefix + ".cat");
 }
 
-// ReOrg: 4× spatial-to-depth (pixel_unshuffle k=2). ONNX has SpaceToDepth.
+// ReOrg = PyTorch pixel_unshuffle(downscale_factor=2): output channel index is
+// `c*4 + (sy*2 + sx)` — the ORIGINAL channel `c` is the slowest-varying group
+// ("CRD" order). ONNX `SpaceToDepth` is DCR-only (block index slowest:
+// `(sy*2 + sx)*C + c`), so it alone does NOT match pixel_unshuffle — it
+// channel-permutes the output, scrambling the input of every downstream conv
+// (whose weights were trained against the pixel_unshuffle layout). We keep
+// SpaceToDepth for the spatial regroup, then reorder the C*4 channels from DCR
+// (`block*C + c`) to CRD (`c*4 + block`) with a reshape → transpose → reshape.
+// `c_in`/`h_out`/`w_out` are static here because ReOrg is always layer 0 fed
+// the 3-channel image at cfg.imgsz (so h_out = w_out = imgsz/2).
 static std::string emit_reorg(GraphBuilder& g, const std::string& in,
-                              const std::string& prefix) {
-  return g.node("SpaceToDepth", {in},
-                {attr_int("blocksize", 2)}, prefix + ".reorg");
+                              const std::string& prefix,
+                              int c_in, int h_out, int w_out) {
+  auto sd  = g.node("SpaceToDepth", {in},
+                    {attr_int("blocksize", 2)}, prefix + ".reorg");
+  // (B, 4*C, H', W') → (B, block=4, C, H', W')   [DCR: block is the outer group]
+  auto sh1 = g.add_init_int64(prefix + ".reorg.sh1",
+      {0, 4, (int64_t)c_in, (int64_t)h_out, (int64_t)w_out});
+  auto r1  = g.node("Reshape", {sd, sh1}, {}, prefix + ".reorg.r1");
+  // → (B, C, block=4, H', W')   so the original channel becomes the outer group
+  auto tr  = g.node("Transpose", {r1},
+                    {attr_ints("perm", {0, 2, 1, 3, 4})}, prefix + ".reorg.perm");
+  // → (B, C*4, H', W') with channel = c*4 + block   (== pixel_unshuffle)
+  auto sh2 = g.add_init_int64(prefix + ".reorg.sh2",
+      {0, (int64_t)(4 * c_in), (int64_t)h_out, (int64_t)w_out});
+  return g.node("Reshape", {tr, sh2}, {}, prefix + ".reorg.out");
 }
 
 // Anchor decode for v7 — generalised form. scale_xy uniform 2.0, wh
@@ -5814,7 +5835,9 @@ void export_yolo7_onnx(models::Yolo7& model,
                           attr_ints("pads", {k/2, k/2, k/2, k/2})},
                          prefix + ".sp");
       } else if (s.kind == "ReOrg") {
-        outs[i] = emit_reorg(g, in_name, prefix);
+        // Layer-0 ReOrg: 3-channel image in, imgsz/2 spatial out.
+        outs[i] = emit_reorg(g, in_name, prefix, /*c_in=*/3,
+                             cfg.imgsz / 2, cfg.imgsz / 2);
       } else if (s.kind == "DownC") {
         auto* m = holder->as<models::DownCImpl>();
         outs[i] = emit_downc(g, in_name, prefix, m);
