@@ -264,12 +264,17 @@ TalOutput tal_assign(const torch::Tensor& pd_scores,
   auto t_labels = gt_labels.reshape({B * M}).index_select(0, gather_idx.reshape(-1))
                        .reshape({B, A}).to(torch::kLong);
 
-  // soft scores: align_metric / max_align * iou_at_assigned, scaled to [0, 1]
-  auto pos_align_max = (align_metric * mask_pos.to(align_metric.dtype()))
-                           .amax(/*dim=*/-1, /*keepdim=*/true);
+  // soft scores: align_metric / max_align * iou_at_assigned, scaled to [0, 1].
+  // align_metric MUST be re-masked by the FINAL positive mask (mask_pos) here —
+  // it was only `in_gt`-masked (line ~217), so for a positive anchor the
+  // amax-over-GTs below could pick a *non-assigned* GT's align value (any GT
+  // whose box merely contains the anchor), inflating/corrupting its cls soft
+  // target. Mirrors v26 STAL (yolo26_loss.cpp: align_pos = align * mask_pos).
+  auto am_pos        = align_metric * mask_pos.to(align_metric.dtype());
+  auto pos_align_max = am_pos.amax(/*dim=*/-1, /*keepdim=*/true);
   auto pos_iou_max   = (iou * mask_pos.to(iou.dtype()))
                            .amax(/*dim=*/-1, /*keepdim=*/true);
-  auto norm_align    = (align_metric * pos_iou_max / (pos_align_max + 1e-9))
+  auto norm_align    = (am_pos * pos_iou_max / (pos_align_max + 1e-9))
                            .amax(-2);  // [B, A]
   auto onehot_labels = torch::nn::functional::one_hot(t_labels, nc)
                            .to(pd_scores.dtype());

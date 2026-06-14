@@ -4,6 +4,20 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.22] — 2026-06-15
+
+### Fixed
+- **v8 TAL assigner corrupted cls soft targets (latent, from hunt #2).** In the
+  shared `V8DetectionLoss` TAL assigner (used by v3/v5/v8/v9/v11/v12/v13), the
+  soft-score normalization used the `in_gt`-masked `align_metric` in its
+  numerator instead of the final `mask_pos`-masked one. For a positive anchor
+  the `amax`-over-GTs could therefore pick a *non-assigned* GT's alignment (any
+  GT whose box merely contains the anchor), inflating/distorting that anchor's
+  cls soft target. Now re-masks by `mask_pos` (`am_pos = align_metric *
+  mask_pos`), matching v26 STAL + upstream. Verified: detect train smoke
+  (yolo11n / coco8) stays sane (2-epoch val mAP@0.5:0.95 = 0.52) + train ctests
+  green.
+
 ## [0.101.21] — 2026-06-15
 
 ### Fixed
