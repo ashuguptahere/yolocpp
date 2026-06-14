@@ -324,7 +324,8 @@ int cmd_train(const std::string& root, const std::string& names_csv,
               const std::string& optimizer,
               int workers,
               bool cache_ram,
-              bool deterministic) {
+              bool deterministic,
+              int close_mosaic) {
   auto names = split_csv(names_csv);
   // If --names wasn't passed, prefer the data.yaml's `names:` over the
   // COCO 80 fallback. Without this, training on a 5-class dataset
@@ -415,6 +416,7 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   cfg.optimizer  = optimizer;
   cfg.workers    = workers;
   cfg.deterministic = deterministic;
+  cfg.close_mosaic  = close_mosaic;
   cfg.args_for_yaml = std::move(args_for_yaml);
 
   // Auto-attach val split for best.pt tracking. Try `make_dataset`

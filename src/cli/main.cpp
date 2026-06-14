@@ -56,6 +56,7 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   int workers = 4;  // BatchPrefetcher background threads (0 = synchronous)
   bool cache_ram = true;  // pre-decode all images into RAM at train start
   bool strict_det = false;  // bit-exact reproducibility at ~30-50% perf cost
+  int close_mosaic = 10;  // #57G: disable mosaic+mixup last N epochs
   float  conf  = 0.25f, iou = 0.45f;
   bool   export_fp16 = true;
   uint64_t seed = 0;
@@ -89,6 +90,9 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   app.add_flag  ("--strict-deterministic", strict_det,
                   "bit-exact reproducibility: workers=0, no cuDNN benchmark, "
                   "torch deterministic algorithms (~30-50% slower)");
+  app.add_option("--close-mosaic", close_mosaic,
+                  "train: disable mosaic+mixup for the last N epochs "
+                  "(default 10; 0 = keep mosaic the whole run)");
   app.add_option("--lrf",        lrf,
                   "final LR fraction of lr0 (cosine schedule end). "
                   "Default 0.01 = decay to 1%% of lr0; pass 1.0 for constant LR.");
@@ -268,7 +272,7 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
       rc = cmd_train(data, names_csv, imgsz, epochs, batch_size, lr0,
                       device, scale_s, save_dir, weights,
                       patience, /*args_for_yaml=*/{}, seed, lrf, optimizer,
-                      workers, cache_ram, strict_det);
+                      workers, cache_ram, strict_det, close_mosaic);
     } else {
       // Non-detect train uses the v8 task families.
       rc = cmd_train_task(task, data, names_csv, imgsz, epochs, batch_size,

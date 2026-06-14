@@ -4,6 +4,32 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.7] — 2026-06-14
+
+### Fixed
+- **#57G (partial) — `close_mosaic` is now actually wired.** `args.yaml`
+  advertised `close_mosaic: 10` but nothing ever disabled mosaic during
+  training (the "advertise-without-wiring" anti-pattern CLAUDE.md warns about,
+  same class as the old AMP lie). The trainer now flips a shared dataset mosaic
+  gate off for the last `close_mosaic` epochs, stopping mosaic + mixup so
+  training finishes on clean single-image batches (Ultralytics' default; lifts
+  final-epoch mAP). New `--close-mosaic N` flag (default 10; 0 disables);
+  `TrainConfig::close_mosaic` + `cmd_train` thread it; `args.yaml` reports the
+  real value. A guard keeps it inert for short runs (`epochs <= close_mosaic`)
+  so existing 1–2 epoch smokes are unchanged. Verified: 3-epoch run toggles
+  mosaic off at the last epoch; the 1-epoch control stays mosaic'd; all
+  train/aug ctests green.
+
+### Notes
+- The rest of #57G's "aug parity" framing was largely already satisfied:
+  `cmd_train` already sets `mosaic=1.0` + RandomPerspective (`translate=0.1`,
+  `scale=0.5`), and `mixup=0` / `degrees=0` / `shear=0` are the upstream
+  *detect* defaults. CopyPaste (segment-mask aug) and RandAugment
+  (classification aug) are not part of the detect pipeline upstream — out of
+  scope. The reported screen-dataset mAP gap (0.485 vs 0.052) needs
+  root-causing on a representative dataset, not available in this environment;
+  no unverified perf claim is made here.
+
 ## [0.101.6] — 2026-06-14
 
 ### Added

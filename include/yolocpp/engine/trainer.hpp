@@ -121,6 +121,12 @@ struct TrainConfig {
   // Off by default — the perf cost is large and most users don't
   // need bit-exact reproducibility. Pass --strict-deterministic.
   bool deterministic = false;
+  // #57G close_mosaic: disable mosaic + mixup for the last `close_mosaic`
+  // epochs so training finishes on clean single-image batches (matches
+  // Ultralytics' default close_mosaic=10). The trainer flips the dataset's
+  // shared mosaic gate at epoch >= epochs - close_mosaic. 0 disables.
+  // Clamped to [0, epochs].
+  int close_mosaic = 10;
 };
 
 // Trainer is templated over the model-holder type (Yolo8Detect or

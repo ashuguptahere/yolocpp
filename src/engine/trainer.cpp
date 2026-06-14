@@ -1210,7 +1210,7 @@ void TrainerT<M>::run() {
     emit("single_cls",  "false");
     emit("rect",        "false");
     emit("cos_lr",      "false");
-    emit("close_mosaic","10");
+    emit("close_mosaic",std::to_string(std::clamp(cfg_.close_mosaic, 0, cfg_.epochs)));
     emit("resume",      "false");
     // AMP is on (bf16 autocast) when training on CUDA; off on CPU.
     emit("amp",         torch::cuda::is_available() ? "true" : "false");
@@ -1475,8 +1475,28 @@ void TrainerT<M>::run() {
   optim.zero_grad();
   int last_opt_gstep = -1;
 
+  // #57G close_mosaic: flip the dataset's shared mosaic gate off for the
+  // last `close_mosaic` epochs so training finishes on clean single-image
+  // batches (no mosaic/mixup) — matches Ultralytics' close_mosaic and lifts
+  // final-epoch mAP. The prefetcher + synchronous path both read this gate.
+  auto mosaic_gate = train_.mosaic_gate();
+  const int close_mosaic = std::clamp(cfg_.close_mosaic, 0, cfg_.epochs);
+  // Only meaningful when at least one epoch runs WITH mosaic before the
+  // window — otherwise a short run (epochs <= close_mosaic) would train
+  // with no mosaic at all, which silently breaks short fine-tunes/smokes.
+  const bool cm_active = close_mosaic > 0 && cfg_.epochs > close_mosaic;
+
   for (int epoch = 0; epoch < cfg_.epochs; ++epoch) {
     auto t0 = std::chrono::steady_clock::now();
+    // Toggle the mosaic gate at the close-mosaic boundary (logs once).
+    const bool want_mosaic = !(cm_active &&
+                               epoch >= cfg_.epochs - close_mosaic);
+    if (mosaic_gate->load(std::memory_order_relaxed) != want_mosaic) {
+      mosaic_gate->store(want_mosaic, std::memory_order_relaxed);
+      if (!want_mosaic)
+        std::cout << "[trainer] close_mosaic: mosaic + mixup OFF for the last "
+                  << close_mosaic << " epoch(s) (from epoch " << epoch << ")\n";
+    }
     // Loss accumulators live on-device so the per-step .item<double>()
     // CUDA sync goes away (was ~3-5 s/epoch wasted on yolo26n). One
     // .item() per epoch at the end. The log_every path still syncs

@@ -61,7 +61,8 @@ int cmd_train(const std::string& root, const std::string& names_csv,
               const std::string& optimizer = "auto",  // auto|sgd|adamw
               int workers = 4,                   // BatchPrefetcher threads (0 = sync)
               bool cache_ram = true,             // pre-decode images into RAM
-              bool deterministic = false);       // strict bit-exact mode
+              bool deterministic = false,        // strict bit-exact mode
+              int close_mosaic = 10);            // disable mosaic last N epochs (#57G)
 
 int cmd_train_task(const std::string& task, const std::string& data,
                    const std::string& names_csv, int imgsz, int epochs,

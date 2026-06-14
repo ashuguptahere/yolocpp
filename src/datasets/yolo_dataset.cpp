@@ -590,6 +590,9 @@ static YoloExample apply_mixup(const YoloExample& a, const YoloExample& b,
 YoloDataset::Batch YoloDataset::sample_batch_from_anchors(
     const std::vector<std::size_t>& anchors, std::mt19937& aux_rng) const {
   std::uniform_real_distribution<float> u01(0.f, 1.f);
+  // #57G close_mosaic: the trainer flips this off for the last N epochs so
+  // mosaic + mixup stop and training finishes on clean single-image batches.
+  const bool mosaic_on = mosaic_gate_->load(std::memory_order_relaxed);
   std::vector<YoloExample> exs;
   exs.reserve(anchors.size());
   std::vector<torch::Tensor> imgs;
@@ -597,7 +600,8 @@ YoloDataset::Batch YoloDataset::sample_batch_from_anchors(
   for (std::size_t i = 0; i < anchors.size(); ++i) {
     YoloExample ex;
     const std::size_t anchor = anchors[i];
-    if (aug_.augment && aug_.mosaic_p > 0.f && u01(aux_rng) < aug_.mosaic_p) {
+    if (aug_.augment && mosaic_on && aug_.mosaic_p > 0.f &&
+        u01(aux_rng) < aug_.mosaic_p) {
       // Anchor-driven mosaic: tile 0 from the provided index (epoch
       // shuffle guarantees uniqueness), tiles 1-3 still random.
       ex = build_mosaic4(*this, (std::size_t)imgsz_, aug_, aux_rng,
@@ -605,7 +609,8 @@ YoloDataset::Batch YoloDataset::sample_batch_from_anchors(
     } else {
       ex = get(anchor, /*aug_seed=*/((uint64_t)aux_rng()) << 32 | i);
     }
-    if (aug_.augment && aug_.mixup_p > 0.f && u01(aux_rng) < aug_.mixup_p) {
+    if (aug_.augment && mosaic_on && aug_.mixup_p > 0.f &&
+        u01(aux_rng) < aug_.mixup_p) {
       // MixUp partner is random (not from the shuffled anchors) —
       // matches Ultralytics' behaviour.
       std::uniform_int_distribution<std::size_t> u(0, img_paths_.size() - 1);
@@ -634,6 +639,8 @@ YoloDataset::Batch YoloDataset::sample_batch(std::size_t bsz,
                                              std::mt19937& rng) const {
   std::uniform_int_distribution<size_t> u(0, img_paths_.size() - 1);
   std::uniform_real_distribution<float> u01(0.f, 1.f);
+  // #57G close_mosaic: off for the last N epochs (see sample_batch_from_anchors).
+  const bool mosaic_on = mosaic_gate_->load(std::memory_order_relaxed);
   std::vector<YoloExample> exs;
   exs.reserve(bsz);
   std::vector<torch::Tensor> imgs;
@@ -641,7 +648,8 @@ YoloDataset::Batch YoloDataset::sample_batch(std::size_t bsz,
 
   for (size_t i = 0; i < bsz; ++i) {
     YoloExample ex;
-    if (aug_.augment && aug_.mosaic_p > 0.f && u01(rng) < aug_.mosaic_p) {
+    if (aug_.augment && mosaic_on && aug_.mosaic_p > 0.f &&
+        u01(rng) < aug_.mosaic_p) {
       // Mosaic + RandomPerspective is combined: build_mosaic4 stitches
       // the 2s canvas and then calls random_perspective_mat to warp
       // and crop to (imgsz, imgsz) in one cv::warpAffine. This matches
@@ -654,7 +662,8 @@ YoloDataset::Batch YoloDataset::sample_batch(std::size_t bsz,
     } else {
       ex = get(u(rng), /*aug_seed=*/((uint64_t)rng()) << 32 | i);
     }
-    if (aug_.augment && aug_.mixup_p > 0.f && u01(rng) < aug_.mixup_p) {
+    if (aug_.augment && mosaic_on && aug_.mixup_p > 0.f &&
+        u01(rng) < aug_.mixup_p) {
       auto other = get(u(rng), /*aug_seed=*/((uint64_t)rng()) << 32 | (i + 0x55));
       ex = apply_mixup(ex, other, rng);
     }

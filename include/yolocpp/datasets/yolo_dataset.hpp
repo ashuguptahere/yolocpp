@@ -23,6 +23,8 @@
 #include <opencv2/imgcodecs.hpp>
 #include <torch/torch.h>
 
+#include <atomic>
+#include <memory>
 #include <random>
 #include <string>
 #include <utility>
@@ -172,6 +174,15 @@ class YoloDataset {
   // augmentation post-HtoD when gpu_aug is enabled.
   const AugConfig& aug_for_gpu() const { return aug_; }
 
+  // #57G close_mosaic: a shared gate the trainer flips off for the last
+  // `close_mosaic` epochs so mosaic + mixup stop and training finishes on
+  // clean (single-image) batches — matching Ultralytics' close_mosaic.
+  // Shared via shared_ptr so the prefetcher's const& to the dataset and
+  // the owning trainer observe the same atomic without a non-const setter.
+  const std::shared_ptr<std::atomic<bool>>& mosaic_gate() const {
+    return mosaic_gate_;
+  }
+
  private:
   std::vector<std::string>  img_paths_;
   std::vector<std::string>  lbl_paths_;
@@ -189,6 +200,10 @@ class YoloDataset {
   // safely read cache_imgs_[idx] and .clone() before mutating. Empty
   // vector when cache_ram=false (lazy `cv::imread` path).
   std::vector<cv::Mat>      cache_imgs_;
+  // #57G: true → mosaic/mixup allowed (default); false → forced off for the
+  // close_mosaic phase. Read per-sample in sample_batch / _from_anchors.
+  std::shared_ptr<std::atomic<bool>> mosaic_gate_ =
+      std::make_shared<std::atomic<bool>>(true);
 };
 
 }  // namespace yolocpp::datasets
