@@ -2,6 +2,18 @@
 // `src/cli/commands.cpp` (`cmd_dispatch_flag_style`). This file
 // is just the entry-point shell: --version short-circuit, top-level
 // help, and the dispatch call.
+//
+// Exit-code convention (#51I2) — every CLI path returns one of:
+//   0  success.
+//   2  user error: bad or missing CLI input — missing required flag,
+//      unknown/unsupported --mode / --task / --format / --precision /
+//      --device value, unclassifiable --source, un-inferable version.
+//      Detected at arg-handling time, before (or instead of) doing work.
+//   1  runtime error: a failure while executing valid input — a file /
+//      stream / device that won't open, a model that won't load, a TRT
+//      build failure, or any uncaught exception (caught by main()).
+// New code MUST follow this: validation failures → 2, execution failures
+// → 1. (The public C++ API throws instead of returning codes.)
 
 #include <cstdlib>
 #include <iostream>

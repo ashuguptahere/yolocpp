@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.12] — 2026-06-14
+
+### Changed
+- **#51I2 — exit-code convention audited, documented, and aligned.** Settled on
+  **0** = success · **2** = user error (bad/missing flag or value, unknown
+  `--mode`/`--task`/`--format`/`--precision`/`--device`, unclassifiable
+  `--source`, un-inferable version) · **1** = runtime error (file/stream/device
+  open failure, model load, TRT build, any uncaught exception via `main()`'s
+  catch). Documented the rule at the top of `main.cpp`. The sweep found the
+  validation paths already returned 2 and `main()` mapped exceptions → 1; fixed
+  the two genuine runtime I/O failures in `cmd_predict_task`
+  (`could not open source` / `could not open output writer`) that wrongly
+  returned 2 → now 1. Verified: predict success → 0; missing/bad flag, bad
+  precision, bad mode → 2; unopenable video → 1.
+
 ## [0.101.11] — 2026-06-14
 
 ### Fixed

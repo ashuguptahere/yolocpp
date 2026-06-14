@@ -1353,8 +1353,10 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     if (kind == SourceKind::Webcam) cap.open(std::stoi(source));
     else                            cap.open(source);
     if (!cap.isOpened()) {
+      // Runtime I/O failure (the spec classified fine but the device/stream
+      // won't open) → exit 1, not a user-input error. (#51I2)
       std::cerr << "[error] could not open source: " << source << "\n";
-      return 2;
+      return 1;
     }
 
     // Default output: runs/predict/<stem>.mp4. Webcam stems into
@@ -1386,9 +1388,10 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
         if (fps <= 1.0 || std::isnan(fps)) fps = 25.0;  // webcams often report 0
         int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
         if (!writer.open(out_path, fourcc, fps, frame.size())) {
+          // Runtime I/O failure (codec/permission) → exit 1. (#51I2)
           std::cerr << "[error] could not open output writer: "
                     << out_path << "\n";
-          return 2;
+          return 1;
         }
       }
       writer.write(frame);
