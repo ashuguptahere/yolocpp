@@ -4,6 +4,23 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.5] — 2026-06-14
+
+### Added
+- **#51F2 — INT8 export wired through the CLI + public API.** The
+  `ImgDirCalibrator` (entropy/min-max PTQ) already existed and was used by
+  `--mode benchmark`; `--mode export -p int8 --int8-calib <dir>` now routes to
+  it too. `cmd_export` gained `int8` / `int8_calib_dir` / `int8_calib_cache`
+  params (INT8-only build — FP16 forced off, matching the benchmark path; the
+  calibration table caches to `<out>.calib`). `YOLO::export_` mirrors it via new
+  `ExportArgs::int8_calib_dir`/`int8_calib_cache`. Validation: `-p int8` requires
+  `-f trt` and a calib dir, with clear errors otherwise; `int4`/`nvfp4` still
+  reject (need Blackwell TRT 10.4+ low-bit APIs). Verified: `yolo11n -p int8`
+  builds + calibrates + runs (5 dets on bus.jpg, parity with FP16).
+  **Caveat:** INT8 quality scales with the calibration set — a 4-image smoke
+  set leaves much of the net in FP32 fallback (engine ends up larger/slower);
+  use a real val split (100–500 images) for a representative INT8 engine.
+
 ## [0.101.4] — 2026-06-14
 
 ### Changed

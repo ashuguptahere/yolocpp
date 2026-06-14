@@ -65,7 +65,15 @@ int cmd_export(const std::string& weights, const std::string& format,
                const std::string& out, int imgsz, const std::string& scale_s_in,
                int nc, const std::string& input_name, bool fp16,
                const std::string& version_hint = "",
-               const std::string& task = "detect");
+               const std::string& task = "detect",
+               // INT8 PTQ (#51F2): when `int8` is true the TRT branch builds an
+               // INT8 engine calibrated on the images in `int8_calib_dir`
+               // (FP16 is forced off — INT8-only, matching the benchmark path).
+               // `int8_calib_cache` caches the calibration table (defaults to
+               // "<out>.calib" when empty). Ignored for ONNX export.
+               bool int8 = false,
+               const std::string& int8_calib_dir = "",
+               const std::string& int8_calib_cache = "");
 
 // `weights` may be a comma-separated list of models (a.pt,b.pt,…) — each is
 // benchmarked across formats (PyTorch + the requested TRT precisions); with

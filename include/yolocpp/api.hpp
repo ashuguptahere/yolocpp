@@ -93,8 +93,12 @@ struct ExportArgs {
   std::string scale;
   int         nc        = 80;
   std::string input_name = "images";
-  std::string precision  = "fp16"; // fp32 | fp16 | int8 | int4 | nvfp4
+  std::string precision  = "fp16"; // fp32 | fp16 | int8 (int4/nvfp4 — #51F2)
   std::string task       = "detect";
+  // INT8 PTQ (#51F2): directory of representative images (e.g. a val split)
+  // used to calibrate INT8 ranges. Required when precision == "int8" + TRT.
+  std::string int8_calib_dir;
+  std::string int8_calib_cache;  // optional; defaults to "<out>.calib"
 };
 
 struct BenchmarkArgs {

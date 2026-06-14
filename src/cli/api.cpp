@@ -157,18 +157,32 @@ YOLO& YOLO::train(const TrainArgs& a) {
 YOLO& YOLO::export_(const ExportArgs& a) {
   auto task = resolve_task(a.task, default_task_);
   bool fp16 = (a.precision == "fp16");
-  if (a.precision == "int8" || a.precision == "int4" ||
-      a.precision == "nvfp4") {
+  bool int8 = (a.precision == "int8");
+  if (int8) {
+    if (a.format != "trt" && a.format != "engine") {
+      throw std::runtime_error(
+          "yolocpp::YOLO::export_: --precision=int8 applies to TRT export only "
+          "(format=\"trt\")");
+    }
+    if (a.int8_calib_dir.empty()) {
+      throw std::runtime_error(
+          "yolocpp::YOLO::export_: --precision=int8 needs int8_calib_dir "
+          "(a folder of representative images)");
+    }
+    fp16 = false;
+  } else if (a.precision == "int4" || a.precision == "nvfp4") {
     throw std::runtime_error("yolocpp::YOLO::export_: --precision=" +
                               a.precision +
-                              " not yet wired (TODO #51F2)");
-  }
-  if (!a.precision.empty() && a.precision != "fp16" && a.precision != "fp32") {
+                              " not yet wired — needs Blackwell TRT 10.4+ APIs "
+                              "(TODO #51F2)");
+  } else if (!a.precision.empty() && a.precision != "fp16" &&
+             a.precision != "fp32") {
     throw std::runtime_error("yolocpp::YOLO::export_: unknown precision='" +
                               a.precision + "'");
   }
   int rc = cli::cmd_export(weights_, a.format, a.out, a.imgsz, a.scale, a.nc,
-                            a.input_name, fp16, /*version_hint=*/"", task);
+                            a.input_name, fp16, /*version_hint=*/"", task,
+                            int8, a.int8_calib_dir, a.int8_calib_cache);
   if (rc != 0) {
     throw std::runtime_error("yolocpp::YOLO::export_ failed (rc=" +
                               std::to_string(rc) + ")");

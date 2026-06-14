@@ -110,7 +110,8 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   app.add_option("--format,-f",  export_fmt,
                   "export: onnx | trt");
   app.add_option("--precision,-p", export_precision,
-                  "export: fp32 | fp16 | int8 | int4 | nvfp4 (only fp32/fp16 wired today)");
+                  "export: fp32 | fp16 | int8 (TRT; int8 needs --int8-calib) "
+                  "| int4 | nvfp4 (int4/nvfp4 not yet wired — #51F2)");
   app.add_option("--input-name", export_input_name,
                   "ONNX graph input tensor name");
   app.add_flag  ("--fp16,!--no-fp16", export_fp16,
@@ -304,13 +305,30 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
   if (mode == "export") {
     if (!need(mode, "model",  !weights.empty()))   return 2;
     if (!need(mode, "format", !export_fmt.empty())) return 2;
+    bool export_int8 = false;
     if (!export_precision.empty()) {
       if (export_precision == "fp32") export_fp16 = false;
       else if (export_precision == "fp16") export_fp16 = true;
-      else if (export_precision == "int8" || export_precision == "int4" ||
-               export_precision == "nvfp4") {
+      else if (export_precision == "int8") {
+        // INT8 PTQ (#51F2) is a TRT-engine feature — the ONNX graph is
+        // always fp32. Require a calibration image directory.
+        if (export_fmt != "trt" && export_fmt != "engine") {
+          std::cerr << "[error] --precision=int8 applies to TRT export only "
+                       "(use -f trt)\n";
+          return 2;
+        }
+        if (int8_calib_dir.empty()) {
+          std::cerr << "[error] --precision=int8 needs --int8-calib <dir> "
+                       "(a folder of representative images, e.g. a val split)\n";
+          return 2;
+        }
+        export_int8 = true;
+        export_fp16 = false;
+      }
+      else if (export_precision == "int4" || export_precision == "nvfp4") {
         std::cerr << "[error] --precision=" << export_precision
-                  << " not yet wired (TODO #51F2)\n";
+                  << " not yet wired — needs Blackwell TRT 10.4+ low-bit APIs "
+                     "(TODO #51F2)\n";
         return 2;
       } else {
         std::cerr << "[error] unknown --precision='" << export_precision
@@ -320,7 +338,8 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
     }
     return cmd_export(weights, export_fmt, out, imgsz, scale_s, nc,
                        export_input_name, export_fp16,
-                       /*version_hint=*/"", task);
+                       /*version_hint=*/"", task,
+                       export_int8, int8_calib_dir, int8_calib_cache);
   }
 
   if (mode == "benchmark") {
@@ -406,7 +425,8 @@ int main(int argc, char** argv) {
       "          heads ship with weights upstream)\n"
       "Modes  : train, val, predict, export, benchmark, info, download\n"
       "Formats: onnx, trt\n"
-      "Precs  : fp32, fp16   (int8/int4/nvfp4 — TODO #51F2)\n"
+      "Precs  : fp32, fp16, int8 (TRT; int8 needs --int8-calib <dir>)\n"
+      "         (int4/nvfp4 — TODO #51F2)\n"
       "Devices: cpu, cuda, cuda:N, cuda:0,1,..., mps, auto\n"
       "Source : single image / directory / glob (e.g. 'frames/*.jpg').\n"
       "         Video / RTSP / HTTP / webcam-index — frame loop is\n"

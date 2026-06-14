@@ -641,7 +641,10 @@ int cmd_export(const std::string& weights, const std::string& format,
                const std::string& out, int imgsz, const std::string& scale_s_in,
                int nc, const std::string& input_name, bool fp16,
                const std::string& version_hint,
-               const std::string& task) {
+               const std::string& task,
+               bool int8,
+               const std::string& int8_calib_dir,
+               const std::string& int8_calib_cache) {
   // Determine version: explicit hint (from CLI) or filename inference.
   std::string version = version_hint.empty()
                             ? yolocpp::cli::version_from_filename(weights)
@@ -737,7 +740,20 @@ int cmd_export(const std::string& weights, const std::string& format,
     }
     write_onnx(onnx_tmp);
     yolocpp::serialization::TrtBuildConfig tcfg;
-    tcfg.imgsz = imgsz; tcfg.fp16 = fp16; tcfg.input_name = input_name;
+    tcfg.imgsz = imgsz; tcfg.input_name = input_name;
+    // INT8 PTQ (#51F2): INT8-only build (FP16 off, matching the benchmark
+    // path + Ultralytics' engine.py), calibrated on the user-supplied image
+    // directory. The calibration table caches to "<out>.calib" by default so
+    // a re-export at the same shape skips re-sampling.
+    if (int8) {
+      tcfg.int8 = true;
+      tcfg.fp16 = false;
+      tcfg.calib_image_dir = int8_calib_dir;
+      tcfg.calib_cache     = int8_calib_cache.empty() ? (path + ".calib")
+                                                      : int8_calib_cache;
+    } else {
+      tcfg.fp16 = fp16;
+    }
     // v10's RepVGGDW 7×7 dwconv-with-bias stack saturates cls under TF32
     // accumulation; the registry adapter declares this with
     // `trt_disable_tf32`. Generic switch covers any future version that
