@@ -537,11 +537,19 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     }
   };
   auto dev = pick_device(device);
+  // Auto-resolve scale from the weights filename when --scale isn't given
+  // (yolov8n-seg.pt → "n"), mirroring detect val / export / benchmark. Without
+  // this, non-detect `--mode val` failed with "unknown YOLO8 scale" unless the
+  // user passed --scale. (Honours the "never default scale; auto-resolve"
+  // parity rule in CLAUDE.md.)
+  std::string scale = (scale_s.empty() && !weights.empty())
+                          ? yolocpp::cli::scale_from_filename(weights)
+                          : scale_s;
 
   if (task == "classify") {
     int sz = (imgsz == 640) ? 224 : imgsz;
     yolocpp::tasks::ClassifyDataset ds(data, "val", sz, /*augment=*/false);
-    yolocpp::models::Yolo8Classify m(parse_scale(scale_s), ds.num_classes());
+    yolocpp::models::Yolo8Classify m(parse_scale(scale), ds.num_classes());
     load(m);
     auto r = yolocpp::tasks::validate_classify(m, ds, dev);
     std::cout << "top1=" << r.top1_acc << " top5=" << r.top5_acc
@@ -552,7 +560,7 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::coco_names();
     yolocpp::tasks::SegDataset ds(data, "val", imgsz, names, /*augment=*/false);
-    yolocpp::models::Yolo8Segment m(parse_scale(scale_s), ds.num_classes());
+    yolocpp::models::Yolo8Segment m(parse_scale(scale), ds.num_classes());
     load(m);
     auto r = yolocpp::tasks::validate_segment(m, ds, dev);
     std::cout << "mask mAP@0.5=" << r.map_50
@@ -563,7 +571,7 @@ int cmd_val_task(const std::string& task, const std::string& weights,
   if (task == "pose") {
     yolocpp::tasks::PoseDataset ds(data, "val", imgsz, /*num_kpts=*/17,
                                     /*kpt_dim=*/3, /*augment=*/false);
-    yolocpp::models::Yolo8Pose m(parse_scale(scale_s), /*nc=*/1, 17, 3);
+    yolocpp::models::Yolo8Pose m(parse_scale(scale), /*nc=*/1, 17, 3);
     load(m);
     auto r = yolocpp::tasks::validate_pose(m, ds, dev);
     std::cout << "OKS mAP@0.5=" << r.oks_map_50 << "\n";
@@ -573,7 +581,7 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::dota_names();
     yolocpp::tasks::OBBDataset ds(data, "val", imgsz, names, /*augment=*/false);
-    yolocpp::models::Yolo8OBB m(parse_scale(scale_s), ds.num_classes(), /*ne=*/1);
+    yolocpp::models::Yolo8OBB m(parse_scale(scale), ds.num_classes(), /*ne=*/1);
     load(m);
     auto r = yolocpp::tasks::validate_obb(m, ds, dev);
     std::cout << "rotated mAP@0.5=" << r.map_50 << "\n";
@@ -766,11 +774,17 @@ int cmd_train_task(const std::string& task, const std::string& data,
       m->load_from_state_dict(sd.entries);
     }
   };
+  // Auto-resolve scale from the init-weights filename when --scale isn't given
+  // (mirrors detect train / val / export). From-scratch training with neither
+  // --scale nor init weights still errors clearly at parse_scale.
+  std::string scale = (scale_s.empty() && !weights.empty())
+                          ? yolocpp::cli::scale_from_filename(weights)
+                          : scale_s;
 
   if (task == "classify") {
     int sz = (imgsz == 640) ? 224 : imgsz;
     yolocpp::tasks::ClassifyDataset tr(data_root, "train", sz, /*augment=*/true);
-    yolocpp::models::Yolo8Classify m(parse_scale(scale_s), tr.num_classes());
+    yolocpp::models::Yolo8Classify m(parse_scale(scale), tr.num_classes());
     load(m);
     yolocpp::tasks::ClassifyTrainConfig cfg;
     cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = sz;
@@ -782,7 +796,7 @@ int cmd_train_task(const std::string& task, const std::string& data,
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::coco_names();
     yolocpp::tasks::SegDataset tr(data_root, "train", imgsz, names, /*augment=*/true);
-    yolocpp::models::Yolo8Segment m(parse_scale(scale_s), tr.num_classes());
+    yolocpp::models::Yolo8Segment m(parse_scale(scale), tr.num_classes());
     load(m);
     yolocpp::tasks::SegTrainConfig cfg;
     cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
@@ -792,7 +806,7 @@ int cmd_train_task(const std::string& task, const std::string& data,
   }
   if (task == "pose") {
     yolocpp::tasks::PoseDataset tr(data_root, "train", imgsz, 17, 3, /*augment=*/true);
-    yolocpp::models::Yolo8Pose m(parse_scale(scale_s), /*nc=*/1, 17, 3);
+    yolocpp::models::Yolo8Pose m(parse_scale(scale), /*nc=*/1, 17, 3);
     load(m);
     yolocpp::tasks::PoseTrainConfig cfg;
     cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
@@ -804,7 +818,7 @@ int cmd_train_task(const std::string& task, const std::string& data,
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::dota_names();
     yolocpp::tasks::OBBDataset tr(data_root, "train", imgsz, names, /*augment=*/true);
-    yolocpp::models::Yolo8OBB m(parse_scale(scale_s), tr.num_classes(), /*ne=*/1);
+    yolocpp::models::Yolo8OBB m(parse_scale(scale), tr.num_classes(), /*ne=*/1);
     load(m);
     yolocpp::tasks::OBBTrainConfig cfg;
     cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;

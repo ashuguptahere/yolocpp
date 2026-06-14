@@ -4,6 +4,19 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.13] — 2026-06-14
+
+### Fixed
+- **#51M — non-detect `--mode val` / `--mode train` now auto-resolve `--scale`
+  from the weights filename** (`yolov8n-seg.pt → "n"`), matching detect /
+  export / benchmark. `cmd_val_task` / `cmd_train_task` called
+  `parse_scale(scale_s)` directly, so a non-detect val/train *without*
+  `--scale` failed with `[error] unknown YOLO8 scale:`. Now both resolve via
+  `cli::scale_from_filename(weights)` when `--scale` is omitted (and weights are
+  present), enforcing CLAUDE.md's "never default scale; auto-resolve from
+  filename" parity rule on the task paths. Found while wiring #5. Verified:
+  `--mode val/train --task segment` without `--scale` now runs.
+
 ## [0.101.12] — 2026-06-14
 
 ### Changed
