@@ -153,6 +153,31 @@ std::vector<SegInstance> run_segment(M& model, torch::Device dev, int imgsz,
   auto p_flat = p_cpu.reshape({p_cpu.size(0), h_p * w_p});
   auto masks  = sel_coefs.matmul(p_flat).reshape({-1, h_p, w_p}).sigmoid();
 
+  // crop_mask: zero every mask pixel outside its own detection box, in
+  // proto resolution (mirrors ultralytics ops.process_mask → crop_mask and
+  // the segment-train path). Without this, a returned instance mask can
+  // contain proto activations that belong to other objects of the same class.
+  // box is still in the imgsz letterbox frame here (pre-scale_boxes).
+  {
+    auto box_proto = box.clone();
+    box_proto.select(1, 0).mul_((float)w_p / imgsz);  // x1
+    box_proto.select(1, 1).mul_((float)h_p / imgsz);  // y1
+    box_proto.select(1, 2).mul_((float)w_p / imgsz);  // x2
+    box_proto.select(1, 3).mul_((float)h_p / imgsz);  // y2
+    auto bp = box_proto.accessor<float, 2>();
+    for (int64_t j = 0; j < (int64_t)keep.size(); ++j) {
+      int x1 = std::clamp((int)std::floor(bp[j][0]), 0, (int)w_p);
+      int y1 = std::clamp((int)std::floor(bp[j][1]), 0, (int)h_p);
+      int x2 = std::clamp((int)std::ceil(bp[j][2]),  0, (int)w_p);
+      int y2 = std::clamp((int)std::ceil(bp[j][3]),  0, (int)h_p);
+      auto mj = masks[j];
+      if (y1 > 0)   mj.slice(0, 0, y1).zero_();
+      if (y2 < h_p) mj.slice(0, y2, h_p).zero_();
+      if (x1 > 0)   mj.slice(1, 0, x1).zero_();
+      if (x2 < w_p) mj.slice(1, x2, w_p).zero_();
+    }
+  }
+
   auto box_xyxy = box.clone();
   scale_boxes(box_xyxy, lb);
 

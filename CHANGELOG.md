@@ -4,6 +4,18 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.21] — 2026-06-15
+
+### Fixed
+- **Segment inference omitted `crop_mask` — instance masks bled outside their
+  box** (latent, from hunt #2). `run_segment` (the predict path) built each
+  instance mask from the proto activation but never zeroed pixels outside the
+  detection box, so a returned mask could include proto activations belonging
+  to other same-class objects. Added the `crop_mask` step (scale box → proto
+  resolution, zero outside), mirroring `ops.process_mask` and the segment
+  train/val paths. Verified: yolov8n-seg / bus.jpg → 6 instances, masks now
+  box-confined.
+
 ## [0.101.20] — 2026-06-15
 
 ### Fixed
