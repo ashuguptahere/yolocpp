@@ -4,6 +4,23 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.4] — 2026-06-14
+
+### Changed
+- **#57F — build-tool auto-detect finalized.** `CMakeLists.txt` already wired
+  ccache (compiler launcher) and mold/lld (`-fuse-ld`); both confirmed engaging
+  at configure (`-- ccache: … wired`, `-- linker: mold`). Added a `STATUS` hint
+  recommending `-G Ninja` when the slower Make generator is in use (Ninja can't
+  be force-selected from inside CMakeLists — the generator is fixed at `cmake -G`
+  time).
+
+### Docs
+- Reconciled three audit-confirmed closeouts in `TODO.md`: **#51D2**
+  (`--strict-deterministic` — verified the deterministic banner + a completed
+  yolo11n/coco8 smoke), **#52B** (`examples/` ships 7 public-API snippets), and
+  **#57F** (above). The gap audit (recurring #33) found these landed in code but
+  still marked open.
+
 ## [0.101.3] — 2026-06-14
 
 ### Fixed

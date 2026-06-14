@@ -81,6 +81,13 @@ elseif(LLD_PROGRAM)
   add_link_options(-fuse-ld=lld)
   message(STATUS "linker: lld (${LLD_PROGRAM})")
 endif()
+# Ninja can't be force-selected from inside CMakeLists (the generator is
+# fixed at `cmake -G` time), so nudge toward it when the slower Make
+# generator is in use — Ninja's parallel scheduler ~halves this codebase's
+# cold rebuild. See CLAUDE.md "Build + run speed".
+if(NOT CMAKE_GENERATOR MATCHES "Ninja")
+  message(STATUS "generator: ${CMAKE_GENERATOR} — re-run with `-G Ninja` for faster cold builds")
+endif()
 
 # RTX 5090 = Blackwell sm_120. We compile virtual PTX for forward-compat too.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
