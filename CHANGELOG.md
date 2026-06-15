@@ -4,6 +4,30 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.106.2] — 2026-06-15
+
+### Changed
+- **README**: corrected the v12/v13 task-support paragraph — it claimed the
+  task heads were "scaffolded in code and queued for retraining", but the full
+  task pipeline (predict / val / train / ONNX+TRT export, with cross-backend
+  parity verified) is now wired (0.103–0.106); only the COCO-trained weights
+  await #60. Surfaced by the #33 gap audit.
+
+### Notes
+- Ran the recurring **#33 gap audit** (after the 0.106 task-export landings):
+  a 6-finder fan-out (capability-matrix reconcile, stub/TODO grep, CLI + SKIP
+  audit, adversarial bug hunt over the new export emitters, adversarial bug hunt
+  over the v12/v13 task pipeline, doc/version consistency) → 2-lens
+  refute-by-default verification on each actionable candidate. **Result: 29
+  findings → 1 actionable candidate → 0 confirmed bugs/gaps** (the "v12/v13
+  Pose/OBB missing training forward" candidate was refuted 2/2). The only
+  genuinely-actionable item was the README paragraph above; the remaining
+  findings are intentional design (defensive `unreachable` asserts, placeholder
+  Identity modules for index conformity, dynamic-batch markers), the documented
+  `kAssetBase` allow-list note (#49, correctly references the closed task), or
+  hardware/maintainer-blocked features (int4/nvfp4 export #51F2, non-detect
+  video/URL/webcam frame loop, GPU-side augmentation). No code change warranted.
+
 ## [0.106.1] — 2026-06-15
 
 ### Added

@@ -33,9 +33,11 @@ yolo4 yolo5 yolo6 yolo7 yolo8 yolo9 yolo10 yolo11 yolo12 yolo13
 yolo26`) ship the detect pipeline end-to-end — **predict, val,
 train, ONNX export, TRT export** — across every published scale.
 v8 / v11 / v26 additionally ship the full five-task family (detect /
-classify / segment / pose / obb). v12 / v13 ship detect-only
-upstream; their task heads are scaffolded in code and queued for
-retraining on COCO under task #60.
+classify / segment / pose / obb) with upstream weights. v12 / v13 ship
+detect-only upstream, but their task heads are implemented and the
+**full task pipeline is wired** — predict, val, train, and ONNX/TRT
+export — with cross-backend (PyTorch ↔ TensorRT) numerical parity
+verified; only the COCO-trained task weights await task #60.
 
 The two Darknet-era versions (`yolo1`, `yolo2`) ship the **full
 pipeline** (predict + val + train + ONNX/TRT export + benchmark,
