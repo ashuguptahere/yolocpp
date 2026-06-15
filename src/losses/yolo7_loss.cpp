@@ -183,7 +183,9 @@ LossOutput V7DetectionLoss::operator()(
     int H = (int)feats[i].size(2);
     int W = (int)feats[i].size(3);
     B_[i] = B; H_[i] = H; W_[i] = W;
-    auto t = feats[i].view({B, na, no, H, W}).permute({0, 1, 3, 4, 2})
+    // fp32 under bf16 autocast (matches yolo1/yolo8 loss); no-op if already fp32.
+    auto t = feats[i].to(torch::kFloat)
+                     .view({B, na, no, H, W}).permute({0, 1, 3, 4, 2})
                      .contiguous();              // [B, na, H, W, no]
     p[i] = t;
 

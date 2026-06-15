@@ -304,9 +304,16 @@ LossOutput V8DetectionLoss::operator()(
   int B       = (int)feats[0].size(0);
 
   // ── 1. Concatenate flat predictions ─────────────────────────────────────
+  // Compute the loss in fp32 even under bf16 autocast (the trainer wraps
+  // forward + loss in an autocast scope, so `feats` arrive as bf16). bf16's
+  // 8-bit mantissa loses precision through the DFL decode / IoU / BCE
+  // reductions; casting at entry matches yolo1_loss and upstream's fp32 loss.
+  // The cast is autograd-safe (grads flow back to the bf16 params) and a no-op
+  // when feats are already fp32 (CPU / deterministic path).
   std::vector<torch::Tensor> flat;
   std::vector<std::pair<int, int>> sizes;
-  for (auto& f : feats) {
+  for (auto& f0 : feats) {
+    auto f = f0.to(torch::kFloat);
     sizes.emplace_back((int)f.size(2), (int)f.size(3));
     flat.push_back(f.reshape({B, f.size(1), -1}));     // [B, no, h*w]
   }

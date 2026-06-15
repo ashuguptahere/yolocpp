@@ -268,9 +268,12 @@ LossOutput V6DetectionLoss::operator()(
   int B       = (int)feats[0].size(0);
 
   // ── 1. Concatenate flat predictions ────────────────────────────────
+  // Cast to fp32: under bf16 autocast `feats` arrive as bf16; the loss must run
+  // in fp32 (matches yolo1/yolo8 loss + upstream). No-op when already fp32.
   std::vector<torch::Tensor> flat;
   std::vector<std::pair<int, int>> sizes;
-  for (auto& f : feats) {
+  for (auto& f0 : feats) {
+    auto f = f0.to(torch::kFloat);
     sizes.emplace_back((int)f.size(2), (int)f.size(3));
     flat.push_back(f.reshape({B, f.size(1), -1}));
   }

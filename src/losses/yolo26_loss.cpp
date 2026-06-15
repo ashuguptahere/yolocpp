@@ -263,9 +263,11 @@ static HeadLossOut compute_head_loss(
   int B  = (int)head_feats[0].size(0);
   int no = 4 + nc;
 
+  // Cast to fp32 (bf16 autocast → fp32 loss; matches yolo1/yolo8). No-op if fp32.
   std::vector<torch::Tensor> flat;
   std::vector<std::pair<int, int>> sizes;
-  for (auto& f : head_feats) {
+  for (auto& f0 : head_feats) {
+    auto f = f0.to(torch::kFloat);
     sizes.emplace_back((int)f.size(2), (int)f.size(3));
     flat.push_back(f.reshape({B, f.size(1), -1}));
   }

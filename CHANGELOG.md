@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.36] — 2026-06-15
+
+### Fixed
+- **Detect losses ran in bf16 under autocast instead of fp32 (latent, from hunt
+  #5).** The trainer wraps forward **and** loss in a bf16 autocast scope, so the
+  feature tensors reach the loss as bf16 and the whole computation (DFL decode,
+  CIoU, BCE reductions) ran with bf16's 8-bit mantissa — contradicting the
+  trainer's own comment ("the loss tensor implicitly upcast to fp32"), upstream
+  (fp32 loss), and the explicit fp32 cast already in `yolo1_loss`. Added the
+  same `.to(torch::kFloat)` at the feature-flatten entry of `V8DetectionLoss`
+  (covers v8/v9/v10/v11/v12/v13 — v10 delegates to it), `Yolo6Loss`,
+  `Yolo26Loss`, `Yolo2Loss`, and `Yolo7Loss`. Autograd-safe (grads flow to the
+  bf16 params) and a no-op on the fp32/CPU path. Verified: v8 GPU train smoke
+  converges (loss ↓, mAP sane) and all 9 train ctests pass.
+
 ## [0.101.35] — 2026-06-15
 
 ### Fixed

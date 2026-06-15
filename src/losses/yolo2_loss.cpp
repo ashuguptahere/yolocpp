@@ -17,7 +17,8 @@ LossOutput Yolo2Loss::operator()(const std::vector<torch::Tensor>& feats,
   const float stride = (float)strides[0];
   TORCH_CHECK(feats.size() == 1,
               "Yolo2Loss expects 1 feature tensor, got ", feats.size());
-  auto raw = feats[0];               // [B, na·(5+nc), H, W]
+  // fp32 under bf16 autocast (matches yolo1/yolo8 loss); no-op if already fp32.
+  auto raw = feats[0].to(torch::kFloat);   // [B, na·(5+nc), H, W]
   const int B  = (int)raw.size(0);
   const int H  = (int)raw.size(2);
   const int W  = (int)raw.size(3);
