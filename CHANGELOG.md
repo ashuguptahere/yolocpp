@@ -4,6 +4,36 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.106.1] — 2026-06-15
+
+### Added
+- **#53C — cross-backend (PyTorch ↔ TensorRT) numerical parity for the task
+  heads** (`tests/test_task_cross_backend_parity.cpp`), the task-head
+  counterpart to the detect-only `#53A`. For each of 16 cells (v8/v11/v12/v13 ×
+  segment/pose/obb/classify): build the libtorch model, export its ONNX
+  directly, build an FP32 (TF32-off) TRT engine, and run the SAME input through
+  `forward_eval` and the engine's raw multi-output binding
+  (`make_trt_multi_forward`), asserting every named output (output / coefs /
+  protos / keypoints / angle) matches in shape and within relative-L2 < 1e-3.
+  **Result: all 16 cells pass — max relL2 4.1e-7 across 32 tensor comparisons;
+  classify bit-exact (relL2=0).** This upgrades the 0.106.0 task-export
+  verification from structural ("graph parses, TRT builds") to numerical ("TRT
+  decode matches the libtorch reference"). Weights are irrelevant to a
+  cross-backend check (both backends run identical weights), so every cell mints
+  from a per-cell-seeded random init — no external weights/data — which is why
+  v12/v13 (no upstream task weights) are covered alongside v8/v11. Gated behind
+  `YOLOCPP_TRT_PARITY=1` (builds 16 engines, ~minutes; engines cache under
+  `build/parity_cache_task/`); the default ctest path prints SKIP and returns 0,
+  keeping the fast suite fast.
+
+### Fixed
+- Test determinism: the parity cells now seed the RNG **before each model
+  construction**, so a cell's random weights depend only on its own seed —
+  reproducible across process runs (the on-disk engine cache stays valid) and
+  independent of cell order. Without this the first-constructed cell drew from
+  the non-deterministic initial RNG state, so its cached TRT engine went stale
+  on the next run and produced a false mismatch (coefs/protos relL2 ~1.5).
+
 ## [0.106.0] — 2026-06-15
 
 ### Added
