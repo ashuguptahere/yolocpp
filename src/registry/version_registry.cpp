@@ -889,7 +889,10 @@ VersionAdapter make_v12() {
   a.display_name = "yolo12";
   a.upstream_year = "2025";
   a.default_export_basename = "yolo12";
-  a.supported_tasks = {"detect"};
+  // Task heads exist (yolo12_tasks.cpp) and train/val are wired through
+  // cmd_train_task / cmd_val_task; no upstream task weights ship, so these are
+  // trained on COCO via the #60 harness.
+  a.supported_tasks = {"detect", "classify", "segment", "pose", "obb"};
   a.default_imgsz = detect_imgsz_default;
   a.export_onnx = [](const std::string& weights, const std::string& scale,
                      int nc, const std::string& task,

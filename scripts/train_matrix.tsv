@@ -36,8 +36,14 @@ v26n_detect	n	detect	yolo26n.pt	100	640	16
 # --- from-scratch publish examples (uncomment + point at full datasets) -------
 # v8n_detect_scratch	n	detect	scratch	300	640	64
 #
-# --- BLOCKED: v12/v13 task heads not yet wired into cmd_train_task -------------
-#     (registry supported_tasks={"detect"}); enable these rows once the
-#     v12/v13 Segment/Pose/OBB/Classify trainers land.
-# v12n_segment	n	segment	scratch	100	640	16
-# v13n_pose	n	pose	scratch	100	640	16
+# --- v12 task heads (no upstream task weights → trained from scratch on COCO).
+#     The bare "yolo12n-*" init spec conveys version+scale (no file → random
+#     init). These are the #60 v12-task publish cells.
+v12n_segment	n	segment	yolo12n-seg	100	640	16
+v12n_pose	n	pose	yolo12n-pose	100	640	16
+v12n_obb	n	obb	yolo12n-obb	100	1024	8
+v12n_classify	n	classify	yolo12n-cls	100	224	64
+#
+# --- BLOCKED: v13 task heads not yet written (no yolo13_tasks.*) ---------------
+# v13n_segment	n	segment	yolo13n-seg	100	640	16
+# v13n_pose	n	pose	yolo13n-pose	100	640	16

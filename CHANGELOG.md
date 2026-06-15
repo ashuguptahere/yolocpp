@@ -4,6 +4,32 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.103.0] — 2026-06-15
+
+### Added
+- **v12 non-detect task training + validation wired into the CLI** (#60A-task).
+  The v12 task heads existed (`yolo12_tasks.cpp`: Yolo12Segment/Pose/OBB/Classify)
+  but weren't trainable; now `--mode train --task {segment,pose,obb,classify}`
+  and `--mode val` build the v12 architecture. Changes:
+  - Added `Yolo12Segment::forward_train_seg` (the one missing method — a thin
+    mirror of `forward_eval` feeding the segment head's `forward_train`; pose/obb
+    train through `forward_eval`, classify through `forward`).
+  - v12 train/validate wrapper overloads + explicit template instantiations
+    (`train_*_t<Yolo12*>` / `validate_*_t<Yolo12*>`).
+  - **`cmd_train_task` and `cmd_val_task` now dispatch on version (v8/v11/v12)**
+    instead of hardcoding the v8 families — this also fixes a latent gap where
+    **v11 task training/val was never actually reachable** from the CLI. Training
+    resolves the version from the init spec filename (a bare `yolo12n-seg` scratch
+    spec conveys version+scale); val recovers it from the checkpoint architecture
+    via `infer_model_info` (trained checkpoints carry no version token).
+  - Registry `v12.supported_tasks` → full 5-task list.
+  - `scripts/train_matrix.tsv` gains the four v12 task cells.
+  No upstream v12 task weights ship, so these train from scratch on COCO via the
+  #60 harness. Verified end-to-end: all four v12 task cells train → save → val
+  (train-from-scratch metrics ~0 on the coco8 smoke, as expected; the pipeline,
+  checkpoint round-trip, and version recovery are what's verified). v13 task
+  heads remain to be written (no `yolo13_tasks.*` yet — follow-up).
+
 ## [0.102.3] — 2026-06-15
 
 ### Added

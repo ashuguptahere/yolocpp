@@ -231,6 +231,15 @@ Yolo12SegmentImpl::forward_eval(torch::Tensor x) {
   return seg->forward(det_in);
 }
 
+std::tuple<std::vector<torch::Tensor>, torch::Tensor, torch::Tensor>
+Yolo12SegmentImpl::forward_train_seg(torch::Tensor x) {
+  auto outs = forward_v12_backbone_neck(model, x);
+  std::vector<torch::Tensor> det_in = {outs[14], outs[17], outs[20]};
+  auto* seg = model[21]->as<SegmentImpl>();
+  seg->stride = stride;
+  return seg->forward_train(det_in);
+}
+
 int Yolo12SegmentImpl::load_from_state_dict(
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {
   auto remapped = remap_task_keys(entries, "21");

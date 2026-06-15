@@ -550,21 +550,31 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     }
   };
   auto dev = pick_device(device);
-  // Auto-resolve scale from the weights filename when --scale isn't given
-  // (yolov8n-seg.pt → "n"), mirroring detect val / export / benchmark. Without
-  // this, non-detect `--mode val` failed with "unknown YOLO8 scale" unless the
-  // user passed --scale. (Honours the "never default scale; auto-resolve"
-  // parity rule in CLAUDE.md.)
-  std::string scale = (scale_s.empty() && !weights.empty())
-                          ? yolocpp::cli::scale_from_filename(weights)
-                          : scale_s;
+  // Recover the backbone version + scale. A trained task checkpoint (best.pt /
+  // last.pt) carries no version/scale token in its name, so probe the
+  // state-dict architecture via infer_model_info; fall back to the filename.
+  // --scale always overrides the scale. (Honours "never default scale; resolve"
+  // — CLAUDE.md.)
+  std::string version = "v8", scale = scale_s;
+  if (!weights.empty()) {
+    try {
+      auto info = yolocpp::cli::infer_model_info(weights);
+      version = info.version;
+      if (scale.empty()) scale = info.scale;
+    } catch (...) {
+      version = yolocpp::cli::version_from_filename(weights);
+      if (scale.empty()) scale = yolocpp::cli::scale_from_filename(weights);
+    }
+  }
 
   if (task == "classify") {
     int sz = (imgsz == 640) ? 224 : imgsz;
     yolocpp::tasks::ClassifyDataset ds(data, "val", sz, /*augment=*/false);
-    yolocpp::models::Yolo8Classify m(parse_scale(scale), ds.num_classes());
-    load(m);
-    auto r = yolocpp::tasks::validate_classify(m, ds, dev);
+    auto run = [&](auto m) { load(m); return yolocpp::tasks::validate_classify(m, ds, dev); };
+    yolocpp::tasks::ClassifyValResult r;
+    if (version == "v12")      r = run(yolocpp::models::Yolo12Classify(yolocpp::models::yolo12_scale_from_letter(scale), ds.num_classes()));
+    else if (version == "v11") r = run(yolocpp::models::Yolo11Classify(yolocpp::models::yolo11_scale_from_letter(scale), ds.num_classes()));
+    else                       r = run(yolocpp::models::Yolo8Classify(parse_scale(scale), ds.num_classes()));
     std::cout << "top1=" << r.top1_acc << " top5=" << r.top5_acc
               << " (n=" << r.n_total << ")\n";
     return 0;
@@ -573,9 +583,11 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::coco_names();
     yolocpp::tasks::SegDataset ds(data, "val", imgsz, names, /*augment=*/false);
-    yolocpp::models::Yolo8Segment m(parse_scale(scale), ds.num_classes());
-    load(m);
-    auto r = yolocpp::tasks::validate_segment(m, ds, dev);
+    auto run = [&](auto m) { load(m); return yolocpp::tasks::validate_segment(m, ds, dev); };
+    yolocpp::tasks::SegValResult r;
+    if (version == "v12")      r = run(yolocpp::models::Yolo12Segment(yolocpp::models::yolo12_scale_from_letter(scale), ds.num_classes()));
+    else if (version == "v11") r = run(yolocpp::models::Yolo11Segment(yolocpp::models::yolo11_scale_from_letter(scale), ds.num_classes()));
+    else                       r = run(yolocpp::models::Yolo8Segment(parse_scale(scale), ds.num_classes()));
     std::cout << "mask mAP@0.5=" << r.map_50
               << " (pred=" << r.n_predictions
               << " gt=" << r.n_ground_truths << ")\n";
@@ -584,9 +596,11 @@ int cmd_val_task(const std::string& task, const std::string& weights,
   if (task == "pose") {
     yolocpp::tasks::PoseDataset ds(data, "val", imgsz, /*num_kpts=*/17,
                                     /*kpt_dim=*/3, /*augment=*/false);
-    yolocpp::models::Yolo8Pose m(parse_scale(scale), /*nc=*/1, 17, 3);
-    load(m);
-    auto r = yolocpp::tasks::validate_pose(m, ds, dev);
+    auto run = [&](auto m) { load(m); return yolocpp::tasks::validate_pose(m, ds, dev); };
+    yolocpp::tasks::PoseValResult r;
+    if (version == "v12")      r = run(yolocpp::models::Yolo12Pose(yolocpp::models::yolo12_scale_from_letter(scale), 1, 17, 3));
+    else if (version == "v11") r = run(yolocpp::models::Yolo11Pose(yolocpp::models::yolo11_scale_from_letter(scale), 1, 17, 3));
+    else                       r = run(yolocpp::models::Yolo8Pose(parse_scale(scale), 1, 17, 3));
     std::cout << "OKS mAP@0.5=" << r.oks_map_50 << "\n";
     return 0;
   }
@@ -595,9 +609,11 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::dota_names();
     yolocpp::tasks::OBBDataset ds(data, "val", sz, names, /*augment=*/false);
-    yolocpp::models::Yolo8OBB m(parse_scale(scale), ds.num_classes(), /*ne=*/1);
-    load(m);
-    auto r = yolocpp::tasks::validate_obb(m, ds, dev);
+    auto run = [&](auto m) { load(m); return yolocpp::tasks::validate_obb(m, ds, dev); };
+    yolocpp::tasks::OBBValResult r;
+    if (version == "v12")      r = run(yolocpp::models::Yolo12OBB(yolocpp::models::yolo12_scale_from_letter(scale), ds.num_classes(), 1));
+    else if (version == "v11") r = run(yolocpp::models::Yolo11OBB(yolocpp::models::yolo11_scale_from_letter(scale), ds.num_classes(), 1));
+    else                       r = run(yolocpp::models::Yolo8OBB(parse_scale(scale), ds.num_classes(), 1));
     std::cout << "rotated mAP@0.5=" << r.map_50 << "\n";
     return 0;
   }
@@ -952,8 +968,11 @@ int cmd_train_task(const std::string& task, const std::string& data,
     }
   }
 
+  // Load init weights only when the spec is a real file. A bare scratch spec
+  // (e.g. `-m yolo12n-seg`) reaches here as a non-file string carrying just the
+  // version + scale hint — train from random init in that case.
   auto load = [&](auto& m) {
-    if (!weights.empty()) {
+    if (!weights.empty() && std::filesystem::exists(weights)) {
       auto sd = yolocpp::serialization::load_state_dict(weights);
       m->load_from_state_dict(sd.entries);
     }
@@ -964,50 +983,87 @@ int cmd_train_task(const std::string& task, const std::string& data,
   std::string scale = (scale_s.empty() && !weights.empty())
                           ? yolocpp::cli::scale_from_filename(weights)
                           : scale_s;
+  // Task-backbone version (v8 / v11 / v12) from the init/weights spec filename —
+  // selects which task-family architecture to build. v8 is the default (and the
+  // fallback for any version without task heads).
+  const std::string version =
+      weights.empty() ? "v8" : yolocpp::cli::version_from_filename(weights);
 
   if (task == "classify") {
     int sz = (imgsz == 640) ? 224 : imgsz;
     yolocpp::tasks::ClassifyDataset tr(data_root, "train", sz, /*augment=*/true);
-    yolocpp::models::Yolo8Classify m(parse_scale(scale), tr.num_classes());
-    load(m);
     yolocpp::tasks::ClassifyTrainConfig cfg;
     cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = sz;
     cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
-    yolocpp::tasks::train_classify(m, tr, /*val=*/nullptr, cfg);
+    auto run = [&](auto m) {
+      load(m); yolocpp::tasks::train_classify(std::move(m), tr, nullptr, cfg);
+    };
+    if (version == "v12")
+      run(yolocpp::models::Yolo12Classify(
+          yolocpp::models::yolo12_scale_from_letter(scale), tr.num_classes()));
+    else if (version == "v11")
+      run(yolocpp::models::Yolo11Classify(
+          yolocpp::models::yolo11_scale_from_letter(scale), tr.num_classes()));
+    else
+      run(yolocpp::models::Yolo8Classify(parse_scale(scale), tr.num_classes()));
     return 0;
   }
   if (task == "segment") {
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::coco_names();
     yolocpp::tasks::SegDataset tr(data_root, "train", imgsz, names, /*augment=*/true);
-    yolocpp::models::Yolo8Segment m(parse_scale(scale), tr.num_classes());
-    load(m);
     yolocpp::tasks::SegTrainConfig cfg;
     cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
     cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
-    yolocpp::tasks::train_segment(m, tr, /*val=*/nullptr, cfg);
+    auto run = [&](auto m) {
+      load(m); yolocpp::tasks::train_segment(std::move(m), tr, nullptr, cfg);
+    };
+    if (version == "v12")
+      run(yolocpp::models::Yolo12Segment(
+          yolocpp::models::yolo12_scale_from_letter(scale), tr.num_classes()));
+    else if (version == "v11")
+      run(yolocpp::models::Yolo11Segment(
+          yolocpp::models::yolo11_scale_from_letter(scale), tr.num_classes()));
+    else
+      run(yolocpp::models::Yolo8Segment(parse_scale(scale), tr.num_classes()));
     return 0;
   }
   if (task == "pose") {
     yolocpp::tasks::PoseDataset tr(data_root, "train", imgsz, 17, 3, /*augment=*/true);
-    yolocpp::models::Yolo8Pose m(parse_scale(scale), /*nc=*/1, 17, 3);
-    load(m);
     yolocpp::tasks::PoseTrainConfig cfg;
     cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
     cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
-    yolocpp::tasks::train_pose(m, tr, /*val=*/nullptr, cfg);
+    auto run = [&](auto m) {
+      load(m); yolocpp::tasks::train_pose(std::move(m), tr, nullptr, cfg);
+    };
+    if (version == "v12")
+      run(yolocpp::models::Yolo12Pose(
+          yolocpp::models::yolo12_scale_from_letter(scale), /*nc=*/1, 17, 3));
+    else if (version == "v11")
+      run(yolocpp::models::Yolo11Pose(
+          yolocpp::models::yolo11_scale_from_letter(scale), /*nc=*/1, 17, 3));
+    else
+      run(yolocpp::models::Yolo8Pose(parse_scale(scale), /*nc=*/1, 17, 3));
     return 0;
   }
   if (task == "obb") {
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::dota_names();
     yolocpp::tasks::OBBDataset tr(data_root, "train", imgsz, names, /*augment=*/true);
-    yolocpp::models::Yolo8OBB m(parse_scale(scale), tr.num_classes(), /*ne=*/1);
-    load(m);
     yolocpp::tasks::OBBTrainConfig cfg;
     cfg.epochs = epochs; cfg.batch_size = batch; cfg.imgsz = imgsz;
     cfg.lr0 = lr0; cfg.device = device; cfg.save_dir = save_dir;
-    yolocpp::tasks::train_obb(m, tr, /*val=*/nullptr, cfg);
+    auto run = [&](auto m) {
+      load(m); yolocpp::tasks::train_obb(std::move(m), tr, nullptr, cfg);
+    };
+    if (version == "v12")
+      run(yolocpp::models::Yolo12OBB(
+          yolocpp::models::yolo12_scale_from_letter(scale), tr.num_classes(), 1));
+    else if (version == "v11")
+      run(yolocpp::models::Yolo11OBB(
+          yolocpp::models::yolo11_scale_from_letter(scale), tr.num_classes(), 1));
+    else
+      run(yolocpp::models::Yolo8OBB(parse_scale(scale), tr.num_classes(), 1));
     return 0;
   }
   std::cerr << "[error] cmd_train_task: unknown task '" << task << "'\n";

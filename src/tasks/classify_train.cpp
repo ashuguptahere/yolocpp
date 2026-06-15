@@ -235,6 +235,11 @@ template ClassifyValResult validate_classify_t<models::Yolo8Classify>(
     models::Yolo8Classify&, const ClassifyDataset&, torch::Device);
 template ClassifyValResult validate_classify_t<models::Yolo11Classify>(
     models::Yolo11Classify&, const ClassifyDataset&, torch::Device);
+template void train_classify_t<models::Yolo12Classify>(
+    models::Yolo12Classify, const ClassifyDataset&, const ClassifyDataset*,
+    ClassifyTrainConfig);
+template ClassifyValResult validate_classify_t<models::Yolo12Classify>(
+    models::Yolo12Classify&, const ClassifyDataset&, torch::Device);
 // TRT-backed validation (per-format benchmark top-1) reuses the same metric.
 template ClassifyValResult validate_classify_t<inference::TrtClassifyModel>(
     inference::TrtClassifyModel&, const ClassifyDataset&, torch::Device);
