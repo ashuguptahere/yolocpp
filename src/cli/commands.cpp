@@ -74,6 +74,7 @@
 #include "yolocpp/models/yolo8.hpp"
 #include "yolocpp/models/yolo8_classify.hpp"
 #include "yolocpp/models/yolo8_tasks.hpp"
+#include "yolocpp/inference/trt_task_eval.hpp"
 #include "yolocpp/serialization/onnx_export.hpp"
 #include "yolocpp/serialization/pt_loader.hpp"
 #include "yolocpp/serialization/trt_export.hpp"
@@ -612,6 +613,95 @@ int cmd_val_task(const std::string& task, const std::string& weights,
 // host copy, same as the detect bench) and, when `--data` is given, reports the
 // task's accuracy metric via the existing `validate_*` functions. Uses the v8
 // task families (the architectures whose task heads ship with weights upstream).
+namespace {
+
+// One row of the per-format benchmark table.
+struct FmtRow {
+  std::string name;
+  double      size_mb   = 0.0;
+  double      ms        = -1.0;
+  double      metric    = -1.0;
+  bool        has_metric = false;
+};
+
+// Result of building + timing one non-detect task TRT engine.
+struct TaskTrtRunner {
+  yolocpp::inference::TrtMultiForward fwd;
+  double ms        = -1.0;
+  double size_mb   = 0.0;
+  int    eng_imgsz = 0;
+  bool   ok        = false;
+};
+
+// Build a non-detect task TRT engine at `precision` ("fp16"/"int8") via the
+// registry's task-aware ONNX export + build_trt_engine, then time the forward.
+// Best-effort: any failure (e.g. INT8 needs a calibration image dir that isn't
+// present) returns {.ok=false} so the benchmark degrades gracefully.
+TaskTrtRunner build_task_trt_runner(
+    const yolocpp::registry::VersionAdapter* adapter,
+    const std::string& weights, const std::string& scale_s, int nc,
+    const std::string& task, int sz, const std::string& precision,
+    const std::string& calib_dir, torch::Device dev, int warmup, int iters) {
+  namespace fs = std::filesystem;
+  TaskTrtRunner r;
+  try {
+    fs::create_directories("runs/export");
+    const std::string base     = "runs/export/bench_" + task + "_" + precision;
+    const std::string onnx_tmp = base + ".tmp.onnx";
+    const std::string engine   = base + ".trt";
+
+    yolocpp::serialization::OnnxExportConfig ocfg;
+    ocfg.imgsz = sz;
+    adapter->export_onnx(weights, scale_s, nc, task, onnx_tmp, ocfg);
+
+    yolocpp::serialization::TrtBuildConfig tcfg;
+    tcfg.imgsz = sz;
+    tcfg.input_name = ocfg.input_name;
+    if (precision == "int8") {
+      if (calib_dir.empty() || !fs::is_directory(calib_dir)) {
+        std::error_code ec; fs::remove(onnx_tmp, ec);
+        return r;  // no calibration images → skip INT8 gracefully
+      }
+      tcfg.int8 = true;  tcfg.fp16 = false;
+      tcfg.calib_image_dir = calib_dir;
+      tcfg.calib_cache     = engine + ".calib";
+    } else {
+      tcfg.fp16 = true;
+    }
+    if (adapter->trt_disable_tf32) tcfg.tf32 = false;
+    yolocpp::serialization::build_trt_engine(onnx_tmp, engine, tcfg);
+    { std::error_code ec; fs::remove(onnx_tmp, ec); }
+
+    int eng_imgsz = sz;
+    r.fwd = yolocpp::inference::make_trt_multi_forward(engine, eng_imgsz);
+    r.eng_imgsz = eng_imgsz;
+    { std::error_code ec; auto n = fs::file_size(engine, ec);
+      if (!ec) r.size_mb = static_cast<double>(n) / 1e6; }
+
+    // Median ms over `iters`, matching the PT timing harness above.
+    auto x = torch::zeros({1, 3, eng_imgsz, eng_imgsz},
+        torch::TensorOptions().dtype(torch::kFloat32).device(dev));
+    for (int i = 0; i < warmup; ++i) r.fwd(x);
+    std::vector<double> ts; ts.reserve(iters);
+    for (int i = 0; i < iters; ++i) {
+      auto t0 = std::chrono::steady_clock::now();
+      r.fwd(x);
+      auto t1 = std::chrono::steady_clock::now();
+      ts.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    std::sort(ts.begin(), ts.end());
+    r.ms = ts[ts.size() / 2];
+    r.ok = true;
+  } catch (const std::exception& e) {
+    LOG_WARN("bench") << "TRT " << precision << " for " << task
+                      << " unavailable: " << e.what();
+    r.ok = false;
+  }
+  return r;
+}
+
+}  // namespace
+
 int cmd_benchmark_task(const std::string& task, const std::string& weights,
                        const std::string& data, const std::string& names_csv,
                        int imgsz, const std::string& device,
@@ -673,6 +763,8 @@ int cmd_benchmark_task(const std::string& task, const std::string& weights,
   int    sz = imgsz;
   double ms = -1.0, metric = -1.0;
   std::string metric_name = "metric";
+  // Extra TRT format rows (segment/pose/obb) appended below the PyTorch row.
+  std::vector<FmtRow> trt_rows;
 
   if (task == "classify") {
     sz = (imgsz == 640) ? 224 : imgsz;
@@ -704,6 +796,23 @@ int cmd_benchmark_task(const std::string& task, const std::string& weights,
                        auto [d, c, p] = m->forward_eval(x); (void)c; (void)p; d.cpu(); });
     metric_name = "mask-mAP@0.5";
     if (have_map) metric = yolocpp::tasks::validate_segment(m, *ds, dev).map_50;
+    if (dev.is_cuda()) {
+      yolocpp::registry::register_all_versions();
+      const auto* adapter = yolocpp::registry::Registry::instance().find("v8");
+      const std::string calib = data_root + "/images/val";
+      for (const char* prec : {"fp16", "int8"}) {
+        auto rr = build_task_trt_runner(adapter, weights, scale, nc, "segment",
+                                        sz, prec, calib, dev, warmup, iters);
+        if (!rr.ok) continue;
+        double mm = -1.0;
+        if (have_map) {
+          yolocpp::inference::TrtSegModel tm{rr.fwd};
+          mm = yolocpp::tasks::validate_segment_t(tm, *ds, dev).map_50;
+        }
+        trt_rows.push_back({std::string("TRT-") + prec, rr.size_mb, rr.ms, mm,
+                            have_map});
+      }
+    }
   } else if (task == "pose") {
     std::unique_ptr<yolocpp::tasks::PoseDataset> ds;
     if (have_map)
@@ -715,6 +824,23 @@ int cmd_benchmark_task(const std::string& task, const std::string& weights,
                        auto [d, k] = m->forward_eval(x); (void)k; d.cpu(); });
     metric_name = "OKS-mAP@0.5";
     if (have_map) metric = yolocpp::tasks::validate_pose(m, *ds, dev).oks_map_50;
+    if (dev.is_cuda()) {
+      yolocpp::registry::register_all_versions();
+      const auto* adapter = yolocpp::registry::Registry::instance().find("v8");
+      const std::string calib = data_root + "/images/val";
+      for (const char* prec : {"fp16", "int8"}) {
+        auto rr = build_task_trt_runner(adapter, weights, scale, /*nc=*/1, "pose",
+                                        sz, prec, calib, dev, warmup, iters);
+        if (!rr.ok) continue;
+        double mm = -1.0;
+        if (have_map) {
+          yolocpp::inference::TrtPoseModel tm{rr.fwd};
+          mm = yolocpp::tasks::validate_pose_t(tm, *ds, dev).oks_map_50;
+        }
+        trt_rows.push_back({std::string("TRT-") + prec, rr.size_mb, rr.ms, mm,
+                            have_map});
+      }
+    }
   } else if (task == "obb") {
     sz = (imgsz == 640) ? 1024 : imgsz;  // OBB/DOTA default 1024
     auto names = split_csv(names_csv);
@@ -732,26 +858,52 @@ int cmd_benchmark_task(const std::string& task, const std::string& weights,
                        auto [d, a] = m->forward_eval(x); (void)a; d.cpu(); });
     metric_name = "rotated-mAP@0.5";
     if (have_map) metric = yolocpp::tasks::validate_obb(m, *ds, dev).map_50;
+    if (dev.is_cuda()) {
+      yolocpp::registry::register_all_versions();
+      const auto* adapter = yolocpp::registry::Registry::instance().find("v8");
+      const std::string calib = data_root + "/images/val";
+      for (const char* prec : {"fp16", "int8"}) {
+        auto rr = build_task_trt_runner(adapter, weights, scale, nc, "obb",
+                                        sz, prec, calib, dev, warmup, iters);
+        if (!rr.ok) continue;
+        double mm = -1.0;
+        if (have_map) {
+          yolocpp::inference::TrtOBBModel tm{rr.fwd};
+          mm = yolocpp::tasks::validate_obb_t(tm, *ds, dev).map_50;
+        }
+        trt_rows.push_back({std::string("TRT-") + prec, rr.size_mb, rr.ms, mm,
+                            have_map});
+      }
+    }
   } else {
     LOG_ERROR("bench") << "cmd_benchmark_task: unknown task '" << task << "'";
     return 2;
   }
 
-  const double imgps = ms > 0 ? 1000.0 / ms : 0.0;
+  // Assemble the format table: PyTorch first, then any TRT rows that built.
+  std::vector<FmtRow> rows;
+  rows.push_back({"PyTorch", size_mb, ms, metric, have_map});
+  for (const auto& t : trt_rows) rows.push_back(t);
+
   std::cout << "\n  Task: " << task << "   model: " << weights
             << "   scale: " << scale
             << "   imgsz: " << sz
             << "   device: " << (dev.is_cuda() ? "cuda" : "cpu") << "\n"
             << "  Format     Size(MB)   ms/im     img/s    " << metric_name << "\n"
             << "  ────────   ────────   ──────    ──────   ────────────\n";
-  std::cout << std::fixed << std::setprecision(2)
-            << "  PyTorch    " << std::setw(8) << size_mb
-            << "   " << std::setw(6) << ms
-            << "   " << std::setw(6) << imgps << "   ";
-  if (have_map) std::cout << std::setprecision(4) << metric << "\n";
-  else          std::cout << "—  (pass --data for " << metric_name << ")\n";
-  std::cout << "  [note] non-detect TRT/ONNX formats are a separate extension "
-               "(task-specific output decode); PT-only here (#5).\n";
+  for (const auto& r : rows) {
+    const double imgps = r.ms > 0 ? 1000.0 / r.ms : 0.0;
+    std::cout << std::fixed << std::setprecision(2)
+              << "  " << std::left << std::setw(9) << r.name << std::right
+              << std::setw(8) << r.size_mb
+              << "   " << std::setw(6) << r.ms
+              << "   " << std::setw(6) << imgps << "   ";
+    if (r.has_metric) std::cout << std::setprecision(4) << r.metric << "\n";
+    else              std::cout << "—  (pass --data for " << metric_name << ")\n";
+  }
+  if (trt_rows.empty() && dev.is_cuda())
+    std::cout << "  [note] no TRT rows — engine build/calibration unavailable "
+                 "for this task (ONNX runtime is gated on #70).\n";
   return 0;
 }
 

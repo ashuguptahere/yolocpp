@@ -319,19 +319,22 @@ v7 variants: base / tiny / x + w6 / e6 / d6 / e6e (7 total). v9 has no
 ### Task coverage matrix (predict/val/export/benchmark)
 
 ```
-                detect   classify   segment   pose      obb
-predict (CLI)   ✓        ✓          ✓         ✓         ✓
-val (CLI)       ✓        ✓          ✓         ✓         ✓
-ONNX export     ✓        ✓          ✓         ✓         ✓
-TRT export      ✓        ✓          ✓         ✓         ✓
-benchmark       ✓        ✓(PT)      ✓(PT)     ✓(PT)     ✓(PT)
+                detect   classify   segment      pose         obb
+predict (CLI)   ✓        ✓          ✓            ✓            ✓
+val (CLI)       ✓        ✓          ✓            ✓            ✓
+ONNX export     ✓        ✓          ✓            ✓            ✓
+TRT export      ✓        ✓          ✓            ✓            ✓
+benchmark       ✓        ✓(PT)      ✓(PT+TRT)    ✓(PT+TRT)    ✓(PT+TRT)
 ```
 
 Only v8 / v11 / v26 ship the full 5-task weight family upstream;
 v12 / v13 ship detect-only (v12/v13 task heads scaffolded in code,
 need to be trained on COCO ourselves — planned future session).
-Benchmark for non-detect tasks is the only remaining task-coverage
-gap.
+Non-detect benchmark now reports PyTorch + TRT (fp16/int8) per-format
+mAP for segment/pose/obb (TRT-backed model adapters reuse the
+`validate_*_t` metrics; verified TRT-fp16 ≈ PT). Remaining benchmark
+gaps: the classify TRT row (single-output, trivial) and the ONNX
+format (gated on #70 — cv::dnn can't run the decode subgraph).
 
 ### Reference smokes / sweeps
 

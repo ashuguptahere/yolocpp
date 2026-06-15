@@ -167,6 +167,7 @@ add_library(yolocpp_core
   src/serialization/onnx_export.cpp
   src/serialization/trt_export.cpp
   src/inference/trt_predictor.cpp
+  src/inference/trt_task_eval.cpp
   src/inference/letterbox.cpp
   src/inference/nms.cpp
   src/inference/predictor.cpp

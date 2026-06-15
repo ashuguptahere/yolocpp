@@ -1,5 +1,7 @@
 #include "yolocpp/tasks/segment_train.hpp"
 
+#include "yolocpp/inference/trt_task_eval.hpp"  // TrtSegModel (TRT-backed val)
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <torch/optim.h>
@@ -554,5 +556,8 @@ template SegValResult validate_segment_t<models::Yolo8Segment>(
     models::Yolo8Segment&, const SegDataset&, torch::Device);
 template SegValResult validate_segment_t<models::Yolo11Segment>(
     models::Yolo11Segment&, const SegDataset&, torch::Device);
+// TRT-backed validation (per-format benchmark mAP) reuses the same metric.
+template SegValResult validate_segment_t<inference::TrtSegModel>(
+    inference::TrtSegModel&, const SegDataset&, torch::Device);
 
 }  // namespace yolocpp::tasks

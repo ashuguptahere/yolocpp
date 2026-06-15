@@ -4,6 +4,34 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.102.0] — 2026-06-15
+
+### Added
+- **Per-format (TRT fp16 + int8) benchmark for the segment / pose / obb tasks.**
+  `--mode benchmark --task <segment|pose|obb> --data <ds>` now prints TRT-fp16
+  and TRT-int8 rows (size · ms/im · img/s · task-mAP) alongside the PyTorch row,
+  closing the non-detect TRT cell of the benchmark matrix (PT-only before; ONNX
+  stays gated on #70 — cv::dnn 4.6 can't run the decode subgraph). New public
+  surface in `inference/trt_task_eval.hpp`:
+  - `make_trt_multi_forward(engine, imgsz)` — loads a TRT engine, binds **all**
+    its output tensors (not just the single detect output), and returns a
+    `std::function` runner that yields every output keyed by name. nvinfer is
+    confined to `trt_task_eval.cpp`.
+  - `TrtSegModel` / `TrtPoseModel` / `TrtOBBModel` — thin adapters presenting the
+    `model->forward_eval(x)` / `to` / `eval` interface the templated validators
+    expect, mapping the engine's named outputs back into each task's tuple
+    (`output`+`coefs`+`protos` / `+keypoints` / `+angle`). This lets the
+    **existing** `validate_segment_t` / `_pose_t` / `_obb_t` mask-/OKS-/rotated-AP
+    metrics drive a TRT engine unchanged — the metric is reused, not
+    re-implemented (explicit template instantiations added for the adapters).
+  - `cmd_benchmark_task` builds each task engine per precision via the registry's
+    task-aware ONNX export + `build_trt_engine`, times the forward, and computes
+    mAP through the adapter; INT8 calibrates on the val images dir (graceful skip
+    when absent).
+  Verified TRT-fp16 mAP matches PyTorch within fp16 noise — segment
+  0.2238/0.2232, pose 0.1806/0.1806, obb 0.7494/0.7489 — at 1.4× / 5.0× / 3.2×
+  throughput on yolov8n-{seg,pose,obb}.
+
 ## [0.101.37] — 2026-06-15
 
 ### Changed

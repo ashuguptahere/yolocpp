@@ -1,5 +1,7 @@
 #include "yolocpp/tasks/pose_obb_train.hpp"
 
+#include "yolocpp/inference/trt_task_eval.hpp"  // TrtPose/OBBModel (TRT val)
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <torch/optim.h>
@@ -686,5 +688,10 @@ template OBBValResult validate_obb_t<models::Yolo8OBB>(
     models::Yolo8OBB&, const OBBDataset&, torch::Device);
 template OBBValResult validate_obb_t<models::Yolo11OBB>(
     models::Yolo11OBB&, const OBBDataset&, torch::Device);
+// TRT-backed validation (per-format benchmark mAP) reuses the same metrics.
+template PoseValResult validate_pose_t<inference::TrtPoseModel>(
+    inference::TrtPoseModel&, const PoseDataset&, torch::Device);
+template OBBValResult validate_obb_t<inference::TrtOBBModel>(
+    inference::TrtOBBModel&, const OBBDataset&, torch::Device);
 
 }  // namespace yolocpp::tasks
