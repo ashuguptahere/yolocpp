@@ -148,6 +148,7 @@ add_library(yolocpp_core
   src/models/yolo12.cpp
   src/models/yolo12_tasks.cpp
   src/models/yolo13.cpp
+  src/models/yolo13_tasks.cpp
   src/models/yolo26.cpp
   src/models/yolo26_tasks.cpp
   src/inference/task_predictors.cpp

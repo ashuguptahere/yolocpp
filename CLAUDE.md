@@ -327,9 +327,13 @@ TRT export      ✓        ✓              ✓            ✓            ✓
 benchmark       ✓        ✓(PT+TRT)      ✓(PT+TRT)    ✓(PT+TRT)    ✓(PT+TRT)
 ```
 
-Only v8 / v11 / v26 ship the full 5-task weight family upstream;
-v12 / v13 ship detect-only (v12/v13 task heads scaffolded in code,
-need to be trained on COCO ourselves — planned future session).
+Only v8 / v11 / v26 ship the full 5-task weight family upstream.
+v12 / v13 ship detect-only upstream, but their task heads
+(Yolo12/Yolo13 Segment/Pose/OBB/Classify) are now implemented and
+**train + val wired** through `cmd_train_task` / `cmd_val_task` (the v13
+heads in `yolo13_tasks.cpp` mirror the parity-tested v13 detect
+backbone). No upstream task weights exist, so these are trained on COCO
+via the #60 `scripts/train_matrix.sh` harness.
 Non-detect benchmark now reports PyTorch + TRT per-format rows for all
 four tasks (TRT-backed model adapters reuse the `validate_*_t`
 metrics): segment/pose/obb get fp16 + int8 with mAP (verified

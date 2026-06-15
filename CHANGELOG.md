@@ -4,6 +4,25 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.104.0] — 2026-06-15
+
+### Added
+- **v13 non-detect task heads written + train/val wired** (#60A-task, completes
+  the v12/v13 task-trainer request). New `yolo13_tasks.{hpp,cpp}` adds
+  Yolo13Segment/Pose/OBB/Classify: each builds the v13 backbone+neck (layers
+  0..31 of the detect schedule — HyperACE / FullPAD_Tunnel / DSC3k2 / V13A2C2f —
+  **verbatim-mirrored from the parity-tested `yolo13.cpp` detect path**, so the
+  verified detect code is untouched) and appends the shared Segment/Pose/OBB/
+  Classify head from `yolo8_tasks`. `cmd_train_task` / `cmd_val_task` gain the
+  v13 dispatch branch; template instantiations + wrapper overloads + registry
+  `v13.supported_tasks` updated; the four v13 cells added to
+  `scripts/train_matrix.tsv`. Verified end-to-end: all four v13 task cells
+  train → save → val through the harness (from-scratch metrics ~0 on the coco8
+  smoke — the architecture, pipeline, checkpoint round-trip, and version
+  recovery are what's structurally verified). iMoonLab ships no v13 task
+  weights, so these train from scratch on COCO via the #60 harness; numerical
+  parity awaits that training (and, ideally, an upstream check).
+
 ## [0.103.0] — 2026-06-15
 
 ### Added

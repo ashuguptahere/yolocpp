@@ -25,7 +25,9 @@ third_party/httplib/
 
 coco8/
 data/
-models/
+# top-level weights cache (models_dir()); anchored so it doesn't swallow
+# src/models/ or include/yolocpp/models/ source files.
+/models/
 *.pt
 *.weights
 runs/

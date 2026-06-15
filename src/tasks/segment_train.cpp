@@ -561,6 +561,10 @@ template void train_segment_t<models::Yolo12Segment>(
     models::Yolo12Segment, const SegDataset&, const SegDataset*, SegTrainConfig);
 template SegValResult validate_segment_t<models::Yolo12Segment>(
     models::Yolo12Segment&, const SegDataset&, torch::Device);
+template void train_segment_t<models::Yolo13Segment>(
+    models::Yolo13Segment, const SegDataset&, const SegDataset*, SegTrainConfig);
+template SegValResult validate_segment_t<models::Yolo13Segment>(
+    models::Yolo13Segment&, const SegDataset&, torch::Device);
 // TRT-backed validation (per-format benchmark mAP) reuses the same metric.
 template SegValResult validate_segment_t<inference::TrtSegModel>(
     inference::TrtSegModel&, const SegDataset&, torch::Device);

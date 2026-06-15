@@ -947,7 +947,10 @@ VersionAdapter make_v13() {
   a.display_name = "yolo13";
   a.upstream_year = "2025";
   a.default_export_basename = "yolo13";
-  a.supported_tasks = {"detect"};
+  // Task heads written in yolo13_tasks.cpp (no upstream task weights ship);
+  // train/val wired through cmd_train_task / cmd_val_task — trained on COCO via
+  // the #60 harness.
+  a.supported_tasks = {"detect", "classify", "segment", "pose", "obb"};
   a.default_imgsz = detect_imgsz_default;
   // v13 TRT must clear kTF32 (same class as the v10 RepVGGDW quirk): the
   // V13AAttn attention + DSConv + HyperACE accumulation loses enough TF32

@@ -14,6 +14,7 @@
 
 #include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo12_tasks.hpp"
+#include "yolocpp/models/yolo13_tasks.hpp"
 #include "yolocpp/models/yolo8_tasks.hpp"
 
 namespace yolocpp::tasks {
@@ -92,6 +93,10 @@ inline void train_pose(models::Yolo12Pose model, const PoseDataset& train,
                        const PoseDataset* val, PoseTrainConfig cfg) {
   train_pose_t(std::move(model), train, val, std::move(cfg));
 }
+inline void train_pose(models::Yolo13Pose model, const PoseDataset& train,
+                       const PoseDataset* val, PoseTrainConfig cfg) {
+  train_pose_t(std::move(model), train, val, std::move(cfg));
+}
 inline PoseValResult validate_pose(models::Yolo8Pose& model,
                                     const PoseDataset& dataset,
                                     torch::Device device) {
@@ -103,6 +108,11 @@ inline PoseValResult validate_pose(models::Yolo11Pose& model,
   return validate_pose_t(model, dataset, device);
 }
 inline PoseValResult validate_pose(models::Yolo12Pose& model,
+                                    const PoseDataset& dataset,
+                                    torch::Device device) {
+  return validate_pose_t(model, dataset, device);
+}
+inline PoseValResult validate_pose(models::Yolo13Pose& model,
                                     const PoseDataset& dataset,
                                     torch::Device device) {
   return validate_pose_t(model, dataset, device);
@@ -178,6 +188,10 @@ inline void train_obb(models::Yolo12OBB model, const OBBDataset& train,
                       const OBBDataset* val, OBBTrainConfig cfg) {
   train_obb_t(std::move(model), train, val, std::move(cfg));
 }
+inline void train_obb(models::Yolo13OBB model, const OBBDataset& train,
+                      const OBBDataset* val, OBBTrainConfig cfg) {
+  train_obb_t(std::move(model), train, val, std::move(cfg));
+}
 inline OBBValResult validate_obb(models::Yolo8OBB& model,
                                   const OBBDataset& dataset,
                                   torch::Device device) {
@@ -189,6 +203,11 @@ inline OBBValResult validate_obb(models::Yolo11OBB& model,
   return validate_obb_t(model, dataset, device);
 }
 inline OBBValResult validate_obb(models::Yolo12OBB& model,
+                                  const OBBDataset& dataset,
+                                  torch::Device device) {
+  return validate_obb_t(model, dataset, device);
+}
+inline OBBValResult validate_obb(models::Yolo13OBB& model,
                                   const OBBDataset& dataset,
                                   torch::Device device) {
   return validate_obb_t(model, dataset, device);

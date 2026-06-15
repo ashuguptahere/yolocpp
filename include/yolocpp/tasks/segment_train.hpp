@@ -18,6 +18,7 @@
 
 #include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo12_tasks.hpp"
+#include "yolocpp/models/yolo13_tasks.hpp"
 #include "yolocpp/models/yolo8_tasks.hpp"
 
 namespace yolocpp::tasks {
@@ -102,6 +103,11 @@ inline void train_segment(models::Yolo12Segment model,
                           SegTrainConfig cfg) {
   train_segment_t(std::move(model), train, val, std::move(cfg));
 }
+inline void train_segment(models::Yolo13Segment model,
+                          const SegDataset& train, const SegDataset* val,
+                          SegTrainConfig cfg) {
+  train_segment_t(std::move(model), train, val, std::move(cfg));
+}
 inline SegValResult validate_segment(models::Yolo8Segment& model,
                                      const SegDataset& dataset,
                                      torch::Device device) {
@@ -113,6 +119,11 @@ inline SegValResult validate_segment(models::Yolo11Segment& model,
   return validate_segment_t(model, dataset, device);
 }
 inline SegValResult validate_segment(models::Yolo12Segment& model,
+                                     const SegDataset& dataset,
+                                     torch::Device device) {
+  return validate_segment_t(model, dataset, device);
+}
+inline SegValResult validate_segment(models::Yolo13Segment& model,
                                      const SegDataset& dataset,
                                      torch::Device device) {
   return validate_segment_t(model, dataset, device);

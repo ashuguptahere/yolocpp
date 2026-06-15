@@ -574,6 +574,7 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     yolocpp::tasks::ClassifyValResult r;
     if (version == "v12")      r = run(yolocpp::models::Yolo12Classify(yolocpp::models::yolo12_scale_from_letter(scale), ds.num_classes()));
     else if (version == "v11") r = run(yolocpp::models::Yolo11Classify(yolocpp::models::yolo11_scale_from_letter(scale), ds.num_classes()));
+    else if (version == "v13") r = run(yolocpp::models::Yolo13Classify(yolocpp::models::yolo13_scale_from_letter(scale), ds.num_classes()));
     else                       r = run(yolocpp::models::Yolo8Classify(parse_scale(scale), ds.num_classes()));
     std::cout << "top1=" << r.top1_acc << " top5=" << r.top5_acc
               << " (n=" << r.n_total << ")\n";
@@ -587,6 +588,7 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     yolocpp::tasks::SegValResult r;
     if (version == "v12")      r = run(yolocpp::models::Yolo12Segment(yolocpp::models::yolo12_scale_from_letter(scale), ds.num_classes()));
     else if (version == "v11") r = run(yolocpp::models::Yolo11Segment(yolocpp::models::yolo11_scale_from_letter(scale), ds.num_classes()));
+    else if (version == "v13") r = run(yolocpp::models::Yolo13Segment(yolocpp::models::yolo13_scale_from_letter(scale), ds.num_classes()));
     else                       r = run(yolocpp::models::Yolo8Segment(parse_scale(scale), ds.num_classes()));
     std::cout << "mask mAP@0.5=" << r.map_50
               << " (pred=" << r.n_predictions
@@ -600,6 +602,7 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     yolocpp::tasks::PoseValResult r;
     if (version == "v12")      r = run(yolocpp::models::Yolo12Pose(yolocpp::models::yolo12_scale_from_letter(scale), 1, 17, 3));
     else if (version == "v11") r = run(yolocpp::models::Yolo11Pose(yolocpp::models::yolo11_scale_from_letter(scale), 1, 17, 3));
+    else if (version == "v13") r = run(yolocpp::models::Yolo13Pose(yolocpp::models::yolo13_scale_from_letter(scale), 1, 17, 3));
     else                       r = run(yolocpp::models::Yolo8Pose(parse_scale(scale), 1, 17, 3));
     std::cout << "OKS mAP@0.5=" << r.oks_map_50 << "\n";
     return 0;
@@ -613,6 +616,7 @@ int cmd_val_task(const std::string& task, const std::string& weights,
     yolocpp::tasks::OBBValResult r;
     if (version == "v12")      r = run(yolocpp::models::Yolo12OBB(yolocpp::models::yolo12_scale_from_letter(scale), ds.num_classes(), 1));
     else if (version == "v11") r = run(yolocpp::models::Yolo11OBB(yolocpp::models::yolo11_scale_from_letter(scale), ds.num_classes(), 1));
+    else if (version == "v13") r = run(yolocpp::models::Yolo13OBB(yolocpp::models::yolo13_scale_from_letter(scale), ds.num_classes(), 1));
     else                       r = run(yolocpp::models::Yolo8OBB(parse_scale(scale), ds.num_classes(), 1));
     std::cout << "rotated mAP@0.5=" << r.map_50 << "\n";
     return 0;
@@ -1004,6 +1008,9 @@ int cmd_train_task(const std::string& task, const std::string& data,
     else if (version == "v11")
       run(yolocpp::models::Yolo11Classify(
           yolocpp::models::yolo11_scale_from_letter(scale), tr.num_classes()));
+    else if (version == "v13")
+      run(yolocpp::models::Yolo13Classify(
+          yolocpp::models::yolo13_scale_from_letter(scale), tr.num_classes()));
     else
       run(yolocpp::models::Yolo8Classify(parse_scale(scale), tr.num_classes()));
     return 0;
@@ -1024,6 +1031,9 @@ int cmd_train_task(const std::string& task, const std::string& data,
     else if (version == "v11")
       run(yolocpp::models::Yolo11Segment(
           yolocpp::models::yolo11_scale_from_letter(scale), tr.num_classes()));
+    else if (version == "v13")
+      run(yolocpp::models::Yolo13Segment(
+          yolocpp::models::yolo13_scale_from_letter(scale), tr.num_classes()));
     else
       run(yolocpp::models::Yolo8Segment(parse_scale(scale), tr.num_classes()));
     return 0;
@@ -1042,6 +1052,9 @@ int cmd_train_task(const std::string& task, const std::string& data,
     else if (version == "v11")
       run(yolocpp::models::Yolo11Pose(
           yolocpp::models::yolo11_scale_from_letter(scale), /*nc=*/1, 17, 3));
+    else if (version == "v13")
+      run(yolocpp::models::Yolo13Pose(
+          yolocpp::models::yolo13_scale_from_letter(scale), /*nc=*/1, 17, 3));
     else
       run(yolocpp::models::Yolo8Pose(parse_scale(scale), /*nc=*/1, 17, 3));
     return 0;
@@ -1062,6 +1075,9 @@ int cmd_train_task(const std::string& task, const std::string& data,
     else if (version == "v11")
       run(yolocpp::models::Yolo11OBB(
           yolocpp::models::yolo11_scale_from_letter(scale), tr.num_classes(), 1));
+    else if (version == "v13")
+      run(yolocpp::models::Yolo13OBB(
+          yolocpp::models::yolo13_scale_from_letter(scale), tr.num_classes(), 1));
     else
       run(yolocpp::models::Yolo8OBB(parse_scale(scale), tr.num_classes(), 1));
     return 0;

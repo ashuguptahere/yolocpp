@@ -6,7 +6,7 @@ This file is maintained as part of recurring task **#33** (gap-audit) — see CL
 
 The current release version is **always read from `CMakeLists.txt` `project(... VERSION ...)`** (which flows into `build/generated/yolocpp/config.hpp` as `YOLOCPP_VERSION_STRING` and out via `yolocpp info`). Do not duplicate it into prose snapshots in this file — the only places a literal version belongs are `CMakeLists.txt`, `CHANGELOG.md` headings, and historical "landed in X.Y.Z" lines.
 
-> **Latest snapshot** (landed through 0.101.36, 2026-06-15): ctest **43/43 green**. **License chosen + applied: AGPL-3.0** (`LICENSE` + README — #50 closed; interoperates with upstream Ultralytics, also AGPL-3.0). **INT8 calibration wired** (#51F2 export + calibrator hardening). Five adversarial latent-bug-hunt rounds landed **14 correctness fixes** (CHANGELOG 0.101.24–0.101.36, see §1.21); 6 finder candidates were rejected on independent review and **1 is deferred** (v12 `A2C2f` gamma init — contradicts the documented v12-vs-v13 CLAUDE.md rule; needs an upstream Python check). **Still open — none are bugs:** benchmark non-detect **ONNX** format (TRT fp16/int8 for seg/pose/obb landed in 0.102.0; ONNX still gated on #70); #70 ONNX *forward* (cv::dnn 4.6 can't run the decode subgraph — onnxruntime dep decision or decode rewrite); #55 trackers + SAHI (maintainer-deferred); #60 train + publish the full weight matrix (now unblocked on license) incl. v12/v13 task weights; two-GPU DDP + Jetson/mobile/edge deploy (hardware); #48C disk-trim (low). See `SESSION_DIGEST.md` for the per-version landing map.
+> **Latest snapshot** (landed through 0.101.36, 2026-06-15): ctest **43/43 green**. **License chosen + applied: AGPL-3.0** (`LICENSE` + README — #50 closed; interoperates with upstream Ultralytics, also AGPL-3.0). **INT8 calibration wired** (#51F2 export + calibrator hardening). Five adversarial latent-bug-hunt rounds landed **14 correctness fixes** (CHANGELOG 0.101.24–0.101.36, see §1.21); 6 finder candidates were rejected on independent review and **1 is deferred** (v12 `A2C2f` gamma init — contradicts the documented v12-vs-v13 CLAUDE.md rule; needs an upstream Python check). **Still open — none are bugs:** benchmark non-detect **ONNX** format (TRT fp16/int8 for seg/pose/obb landed in 0.102.0; ONNX still gated on #70); #70 ONNX *forward* (cv::dnn 4.6 can't run the decode subgraph — onnxruntime dep decision or decode rewrite); #55 trackers + SAHI (maintainer-deferred); #60 train + publish the full weight matrix (now unblocked on license; the #60A harness + v12/v13 task heads are wired — remaining work is the COCO training compute); two-GPU DDP + Jetson/mobile/edge deploy (hardware); #48C disk-trim (low). See `SESSION_DIGEST.md` for the per-version landing map.
 
 Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started · 🔁 recurring
 
@@ -325,7 +325,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 |---|-------|----------|------------------------|----------|
 | #60  | Retrain every (version × scale × task) on COCO; publish weights to GitHub Releases | medium | many sessions | license decided (AGPL-3.0, #50 ✅); now gated only on #54 (dataset infra) + compute |
 | ~~#60A~~ | ✅ **landed — `scripts/train_matrix.sh` + `scripts/train_matrix.tsv`.** Manifest-driven harness over `yolocpp --mode train`: per-cell `runs/matrix/<cell>/`, cell-level resume (skip if a checkpoint exists), per-cell log + a post-train val pass that records a uniform eval metric (detect mAP / seg mask-mAP / pose OKS / obb rotated-mAP / cls top1) into `runs/matrix/results.csv`. Flags: `--smoke` (2-epoch coco8* verification), `--dry-run`, `--filter`, `--epochs`, `--export`, `--force`; full datasets via `YOLOCPP_DATA_*` env. Verified: all 5 v8n cells (detect/seg/pose/obb/cls) train → save → val end-to-end. **Wiring it up surfaced + fixed a real bug** — the task trainers saved un-loadable checkpoints (0.102.2). | — | landed | — |
-| #60A-task | Wire v12/v13 (and any non-v8) task-head **trainers** into `cmd_train_task` so the harness can produce their seg/pose/obb/classify weights (today the task trainers only instantiate the v8 families; registry `supported_tasks={"detect"}` for v12/v13). Prereq for the v12/v13 task cells in the manifest. | medium | within #60 | v12/v13 task heads (#14) |
+| ~~#60A-task~~ | ✅ **landed — v12 + v13 task train/val wired into `cmd_train_task` / `cmd_val_task`** (version dispatch v8/v11/v12/v13; this also fixed a latent gap where v11 task train/val was never reachable). v12 heads existed; **v13 heads written** (`yolo13_tasks.cpp`, mirroring the parity-tested v13 detect backbone). Registry `v{12,13}.supported_tasks` → full 5-task; manifest gains the v12/v13 task cells. Verified: all 8 v12/v13 task cells train → save → val through the harness. Numerical quality awaits #60 COCO training (no upstream task weights). | — | landed | — |
 | #60B | Compute budget plan (GPUs × hours per cell) | — | within #60 | — |
 | #60C | Release artifact upload pipeline | — | within #60 | — |
 | #60D | Mirror the resulting weights table in README + CLI auto-resolver | — | within #60 | — |
@@ -402,7 +402,13 @@ removal manifest. Do NOT reintroduce.
 - ✅ Paper §3.1 dual-head consistent assignment training (landed in 0.22.0).
 
 ### yolo12 / yolo13
-- ⏳ Task heads (segment / pose / obb / classify) — neither the upstream maintainer nor iMoonLab publishes task weights upstream. **Planned future session:** train our own on COCO using the existing templated `Trainer`. v12 = 5 scales × 4 tasks = 20 runs; v13 = 4 scales × 4 tasks = 16 runs. v12 task scaffolding exists in `src/models/yolo12_tasks.cpp`; v13 task module declarations not yet written.
+- 🟡 Task heads (segment / pose / obb / classify) — **architecture + train/val
+  now wired** for both v12 (`yolo12_tasks.cpp`) and v13 (`yolo13_tasks.cpp`,
+  written by mirroring the parity-tested v13 detect backbone). Neither the
+  upstream maintainer nor iMoonLab publishes task weights, so **the remaining
+  work is the COCO training itself** (via `scripts/train_matrix.sh`): v12 = 5
+  scales × 4 tasks = 20 runs; v13 = 4 scales × 4 tasks = 16 runs. Numerical
+  parity awaits that training (no upstream weights to check against today).
 
 ---
 

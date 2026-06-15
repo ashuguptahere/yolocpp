@@ -16,6 +16,7 @@
 
 #include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo12_tasks.hpp"
+#include "yolocpp/models/yolo13_tasks.hpp"
 #include "yolocpp/models/yolo8_classify.hpp"
 
 namespace yolocpp::tasks {
@@ -100,6 +101,12 @@ inline void train_classify(models::Yolo12Classify model,
                            ClassifyTrainConfig cfg) {
   train_classify_t(std::move(model), train, val, std::move(cfg));
 }
+inline void train_classify(models::Yolo13Classify model,
+                           const ClassifyDataset& train,
+                           const ClassifyDataset* val,
+                           ClassifyTrainConfig cfg) {
+  train_classify_t(std::move(model), train, val, std::move(cfg));
+}
 inline ClassifyValResult validate_classify(models::Yolo8Classify& model,
                                            const ClassifyDataset& dataset,
                                            torch::Device device) {
@@ -111,6 +118,11 @@ inline ClassifyValResult validate_classify(models::Yolo11Classify& model,
   return validate_classify_t(model, dataset, device);
 }
 inline ClassifyValResult validate_classify(models::Yolo12Classify& model,
+                                           const ClassifyDataset& dataset,
+                                           torch::Device device) {
+  return validate_classify_t(model, dataset, device);
+}
+inline ClassifyValResult validate_classify(models::Yolo13Classify& model,
                                            const ClassifyDataset& dataset,
                                            torch::Device device) {
   return validate_classify_t(model, dataset, device);

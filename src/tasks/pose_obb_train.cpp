@@ -697,6 +697,14 @@ template void train_obb_t<models::Yolo12OBB>(
     models::Yolo12OBB, const OBBDataset&, const OBBDataset*, OBBTrainConfig);
 template OBBValResult validate_obb_t<models::Yolo12OBB>(
     models::Yolo12OBB&, const OBBDataset&, torch::Device);
+template void train_pose_t<models::Yolo13Pose>(
+    models::Yolo13Pose, const PoseDataset&, const PoseDataset*, PoseTrainConfig);
+template PoseValResult validate_pose_t<models::Yolo13Pose>(
+    models::Yolo13Pose&, const PoseDataset&, torch::Device);
+template void train_obb_t<models::Yolo13OBB>(
+    models::Yolo13OBB, const OBBDataset&, const OBBDataset*, OBBTrainConfig);
+template OBBValResult validate_obb_t<models::Yolo13OBB>(
+    models::Yolo13OBB&, const OBBDataset&, torch::Device);
 // TRT-backed validation (per-format benchmark mAP) reuses the same metrics.
 template PoseValResult validate_pose_t<inference::TrtPoseModel>(
     inference::TrtPoseModel&, const PoseDataset&, torch::Device);
