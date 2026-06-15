@@ -27,7 +27,9 @@
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo12.hpp"
+#include "yolocpp/models/yolo12_tasks.hpp"
 #include "yolocpp/models/yolo13.hpp"
+#include "yolocpp/models/yolo13_tasks.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
 #include "yolocpp/models/yolo8.hpp"
@@ -177,6 +179,15 @@ void export_yolo11_classify_onnx(models::Yolo11Classify& model,
 void export_yolo26_classify_onnx(models::Yolo26Classify& model,
                                  const std::string&     path,
                                  const OnnxExportConfig& cfg = {});
+// v12/v13 cls have no upstream weights — trained from scratch (#60). Topology
+// mirrors the Yolo12/13ClassifyImpl chains (Conv/C3k2 for v12; Conv/DSConv/
+// DSC3k2 for v13) ending in the shared Classify head.
+void export_yolo12_classify_onnx(models::Yolo12Classify& model,
+                                 const std::string&     path,
+                                 const OnnxExportConfig& cfg = {});
+void export_yolo13_classify_onnx(models::Yolo13Classify& model,
+                                 const std::string&     path,
+                                 const OnnxExportConfig& cfg = {});
 
 // ─── Segment exporters ────────────────────────────────────────────────────
 // Three outputs:
@@ -190,6 +201,12 @@ void export_yolo11_segment_onnx(models::Yolo11Segment& model,
                                  const std::string&     path,
                                  const OnnxExportConfig& cfg = {});
 void export_yolo26_segment_onnx(models::Yolo26Segment& model,
+                                 const std::string&     path,
+                                 const OnnxExportConfig& cfg = {});
+void export_yolo12_segment_onnx(models::Yolo12Segment& model,
+                                 const std::string&     path,
+                                 const OnnxExportConfig& cfg = {});
+void export_yolo13_segment_onnx(models::Yolo13Segment& model,
                                  const std::string&     path,
                                  const OnnxExportConfig& cfg = {});
 
@@ -208,6 +225,12 @@ void export_yolo11_pose_onnx(models::Yolo11Pose& model,
 void export_yolo26_pose_onnx(models::Yolo26Pose& model,
                               const std::string& path,
                               const OnnxExportConfig& cfg = {});
+void export_yolo12_pose_onnx(models::Yolo12Pose& model,
+                              const std::string& path,
+                              const OnnxExportConfig& cfg = {});
+void export_yolo13_pose_onnx(models::Yolo13Pose& model,
+                              const std::string& path,
+                              const OnnxExportConfig& cfg = {});
 
 // ─── OBB exporters ────────────────────────────────────────────────────────
 // Two outputs:
@@ -220,6 +243,12 @@ void export_yolo11_obb_onnx(models::Yolo11OBB& model,
                              const std::string& path,
                              const OnnxExportConfig& cfg = {});
 void export_yolo26_obb_onnx(models::Yolo26OBB& model,
+                             const std::string& path,
+                             const OnnxExportConfig& cfg = {});
+void export_yolo12_obb_onnx(models::Yolo12OBB& model,
+                             const std::string& path,
+                             const OnnxExportConfig& cfg = {});
+void export_yolo13_obb_onnx(models::Yolo13OBB& model,
                              const std::string& path,
                              const OnnxExportConfig& cfg = {});
 

@@ -32,7 +32,9 @@
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo11_tasks.hpp"
 #include "yolocpp/models/yolo12.hpp"
+#include "yolocpp/models/yolo12_tasks.hpp"
 #include "yolocpp/models/yolo13.hpp"
+#include "yolocpp/models/yolo13_tasks.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo1.hpp"
 #include "yolocpp/models/yolo2.hpp"
@@ -897,15 +899,36 @@ VersionAdapter make_v12() {
   a.export_onnx = [](const std::string& weights, const std::string& scale,
                      int nc, const std::string& task,
                      const std::string& path,
-                     const serialization::OnnxExportConfig& cfg) {
-    if (task != "detect")
-      throw std::runtime_error(
-          "yolo12 export: only 'detect' supported (task heads scaffolded; "
-          "weights pending — see TODO #60)");
-    models::Yolo12Detect m(models::yolo12_scale_from_letter(scale), nc);
+                     const serialization::OnnxExportConfig& cfg_in) {
+    auto cfg = cfg_in;
+    auto sc = models::yolo12_scale_from_letter(scale);
     auto sd = serialization::load_state_dict(weights);
-    m->load_from_state_dict(sd.entries); m->eval();
-    serialization::export_yolo12_onnx(m, path, cfg);
+    if (task == "detect") {
+      models::Yolo12Detect m(sc, nc);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo12_onnx(m, path, cfg);
+    } else if (task == "classify") {
+      if (cfg.imgsz == 640) cfg.imgsz = 224;
+      int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;
+      models::Yolo12Classify m(sc, cls_nc);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo12_classify_onnx(m, path, cfg);
+    } else if (task == "segment") {
+      models::Yolo12Segment m(sc, nc);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo12_segment_onnx(m, path, cfg);
+    } else if (task == "pose") {
+      models::Yolo12Pose m(sc, /*nc=*/1, /*num_kpts=*/17, /*kpt_dim=*/3);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo12_pose_onnx(m, path, cfg);
+    } else if (task == "obb") {
+      int obb_nc = (nc == 80) ? 15 : nc;
+      models::Yolo12OBB m(sc, obb_nc, /*ne=*/1);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo12_obb_onnx(m, path, cfg);
+    } else {
+      throw std::runtime_error("yolo12 export: unknown task '" + task + "'");
+    }
   };
   a.predict_to_file = [](const std::string& weights, const std::string& src,
                          const std::string& out, int imgsz,
@@ -960,14 +983,36 @@ VersionAdapter make_v13() {
   a.export_onnx = [](const std::string& weights, const std::string& scale,
                      int nc, const std::string& task,
                      const std::string& path,
-                     const serialization::OnnxExportConfig& cfg) {
-    if (task != "detect")
-      throw std::runtime_error(
-          "yolo13 export: only 'detect' supported (no `m` scale upstream)");
-    models::Yolo13Detect m(models::yolo13_scale_from_letter(scale), nc);
+                     const serialization::OnnxExportConfig& cfg_in) {
+    auto cfg = cfg_in;
+    auto sc = models::yolo13_scale_from_letter(scale);
     auto sd = serialization::load_state_dict(weights);
-    m->load_from_state_dict(sd.entries); m->eval();
-    serialization::export_yolo13_onnx(m, path, cfg);
+    if (task == "detect") {
+      models::Yolo13Detect m(sc, nc);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo13_onnx(m, path, cfg);
+    } else if (task == "classify") {
+      if (cfg.imgsz == 640) cfg.imgsz = 224;
+      int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;
+      models::Yolo13Classify m(sc, cls_nc);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo13_classify_onnx(m, path, cfg);
+    } else if (task == "segment") {
+      models::Yolo13Segment m(sc, nc);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo13_segment_onnx(m, path, cfg);
+    } else if (task == "pose") {
+      models::Yolo13Pose m(sc, /*nc=*/1, /*num_kpts=*/17, /*kpt_dim=*/3);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo13_pose_onnx(m, path, cfg);
+    } else if (task == "obb") {
+      int obb_nc = (nc == 80) ? 15 : nc;
+      models::Yolo13OBB m(sc, obb_nc, /*ne=*/1);
+      m->load_from_state_dict(sd.entries); m->eval();
+      serialization::export_yolo13_obb_onnx(m, path, cfg);
+    } else {
+      throw std::runtime_error("yolo13 export: unknown task '" + task + "'");
+    }
   };
   a.predict_to_file = [](const std::string& weights, const std::string& src,
                          const std::string& out, int imgsz,

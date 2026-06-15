@@ -2889,6 +2889,171 @@ std::vector<int> spatial_table(const std::vector<std::pair<int,int>>& hw) {
   return s;
 }
 
+// v12 yaml topology: 21 backbone+neck layers (0..20), then Detect/task head.
+// Standalone walk that stops before the head — a verbatim copy of the
+// inline backbone/neck loop in export_yolo12_onnx, minus the Detect step,
+// returning the trunk for the task exporters to reuse. The detect exporter
+// keeps its own inline walk (unchanged) so this carries zero regression risk.
+TrunkOut walk_v12_bb_neck(GraphBuilder& g, const std::string& input_name,
+                           torch::nn::ModuleList& mlist, int imgsz) {
+  struct Step { std::vector<int> from; std::string kind; };
+  static const std::vector<Step> yaml = {
+      {{-1}, "Conv"},   {{-1}, "Conv"},   {{-1}, "C3k2"},
+      {{-1}, "Conv"},   {{-1}, "C3k2"},
+      {{-1}, "Conv"},   {{-1}, "A2C2f"},
+      {{-1}, "Conv"},   {{-1}, "A2C2f"},
+      {{-1}, "Up"},     {{-1, 6}, "Cat"},  {{-1}, "A2C2f"},
+      {{-1}, "Up"},     {{-1, 4}, "Cat"},  {{-1}, "A2C2f"},
+      {{-1}, "Conv"},   {{-1, 11}, "Cat"}, {{-1}, "A2C2f"},
+      {{-1}, "Conv"},   {{-1, 8},  "Cat"}, {{-1}, "C3k2"},
+  };
+  std::vector<std::string> outs(yaml.size());
+  std::vector<std::pair<int, int>> hw(yaml.size());
+  std::string prev = input_name;
+  int H = imgsz, W = imgsz;
+  int B_in = -1;  // dynamic-batch placeholder (see export_yolo12_onnx)
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    auto idx_or_prev = [&](int f) { return (f == -1) ? prev : outs[f]; };
+    auto hw_at = [&](int f) {
+      return (f == -1) ? (i == 0 ? std::pair<int, int>{H, W} : hw[i - 1])
+                       : hw[f];
+    };
+    auto prefix = "model." + std::to_string(i);
+    if (s.kind == "Conv") {
+      auto* m = mlist[i]->as<models::ConvImpl>();
+      outs[i] = emit_conv_module(g, idx_or_prev(s.from[0]), prefix, m);
+      auto in_hw = hw_at(s.from[0]);
+      int st = m->conv->options.stride()->at(0);
+      hw[i] = {in_hw.first / st, in_hw.second / st};
+    } else if (s.kind == "C3k2") {
+      auto* m = mlist[i]->as<models::C3k2Impl>();
+      outs[i] = emit_c3k2(g, idx_or_prev(s.from[0]), prefix, m);
+      hw[i] = hw_at(s.from[0]);
+    } else if (s.kind == "A2C2f") {
+      auto* m = mlist[i]->as<models::A2C2fImpl>();
+      auto in_hw = hw_at(s.from[0]);
+      outs[i] = emit_a2c2f_v12(g, idx_or_prev(s.from[0]),
+                                 B_in, in_hw.first, in_hw.second, prefix, m);
+      hw[i] = in_hw;
+    } else if (s.kind == "Up") {
+      outs[i] = emit_upsample_2x(g, idx_or_prev(s.from[0]), prefix);
+      auto in_hw = hw_at(s.from[0]);
+      hw[i] = {in_hw.first * 2, in_hw.second * 2};
+    } else if (s.kind == "Cat") {
+      std::vector<std::string> ins;
+      for (int f : s.from) ins.push_back((f == -1) ? prev : outs[f]);
+      outs[i] = g.node("Concat", ins, {attr_int("axis", 1)}, prefix + ".cat");
+      hw[i] = hw_at(s.from[0]);
+    }
+    prev = outs[i];
+  }
+  TrunkOut t;
+  t.all_outs = outs;
+  t.all_hw   = hw;
+  t.det_ins  = {outs[14], outs[17], outs[20]};
+  t.det_hw   = {hw[14],   hw[17],   hw[20]};
+  return t;
+}
+
+// v13 yaml topology: 32 backbone+neck layers (0..31), then Detect/task head.
+// Standalone walk stopping before the head — a verbatim copy of the inline
+// backbone/neck loop in export_yolo13_onnx, minus the Detect step.
+TrunkOut walk_v13_bb_neck(GraphBuilder& g, const std::string& input_name,
+                           torch::nn::ModuleList& mlist, int imgsz) {
+  struct Step { std::vector<int> from; std::string kind; };
+  static const std::vector<Step> yaml = {
+      {{-1},      "Conv"},   {{-1},      "Conv"},   {{-1}, "DSC3k2"},
+      {{-1},      "Conv"},   {{-1},      "DSC3k2"},
+      {{-1},      "DSConv"}, {{-1},      "A2C2f"},
+      {{-1},      "DSConv"}, {{-1},      "A2C2f"},
+      {{4,6,8},   "HyperACE"},
+      {{-1},      "Up"},     {{9},       "DownsampleConv"},
+      {{6,9},     "FullPADTunnel"}, {{4,10}, "FullPADTunnel"},
+      {{8,11},    "FullPADTunnel"},
+      {{-1},      "Up"},     {{-1,12},   "Cat"},    {{-1}, "DSC3k2"},
+      {{-1,9},    "FullPADTunnel"},
+      {{17},      "Up"},     {{-1,13},   "Cat"},    {{-1}, "DSC3k2"},
+      {{10},      "Conv"},   {{21,22},   "FullPADTunnel"},
+      {{-1},      "Conv"},   {{-1,18},   "Cat"},    {{-1}, "DSC3k2"},
+      {{-1,9},    "FullPADTunnel"},
+      {{26},      "Conv"},   {{-1,14},   "Cat"},    {{-1}, "DSC3k2"},
+      {{-1,11},   "FullPADTunnel"},
+  };
+  std::vector<std::string> outs(yaml.size());
+  std::vector<std::pair<int, int>> outs_hw(yaml.size());
+  std::string prev = input_name;
+  int H_in = imgsz, W_in = imgsz;
+  int B_in = -1;  // dynamic-batch placeholder (see export_yolo13_onnx)
+  auto idx_or_prev = [&](int f) { return (f == -1) ? prev : outs[f]; };
+  auto hw_at = [&](int i, int f) -> std::pair<int, int> {
+    if (f == -1) return (i == 0) ? std::pair<int, int>{H_in, W_in}
+                                 : outs_hw[i - 1];
+    return outs_hw[f];
+  };
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    const auto& s = yaml[i];
+    auto pfx = "model." + std::to_string(i);
+    auto mod = mlist[i];
+    if (s.kind == "Conv") {
+      auto* m = mod->as<models::ConvImpl>();
+      outs[i] = emit_conv_module(g, idx_or_prev(s.from[0]), pfx, m);
+      auto in_hw = hw_at(i, s.from[0]);
+      int st = m->conv->options.stride()->at(0);
+      outs_hw[i] = {in_hw.first / st, in_hw.second / st};
+    } else if (s.kind == "DSConv") {
+      auto* m = mod->as<models::DSConvImpl>();
+      outs[i] = emit_dsconv(g, idx_or_prev(s.from[0]), pfx, m);
+      auto in_hw = hw_at(i, s.from[0]);
+      int st = m->dw->options.stride()->at(0);
+      outs_hw[i] = {in_hw.first / st, in_hw.second / st};
+    } else if (s.kind == "DSC3k2") {
+      auto* m = mod->as<models::DSC3k2Impl>();
+      outs[i] = emit_dsc3k2(g, idx_or_prev(s.from[0]), pfx, m);
+      outs_hw[i] = hw_at(i, s.from[0]);
+    } else if (s.kind == "A2C2f") {
+      auto* m = mod->as<models::V13A2C2fImpl>();
+      auto in_hw = hw_at(i, s.from[0]);
+      outs[i] = emit_v13_a2c2f(g, idx_or_prev(s.from[0]),
+                                 B_in, in_hw.first, in_hw.second, pfx, m);
+      outs_hw[i] = in_hw;
+    } else if (s.kind == "Up") {
+      outs[i] = emit_upsample_2x(g, idx_or_prev(s.from[0]), pfx);
+      auto in_hw = hw_at(i, s.from[0]);
+      outs_hw[i] = {in_hw.first * 2, in_hw.second * 2};
+    } else if (s.kind == "DownsampleConv") {
+      auto* m = mod->as<models::DownsampleConvImpl>();
+      outs[i] = emit_downsample_conv_v13(g, idx_or_prev(s.from[0]), pfx, m);
+      auto in_hw = hw_at(i, s.from[0]);
+      outs_hw[i] = {in_hw.first / 2, in_hw.second / 2};
+    } else if (s.kind == "Cat") {
+      std::vector<std::string> ins;
+      for (int f : s.from) ins.push_back(idx_or_prev(f));
+      outs[i] = g.node("Concat", ins, {attr_int("axis", 1)}, pfx + ".cat");
+      outs_hw[i] = hw_at(i, s.from[0]);
+    } else if (s.kind == "FullPADTunnel") {
+      auto* m = mod->as<models::FullPADTunnelImpl>();
+      outs[i] = emit_full_pad_tunnel(g, idx_or_prev(s.from[0]),
+                                       idx_or_prev(s.from[1]), pfx, m);
+      outs_hw[i] = hw_at(i, s.from[0]);
+    } else if (s.kind == "HyperACE") {
+      auto* m = mod->as<models::HyperACEImpl>();
+      auto mid_hw = hw_at(i, s.from[1]);
+      std::vector<std::string> ins;
+      for (int f : s.from) ins.push_back(outs[f]);
+      outs[i] = emit_hyperace(g, ins, B_in, mid_hw.first, mid_hw.second,
+                                pfx, m);
+      outs_hw[i] = mid_hw;
+    }
+    prev = outs[i];
+  }
+  TrunkOut t;
+  t.all_outs = outs;
+  t.all_hw   = outs_hw;
+  t.det_ins  = {outs[23], outs[27], outs[31]};
+  t.det_hw   = {outs_hw[23], outs_hw[27], outs_hw[31]};
+  return t;
+}
 }  // anonymous namespace
 
 // ─── v12 detect exporter ──────────────────────────────────────────────────
@@ -3207,6 +3372,68 @@ void export_yolo26_segment_onnx(models::Yolo26Segment& model,
   write_model_proto(g, cfg, "yolo26_seg", path);
 }
 
+void export_yolo12_segment_onnx(models::Yolo12Segment& model,
+                                 const std::string& path,
+                                 const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, 1, {-1, 3, cfg.imgsz, cfg.imgsz});
+  auto& mlist = model->model;
+  auto trunk = walk_v12_bb_neck(g, cfg.input_name, mlist, cfg.imgsz);
+
+  const int HEAD_IDX = 21;
+  auto* seg = mlist[HEAD_IDX]->as<models::SegmentImpl>();
+  auto* d   = seg->detect.get();
+  std::string head_prefix = "model." + std::to_string(HEAD_IDX);
+  emit_detect(g, trunk.det_ins, d->ch, model->stride, d, cfg.imgsz,
+                   head_prefix + ".detect", cfg.output_name);
+  auto coefs  = emit_task_cv4_concat(g, trunk.det_ins,
+                                      spatial_table(trunk.det_hw),
+                                      seg->cv4, seg->nm, head_prefix);
+  g.rename_output(coefs, "coefs");
+  auto protos = emit_proto(g, trunk.det_ins[0], head_prefix + ".proto",
+                            seg->proto.get());
+  g.rename_output(protos, "protos");
+
+  int nc = model->nc;
+  int nm = seg->nm;
+  g.set_output(cfg.output_name, 1, {-1, 4 + nc, -1});
+  g.set_output("coefs",        1, {-1, nm, -1});
+  g.set_output("protos",       1, {-1, nm, -1, -1});
+  write_model_proto(g, cfg, "yolo12_seg", path);
+}
+
+void export_yolo13_segment_onnx(models::Yolo13Segment& model,
+                                 const std::string& path,
+                                 const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, 1, {-1, 3, cfg.imgsz, cfg.imgsz});
+  auto& mlist = model->model;
+  auto trunk = walk_v13_bb_neck(g, cfg.input_name, mlist, cfg.imgsz);
+
+  const int HEAD_IDX = 32;
+  auto* seg = mlist[HEAD_IDX]->as<models::SegmentImpl>();
+  auto* d   = seg->detect.get();
+  std::string head_prefix = "model." + std::to_string(HEAD_IDX);
+  emit_detect(g, trunk.det_ins, d->ch, model->stride, d, cfg.imgsz,
+                   head_prefix + ".detect", cfg.output_name);
+  auto coefs  = emit_task_cv4_concat(g, trunk.det_ins,
+                                      spatial_table(trunk.det_hw),
+                                      seg->cv4, seg->nm, head_prefix);
+  g.rename_output(coefs, "coefs");
+  auto protos = emit_proto(g, trunk.det_ins[0], head_prefix + ".proto",
+                            seg->proto.get());
+  g.rename_output(protos, "protos");
+
+  int nc = model->nc;
+  int nm = seg->nm;
+  g.set_output(cfg.output_name, 1, {-1, 4 + nc, -1});
+  g.set_output("coefs",        1, {-1, nm, -1});
+  g.set_output("protos",       1, {-1, nm, -1, -1});
+  write_model_proto(g, cfg, "yolo13_seg", path);
+}
+
 // ─── Pose exporters ───────────────────────────────────────────────────────
 
 namespace {
@@ -3319,6 +3546,64 @@ void export_yolo26_pose_onnx(models::Yolo26Pose& model,
   write_model_proto(g, cfg, "yolo26_pose", path);
 }
 
+void export_yolo12_pose_onnx(models::Yolo12Pose& model,
+                              const std::string& path,
+                              const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, 1, {-1, 3, cfg.imgsz, cfg.imgsz});
+  auto& mlist = model->model;
+  auto trunk = walk_v12_bb_neck(g, cfg.input_name, mlist, cfg.imgsz);
+
+  const int HEAD_IDX = 21;
+  auto* pose = mlist[HEAD_IDX]->as<models::PoseImpl>();
+  auto* d    = pose->detect.get();
+  std::string head_prefix = "model." + std::to_string(HEAD_IDX);
+  emit_detect(g, trunk.det_ins, d->ch, model->stride, d, cfg.imgsz,
+                   head_prefix + ".detect", cfg.output_name);
+
+  auto raw = emit_task_cv4_concat(g, trunk.det_ins,
+                                   spatial_table(trunk.det_hw),
+                                   pose->cv4, pose->nk, head_prefix);
+  auto tab = build_pose_anchor_tables(trunk.det_hw, model->stride);
+  emit_kpt_decode(g, raw, pose->num_kpts, pose->kpt_dim, tab.total_A,
+                   tab.anc_xy, tab.strides_per_a, head_prefix, "keypoints");
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, 1, {-1, 4 + nc, -1});
+  g.set_output("keypoints",     1, {-1, pose->nk, -1});
+  write_model_proto(g, cfg, "yolo12_pose", path);
+}
+
+void export_yolo13_pose_onnx(models::Yolo13Pose& model,
+                              const std::string& path,
+                              const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, 1, {-1, 3, cfg.imgsz, cfg.imgsz});
+  auto& mlist = model->model;
+  auto trunk = walk_v13_bb_neck(g, cfg.input_name, mlist, cfg.imgsz);
+
+  const int HEAD_IDX = 32;
+  auto* pose = mlist[HEAD_IDX]->as<models::PoseImpl>();
+  auto* d    = pose->detect.get();
+  std::string head_prefix = "model." + std::to_string(HEAD_IDX);
+  emit_detect(g, trunk.det_ins, d->ch, model->stride, d, cfg.imgsz,
+                   head_prefix + ".detect", cfg.output_name);
+
+  auto raw = emit_task_cv4_concat(g, trunk.det_ins,
+                                   spatial_table(trunk.det_hw),
+                                   pose->cv4, pose->nk, head_prefix);
+  auto tab = build_pose_anchor_tables(trunk.det_hw, model->stride);
+  emit_kpt_decode(g, raw, pose->num_kpts, pose->kpt_dim, tab.total_A,
+                   tab.anc_xy, tab.strides_per_a, head_prefix, "keypoints");
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, 1, {-1, 4 + nc, -1});
+  g.set_output("keypoints",     1, {-1, pose->nk, -1});
+  write_model_proto(g, cfg, "yolo13_pose", path);
+}
+
 // ─── OBB exporters ────────────────────────────────────────────────────────
 
 void export_yolo8_obb_onnx(models::Yolo8OBB& model,
@@ -3408,6 +3693,64 @@ void export_yolo26_obb_onnx(models::Yolo26OBB& model,
   g.set_output(cfg.output_name, 1, {-1, 4 + nc, -1});
   g.set_output("angle",         1, {-1, -1});
   write_model_proto(g, cfg, "yolo26_obb", path);
+}
+
+void export_yolo12_obb_onnx(models::Yolo12OBB& model,
+                             const std::string& path,
+                             const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, 1, {-1, 3, cfg.imgsz, cfg.imgsz});
+  auto& mlist = model->model;
+  auto trunk = walk_v12_bb_neck(g, cfg.input_name, mlist, cfg.imgsz);
+
+  const int HEAD_IDX = 21;
+  auto* obb = mlist[HEAD_IDX]->as<models::OBBImpl>();
+  auto* d   = obb->detect.get();
+  std::string head_prefix = "model." + std::to_string(HEAD_IDX);
+  auto raw = emit_task_cv4_concat(g, trunk.det_ins,
+                                   spatial_table(trunk.det_hw),
+                                   obb->cv4, obb->ne, head_prefix);
+  int total_A = 0;
+  for (auto p : trunk.det_hw) total_A += p.first * p.second;
+  emit_obb_angle_decode(g, raw, obb->ne, total_A, head_prefix, "angle");
+  emit_detect_obb_dfl(g, trunk.det_ins, d->ch, model->stride, d, cfg.imgsz,
+                       /*angle_in=*/"angle", /*v11_cv3=*/true,
+                       head_prefix + ".detect", cfg.output_name);
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, 1, {-1, 4 + nc, -1});
+  g.set_output("angle",         1, {-1, -1});
+  write_model_proto(g, cfg, "yolo12_obb", path);
+}
+
+void export_yolo13_obb_onnx(models::Yolo13OBB& model,
+                             const std::string& path,
+                             const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, 1, {-1, 3, cfg.imgsz, cfg.imgsz});
+  auto& mlist = model->model;
+  auto trunk = walk_v13_bb_neck(g, cfg.input_name, mlist, cfg.imgsz);
+
+  const int HEAD_IDX = 32;
+  auto* obb = mlist[HEAD_IDX]->as<models::OBBImpl>();
+  auto* d   = obb->detect.get();
+  std::string head_prefix = "model." + std::to_string(HEAD_IDX);
+  auto raw = emit_task_cv4_concat(g, trunk.det_ins,
+                                   spatial_table(trunk.det_hw),
+                                   obb->cv4, obb->ne, head_prefix);
+  int total_A = 0;
+  for (auto p : trunk.det_hw) total_A += p.first * p.second;
+  emit_obb_angle_decode(g, raw, obb->ne, total_A, head_prefix, "angle");
+  emit_detect_obb_dfl(g, trunk.det_ins, d->ch, model->stride, d, cfg.imgsz,
+                       /*angle_in=*/"angle", /*v11_cv3=*/true,
+                       head_prefix + ".detect", cfg.output_name);
+
+  int nc = model->nc;
+  g.set_output(cfg.output_name, 1, {-1, 4 + nc, -1});
+  g.set_output("angle",         1, {-1, -1});
+  write_model_proto(g, cfg, "yolo13_obb", path);
 }
 
 // ─── Classify exporters ───────────────────────────────────────────────────
@@ -3557,6 +3900,79 @@ void export_yolo26_classify_onnx(models::Yolo26Classify& model,
   }
   g.set_output(cfg.output_name, 1, {-1, model->nc});
   write_model_proto(g, cfg, "yolo26_cls", path);
+}
+
+void export_yolo12_classify_onnx(models::Yolo12Classify& model,
+                                  const std::string& path,
+                                  const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, 1, {-1, 3, cfg.imgsz, cfg.imgsz});
+
+  // v12-cls topology — Conv/C3k2 chain ending in Classify (no C2PSA).
+  struct Step { std::string kind; };
+  static const std::vector<Step> yaml = {
+      {"Conv"},  {"Conv"},  {"C3k2"},
+      {"Conv"},  {"C3k2"},
+      {"Conv"},  {"C3k2"},
+      {"Conv"},  {"C3k2"},
+      {"Classify"},
+  };
+  auto& mlist = model->model;
+  std::string prev = cfg.input_name;
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    auto prefix = "model." + std::to_string(i);
+    if (yaml[i].kind == "Conv") {
+      auto* m = mlist[i]->as<models::ConvImpl>();
+      prev = emit_conv_module(g, prev, prefix, m);
+    } else if (yaml[i].kind == "C3k2") {
+      auto* m = mlist[i]->as<models::C3k2Impl>();
+      prev = emit_c3k2(g, prev, prefix, m);
+    } else if (yaml[i].kind == "Classify") {
+      auto* m = mlist[i]->as<models::ClassifyImpl>();
+      emit_classify_head(g, prev, prefix, m, cfg.output_name);
+    }
+  }
+  g.set_output(cfg.output_name, 1, {-1, model->nc});
+  write_model_proto(g, cfg, "yolo12_cls", path);
+}
+
+void export_yolo13_classify_onnx(models::Yolo13Classify& model,
+                                  const std::string& path,
+                                  const OnnxExportConfig& cfg) {
+  model->eval();
+  GraphBuilder g;
+  g.set_input(cfg.input_name, 1, {-1, 3, cfg.imgsz, cfg.imgsz});
+
+  // v13-cls topology — Conv/DSConv/DSC3k2 chain ending in Classify (mirrors
+  // Yolo13ClassifyImpl's ctor: Conv,Conv,DSC3k2,Conv,DSC3k2,DSConv,DSConv,Classify).
+  struct Step { std::string kind; };
+  static const std::vector<Step> yaml = {
+      {"Conv"},  {"Conv"},  {"DSC3k2"},
+      {"Conv"},  {"DSC3k2"},
+      {"DSConv"}, {"DSConv"},
+      {"Classify"},
+  };
+  auto& mlist = model->model;
+  std::string prev = cfg.input_name;
+  for (size_t i = 0; i < yaml.size(); ++i) {
+    auto prefix = "model." + std::to_string(i);
+    if (yaml[i].kind == "Conv") {
+      auto* m = mlist[i]->as<models::ConvImpl>();
+      prev = emit_conv_module(g, prev, prefix, m);
+    } else if (yaml[i].kind == "DSConv") {
+      auto* m = mlist[i]->as<models::DSConvImpl>();
+      prev = emit_dsconv(g, prev, prefix, m);
+    } else if (yaml[i].kind == "DSC3k2") {
+      auto* m = mlist[i]->as<models::DSC3k2Impl>();
+      prev = emit_dsc3k2(g, prev, prefix, m);
+    } else if (yaml[i].kind == "Classify") {
+      auto* m = mlist[i]->as<models::ClassifyImpl>();
+      emit_classify_head(g, prev, prefix, m, cfg.output_name);
+    }
+  }
+  g.set_output(cfg.output_name, 1, {-1, model->nc});
+  write_model_proto(g, cfg, "yolo13_cls", path);
 }
 
 // ─── YOLO10 emitters ──────────────────────────────────────────────────────

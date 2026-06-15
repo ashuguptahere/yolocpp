@@ -4,6 +4,44 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.106.0] — 2026-06-15
+
+### Added
+- **ONNX + TRT export for v12/v13 task variants** — segment / pose / obb /
+  classify. Closes the v12/v13 task pipeline (train 0.103/0.104, predict
+  0.105, export here). The graphs reuse the already-numerically-verified
+  per-module emitters (v12: `emit_a2c2f_v12`; v13: `emit_dsconv` /
+  `emit_dsc3k2` / `emit_v13_a2c2f` / `emit_hyperace` / `emit_full_pad_tunnel`
+  / `emit_downsample_conv_v13`) and the **version-agnostic** task-head emitters
+  shared with v8/v11/v26 (`emit_proto`, `emit_task_cv4_concat`,
+  `emit_kpt_decode`, `emit_obb_angle_decode`, `emit_detect_obb_dfl`,
+  `emit_classify_head`). The only new structural code is two standalone
+  backbone/neck walkers — `walk_v12_bb_neck` (21 layers, det-ins {14,17,20})
+  and `walk_v13_bb_neck` (32 layers, det-ins {23,27,31}) — that are verbatim
+  copies of the proven v12/v13 *detect* inline walks minus the Detect step
+  (the detect exporters keep their own inline walk untouched → zero regression
+  risk). Eight `export_yolo1{2,3}_{segment,pose,obb,classify}_onnx` functions
+  mirror the v8/v11 task exporters (OBB uses the v11-style `v11_cv3=true`
+  DWConvBlock cv3 since v12/v13 task heads are `legacy=false`); v13 classify
+  walks the bespoke Conv/DSConv/DSC3k2 chain. The registry `export_onnx`
+  hooks for v12/v13 now dispatch all five tasks (previously detect-only),
+  mirroring the v11 lambda — so `--mode export --task {segment,pose,obb,
+  classify}` and TRT (which honors v13's `trt_disable_tf32`) route through
+  automatically.
+- New data-free smoke `tests/test_v12_v13_task_export.cpp`: builds each of the
+  8 v12/v13 task heads from random init, runs a forward (shape check), emits
+  ONNX, and asserts the file + expected output tensor names. Always runs (no
+  weights/data needed). Suite now 44 tests, all green.
+
+### Verified
+- All 8 task graphs export to well-formed ONNX (output names present).
+- Registry/CLI dispatch confirmed for all 8 (version+scale auto-resolved;
+  `[export] (v12/segment)` … messages; CLI bytes match the direct-export
+  bytes exactly).
+- **Real-parser acceptance**: v12-seg and v13-seg ONNX both build a TensorRT
+  fp16 engine (nvonnxparser full graph + shape inference) — incl. v13's
+  HyperACE / DSConv / FullPAD_Tunnel + the segment proto/cv4 heads.
+
 ## [0.105.0] — 2026-06-15
 
 ### Added
