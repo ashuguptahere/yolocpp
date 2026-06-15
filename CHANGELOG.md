@@ -4,6 +4,20 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.5] — 2026-06-15
+
+### Notes
+- **Round-7 adversarial latent-bug hunt over the less-parity-tested periphery**
+  (CLI parse/dispatch, web console, dataset/yaml resolution, Darknet `.weights`
+  converters, registry/adapter, public API) — 33 agents, 6 finders × 3-lens
+  refute-by-default. **9 candidates → 2 confirmed real bugs**, both fixed
+  (0.107.3 export-nc, 0.107.4 predict `--nc`); 7 rejected on verification
+  (incl. a localhost-bound web "path traversal" that never serves file contents,
+  and a false `scale_from_filename` e6/e6e claim — the code checks `-e6e`
+  first). The lone split-vote + the concrete rejections were hand-verified.
+  Ledger §1.21. (No code change in this entry — provenance for the round; the
+  fixes shipped in 0.107.3/0.107.4.)
+
 ## [0.107.4] — 2026-06-15
 
 ### Fixed
