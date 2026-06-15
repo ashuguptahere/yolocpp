@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.32] — 2026-06-15
+
+### Fixed
+- **`warmup_steps` forced to ≥1 even with warmup disabled → one spurious warmup
+  step (latent, from hunt #4).** When `warmup_epochs ≤ 0`, `warmup_steps` is
+  correctly computed as 0 (upstream's `nw == -1` "never warmup" semantics), but
+  a following `std::max(1, warmup_steps)` bumped it to 1 — so at `gstep == 0` the
+  `gstep < warmup_steps` guards fired once, pinning `lr_bias` to `warmup_bias_lr`
+  (and SGD momentum to `warmup_momentum`) for the first step of a run that asked
+  for no warmup. Removed; `warmup_steps == 0` now propagates so the guards never
+  fire (no division-by-zero — they only run when `gstep < warmup_steps`). The
+  warmup-enabled path is unchanged (`warmup_steps ≥ 100`, so the `max` was always
+  a no-op there). Verified the default-warmup GPU train smoke (yolo8n/coco8) is
+  unaffected (loss ↓, mAP tracked, checkpoints saved).
+
 ## [0.101.31] — 2026-06-15
 
 ### Fixed

@@ -1416,7 +1416,12 @@ void TrainerT<M>::run() {
   int          warmup_steps  = cfg_.warmup_epochs > 0
                                  ? std::max(100, steps * cfg_.warmup_epochs)
                                  : 0;
-  warmup_steps = std::max(1, warmup_steps);
+  // Leave warmup_steps == 0 when warmup is disabled (upstream's nw == -1
+  // semantics): the `gstep < warmup_steps` guards then never fire, so no
+  // division-by-zero and no warmup. A previous `std::max(1, warmup_steps)`
+  // forced one warmup step at gstep=0 even with warmup off, pinning lr_bias to
+  // warmup_bias_lr for that step. (When warmup is on, warmup_steps >= 100, so
+  // the max was already a no-op.)
   int          ema_step      = 0;
 
   std::cout << "[trainer] dataset=" << n << " imgs, "
