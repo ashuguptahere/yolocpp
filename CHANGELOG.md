@@ -4,6 +4,19 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.37] — 2026-06-15
+
+### Changed
+- **TODO.md ledger refresh (recurring #33 gap-audit).** Corrected stale rows:
+  **#50 license closed** — AGPL-3.0 was already chosen + applied (`LICENSE` +
+  README) to interoperate with upstream Ultralytics; the ledger still listed it
+  as optional/deferred and recommended Apache-2.0, and #60 still named it a
+  blocker. **#5/§5 INT8 calibration marked done** (wired via #51F2 + hardened
+  0.101.31). Added **§1.21** recording the five adversarial latent-bug-hunt
+  rounds (14 fixes across 0.101.24–0.101.36, the 1 deferred v12-gamma item, and
+  the rejected candidates). Refreshed the top-of-file snapshot to the current
+  state (ctest 43/43). Docs only — no code change.
+
 ## [0.101.36] — 2026-06-15
 
 ### Fixed

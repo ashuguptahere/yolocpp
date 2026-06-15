@@ -6,7 +6,7 @@ This file is maintained as part of recurring task **#33** (gap-audit) — see CL
 
 The current release version is **always read from `CMakeLists.txt` `project(... VERSION ...)`** (which flows into `build/generated/yolocpp/config.hpp` as `YOLOCPP_VERSION_STRING` and out via `yolocpp info`). Do not duplicate it into prose snapshots in this file — the only places a literal version belongs are `CMakeLists.txt`, `CHANGELOG.md` headings, and historical "landed in X.Y.Z" lines.
 
-> **Latest snapshot** (0.101.8, 2026-06-14, branch `claude/todo-sweep`): ctest 40/40 green. Audit-driven sweep through §2A — closed/advanced: #47C2 lint+ctest, #51D2/#52B/#57F reconciled, #51F2 INT8 export, #52A3 `predict_many`, #57G `close_mosaic` (fixed an `args.yaml` metadata-lie), #70 ONNX `ReduceSum`→axes-attribute (cv::dnn now parses; forward still needs onnxruntime). **Still open (large/blocked):** #5 benchmark non-detect tasks, #55 trackers, #70 (onnxruntime dep decision), v12/v13 task training (#60), #58/#59 deploy, two-GPU DDP, #50 license, #61 publish, #51I2/#48C (low). See `SESSION_DIGEST.md` for the per-version landing map.
+> **Latest snapshot** (landed through 0.101.36, 2026-06-15): ctest **43/43 green**. **License chosen + applied: AGPL-3.0** (`LICENSE` + README — #50 closed; interoperates with upstream Ultralytics, also AGPL-3.0). **INT8 calibration wired** (#51F2 export + calibrator hardening). Five adversarial latent-bug-hunt rounds landed **14 correctness fixes** (CHANGELOG 0.101.24–0.101.36, see §1.21); 6 finder candidates were rejected on independent review and **1 is deferred** (v12 `A2C2f` gamma init — contradicts the documented v12-vs-v13 CLAUDE.md rule; needs an upstream Python check). **Still open — none are bugs:** benchmark for non-detect tasks via TRT/ONNX decode (PT path done); #70 ONNX *forward* (cv::dnn 4.6 can't run the decode subgraph — onnxruntime dep decision or decode rewrite); #55 trackers + SAHI (maintainer-deferred); #60 train + publish the full weight matrix (now unblocked on license) incl. v12/v13 task weights; two-GPU DDP + Jetson/mobile/edge deploy (hardware); #48C disk-trim (low). See `SESSION_DIGEST.md` for the per-version landing map.
 
 Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started · 🔁 recurring
 
@@ -166,6 +166,26 @@ Legend: ✅ done · 🟡 partial / scaffolded · ⏳ planned · ❌ not started 
 - ✅ **Multi-model + format benchmark (0.101.0)** — `--mode benchmark -m a.pt,b.pt` → per-model format table (Format · Size MB · ms/im · img/s · dets) + leaderboard (params · best speed). `--data` adds per-model mAP; batch defaults to 1 (latency).
 - ✅ **Per-format mAP (0.101.1)** — each format scored independently over `--data`: PT via registry validator; TRT fp32/fp16/int8 via `engine::eval_predictor` over `TrtPredictor` (graph-agnostic → all versions; INT8 drop visible). ONNX via `cv::dnn` (graceful fallback — see #70). `BenchResult` gained `map_50/map_50_95/size_mb/artifact`.
 
+### 1.21 Adversarial latent-bug hunts (0.101.24 – 0.101.36)
+
+Five multi-agent find→adversarially-verify rounds over the whole codebase. **14 confirmed-real bugs fixed**, each its own commit + CHANGELOG + (where feasible) a regression test; 6 finder candidates were rejected on independent review (upstream-matching or convention misreads), 1 deferred. ctest 39 → 43.
+
+- ✅ **0.101.24** — versionless non-v8 checkpoint (e.g. `best.pt`) silently loaded as `Yolo8Detect` (partial tensor load, mAP 0). `load_from_state_dict` now throws on implausibly-low by-name match; Predictor no longer cascades a semantic mismatch into the TorchScript-fallback stack dump.
+- ✅ **0.101.25** — `save_state_dict` wrote channels_last (NHWC) strides over NCHW storage bytes → corrupt `.pt` for any strides-respecting reader (every CUDA-trained checkpoint). Contiguous-ify once. (`test_pt_save_layout`)
+- ✅ **0.101.26** — yolo2-tiny-voc decoded with full-yolo2-voc anchors. Added `yolo2_tiny_voc_anchors()`. (anchor-selection test leg)
+- ✅ **0.101.27** — v7 P6 ReOrg emitted bare ONNX `SpaceToDepth` (DCR) ≠ `pixel_unshuffle` (CRD) → scrambled export channels. SpaceToDepth + DCR→CRD regroup. (`test_v7_reorg_onnx`)
+- ✅ **0.101.28** — v5 `yolo5nu.pt` mapped to nonexistent `yolov5nuu.pt` URL. Append `u` only when absent.
+- ✅ **0.101.29** — letterbox stored fractional `dw/2` pad instead of applied `round(pad-0.1)` → ≤0.5px box/label misalignment on odd padding. Store applied integer pad. (`test_letterbox_pad`)
+- ✅ **0.101.30** — segment predict thresholded masks before upsampling (binary aliasing). Carry continuous sigmoid through resizes, threshold once.
+- ✅ **0.101.31** — INT8 calibrator returned `false` (aborted calibration) on one unreadable image. Fill neutral frame + continue.
+- ✅ **0.101.32** — `warmup_steps = max(1, …)` forced a step-0 warmup when warmup was disabled. Let `0` propagate.
+- ✅ **0.101.33** — v10 RepVGGDW fusion channel-guard was a tautological self-comparison (`seven != seven`). Compare `seven` vs `three`.
+- ✅ **0.101.34** — `val`/`benchmark` ignored `--device=cuda:N` (forced GPU 0); `pick_device` now parses the index. Plus actionable empty-scale error (does **not** default to `n`).
+- ✅ **0.101.35** — classify training resized with `INTER_LINEAR` while inference uses `INTER_AREA` → train/eval mismatch. Match the conditional.
+- ✅ **0.101.36** — detect losses computed in bf16 under autocast instead of fp32. `.to(kFloat)` at loss entry across v2/v6/v7/v8(+v9–v13)/v26 (match yolo1 + upstream).
+- ✅ (earlier this session, pre-0.101.24) — VOC/COCO/Flat hflip off-by-one; v8 TAL cls-soft-target/normalisation; pose/obb validation AP; mask-loss `/255`; segment crop_mask; val NMS `multi_label`.
+- ⏳ **Deferred (not a fix):** v12 `A2C2f` gamma init `ones(c2)` vs upstream `0.01*ones` — contradicts the documented CLAUDE.md "v12=ones, v13=0.01*ones" distinction; only affects from-scratch v12 training; needs an upstream Python check before changing.
+
 ---
 
 ## 2. Pending / in-flight tasks (session task numbers)
@@ -215,7 +235,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | #49A | ✅ closed — within #49. CLI rename + identifier slice. | — | landed | — |
 | #49B | ✅ closed — within #49. URL resolver allow-list documented in `cli/resolve.cpp` comment. | — | landed | — |
 | #49C | ✅ closed — within #49. README / TODO / CLAUDE / SESSION_DIGEST prose neutralised. CHANGELOG left as historical record. | — | landed | — |
-| ~~#50~~ | Pick + apply a license — **moved to Group VII (optional / deferred)**. Maintainer's call; recommendation on file is Apache 2.0 (patent grant covers ML/transformer IP, all upstream model deps already Apache/MIT, monetisation works via dual-licensing + hosted SaaS + premium weights). Filed at #50 originally; no longer blocks #60 in the ordering — but #60 *publish* must wait until a license is chosen. | optional | — | — |
+| ~~#50~~ | ✅ **closed — license chosen + applied: AGPL-3.0** (`LICENSE` file + README front-matter). The maintainer picked AGPL-3.0 (not the Apache-2.0 originally recommended) to interoperate cleanly with the upstream Ultralytics codebase, which is also AGPL-3.0. #60 *publish* is no longer license-blocked. | done | — | — |
 
 ### Group II — CLI / API surface (depends on Group I)
 
@@ -314,7 +334,7 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 
 | # | scope | priority | session-cost estimate | blockers |
 |---|-------|----------|------------------------|----------|
-| #60  | Retrain every (version × scale × task) on COCO; publish weights to GitHub Releases | medium | many sessions | depends on #50 (license decided) and #54 (dataset infra) |
+| #60  | Retrain every (version × scale × task) on COCO; publish weights to GitHub Releases | medium | many sessions | license decided (AGPL-3.0, #50 ✅); now gated only on #54 (dataset infra) + compute |
 | #60A | Train script harness driving the templated trainer across the matrix | — | within #60 | — |
 | #60B | Compute budget plan (GPUs × hours per cell) | — | within #60 | — |
 | #60C | Release artifact upload pipeline | — | within #60 | — |
@@ -344,7 +364,7 @@ follow-up tasks below close the gap to v3+ parity (val/train/export).
 |---|-------|----------|------------------------|----------|
 | #62 | Optional: Ninja generator support for faster builds | low (optional) | 0.25 session | none; just `cmake -G Ninja` validation + docs |
 | #63 | Optional: cross-platform GUI (Dear ImGui / Qt) for train/val/predict/export | low (optional) | many sessions | not on the critical path |
-| #50 | Optional: license decision (Apache 2.0 recommended). Moved here from Group I per maintainer — no quick decision wanted. Re-promote when the maintainer is ready to commit to a license; gates #60 *publication* but not #60 training itself. | optional | 0.25 session | — |
+| ~~#50~~ | ✅ **done — AGPL-3.0 chosen + applied** (`LICENSE` + README). See the closed row in Group I. No longer gates #60 publication. | done | — | — |
 | ~~#64~~ | ~~`tests/test_v6_e2e.cpp` lines 64 / 97 fail to compile.~~ **Fixed 0.83.0** — `predict_v6_to_file` gained a `p6=false` arg between `nc` and `NMSConfig`; threaded through both call sites. | done | — | — |
 
 ---
@@ -415,7 +435,7 @@ These don't map to a single YOLO version.
 - ✅ **Mosaic / mixup augmentation** — landed 0.54.0 (`build_mosaic4` + `apply_mixup` in `datasets/yolo_dataset.cpp`, gated by `mosaic_p` / `mixup_p`).
 - ✅ **AMP (mixed-precision training)** — landed 0.90.0 via bf16 `at::autocast` around the forward + loss block (no GradScaler needed on Blackwell); see `TrainerT::run()`.
 - ✅ **Multi-threaded data prefetch** — landed 0.94.0 (`BatchPrefetcher`, N worker threads, `--workers` flag).
-- ❌ **TRT INT8 calibration** + dynamic-shape multi-batch profiles — easy on top of `TrtBuildConfig` once a calibration set exists.
+- ✅ **TRT INT8 calibration** — wired (#51F2): `--precision int8` builds an INT8 engine via `ImgDirCalibrator` over a calibration image dir; per-format mAP shows the INT8 drop. Hardened 0.101.31 (skip an unreadable calib image with a neutral frame instead of aborting the whole set). ❌ Remaining: dynamic-shape multi-batch optimisation profiles (static shape only for now).
 - ❌ **Two-GPU DDP validation** — wiring is in place + world_size=1 verified, but no two-GPU box has run training yet.
 - ✅ **`forward_train_seg` factor-out** — `SegmentImpl::forward_train` returns raw per-level feats + coefs + protos; `Yolo8Segment/Yolo11Segment::forward_train_seg` expose it. Segment trainer now runs `V8DetectionLoss` on the feats **and** the mask loss (was mask-only — det loss was hardcoded 0). Verified on yolov8n-seg/coco8-seg (det loss non-zero + decreasing).
 - 🟡 **Benchmark CLI for non-detect tasks** — **PT path done** (`--mode benchmark --task <task>` → `cmd_benchmark_task`: forward timing + `--data` accuracy via `validate_*`; verified on yolov8n-{cls,seg,pose,obb}). **Remaining:** non-detect TRT/ONNX formats need task-specific output decode in `TrtPredictor` (masks/keypoints/rotated boxes).
