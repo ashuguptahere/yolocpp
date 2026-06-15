@@ -98,7 +98,16 @@ Yolo8Scale parse_scale(const std::string& s) {
   if (s == "m") return yolocpp::models::kYolo8m;
   if (s == "l") return yolocpp::models::kYolo8l;
   if (s == "x") return yolocpp::models::kYolo8x;
-  throw std::runtime_error("unknown YOLO8 scale: " + s);
+  // Deliberately do NOT default an empty/unknown scale to 'n': loading an x/l
+  // checkpoint as 'n' builds the wrong architecture and silently mis-predicts
+  // (the class of bug the load_from_state_dict backstop now catches loudly).
+  // Fail with an actionable message instead.
+  if (s.empty())
+    throw std::runtime_error(
+        "YOLO scale could not be inferred from the weights filename — pass "
+        "--scale=n|s|m|l|x explicitly");
+  throw std::runtime_error("unknown YOLO scale '" + s +
+                           "' (expected n|s|m|l|x)");
 }
 
 // Normalise + validate a `--device` spec. Accepted forms:
@@ -150,6 +159,23 @@ std::string normalise_device(std::string d) {
   throw std::runtime_error(
       "--device='" + d +
       "' not recognised; expected cpu | cuda | cuda:N | cuda:0,1,... | mps | auto");
+}
+
+// Pick a torch device honouring the CLI `--device` value (already normalised
+// by `normalise_device`). Empty / "auto" / "cuda" → CUDA:0 when available else
+// CPU; "cuda:N" / "cuda:N,M" → CUDA:N (the inference/val path honours the first
+// index); "cpu" → CPU; anything else (e.g. "mps") → torch::Device(string).
+torch::Device pick_device(const std::string& device) {
+  if (device == "cpu") return torch::Device(torch::kCPU);
+  if (device.empty() || device == "auto" || device == "cuda")
+    return torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0)
+                                       : torch::Device(torch::kCPU);
+  if (device.rfind("cuda:", 0) == 0) {
+    if (!torch::cuda::is_available()) return torch::Device(torch::kCPU);
+    return torch::Device(torch::kCUDA,
+                         std::stoi(device.substr(5)));  // first index of N[,M…]
+  }
+  return torch::Device(device);  // mps, etc.
 }
 
 std::vector<std::string> split_csv(const std::string& s) {
@@ -293,9 +319,7 @@ int cmd_val(const std::string& weights, const std::string& root,
   // a Pascal VOC root, a `.csv`/`.tsv` flat file, a COCO `.json`,
   // or a `data.yaml` (#54B → CLI).
   auto ds = make_dataset(root, "val", imgsz, names, aug);
-  auto torch_dev = (device == "cpu") ? torch::Device(torch::kCPU)
-                  : torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0)
-                                                : torch::Device(torch::kCPU);
+  auto torch_dev = pick_device(device);  // honours cuda:N (was hardcoded to 0)
 
   if (scale_s.empty()) {
     auto fs_scale = yolocpp::cli::scale_from_filename(weights);
@@ -508,18 +532,6 @@ int cmd_train(const std::string& root, const std::string& names_csv,
   return 0;
 }
 
-// Pick a torch device honouring the CLI `--device` value (already
-// normalised by `normalise_device`). Empty / unrecognised → CUDA when
-// available, else CPU.
-torch::Device pick_device(const std::string& device) {
-  if (device == "cpu") return torch::Device(torch::kCPU);
-  if (device.empty() || device == "auto" || device == "cuda" ||
-      device.rfind("cuda:", 0) == 0) {
-    return torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0)
-                                        : torch::Device(torch::kCPU);
-  }
-  return torch::Device(device);
-}
 
 // Validate a non-detect task. The detect path stays in `cmd_val` —
 // it's registry-routed and supports every YOLO version. The
@@ -1002,9 +1014,7 @@ std::pair<double, double> bench_map(const std::string& weights, const std::strin
     int nc = static_cast<int>(names.size());
     yolocpp::datasets::AugConfig aug; aug.augment = false;
     auto ds = make_dataset(data, "val", imgsz, names, aug);
-    auto dev = (device == "cpu") ? torch::Device(torch::kCPU)
-             : torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0)
-                                           : torch::Device(torch::kCPU);
+    auto dev = pick_device(device);  // honours cuda:N (was hardcoded to 0)
     if (scale_s.empty()) scale_s = yolocpp::cli::scale_from_filename(weights);
     auto vh = yolocpp::cli::version_from_filename(weights);
     yolocpp::registry::register_all_versions();

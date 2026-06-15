@@ -4,6 +4,25 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.34] — 2026-06-15
+
+### Fixed
+- **`val` / `benchmark` ignored an explicit `--device=cuda:N`, always using GPU 0
+  (latent, from hunt #5).** `pick_device()` matched `cuda:N` in the same branch
+  as bare `cuda`/`auto` and returned `torch::Device(kCUDA, 0)`, so its
+  `torch::Device(device)` fallthrough was unreachable for indexed devices; the
+  `cmd_val` and `bench_map` bodies additionally inlined the same hardcoded-0
+  ternary. Now `pick_device` parses the index (`cuda:N` / first of `cuda:N,M`)
+  and both call sites route through it — `--device=cuda:1` runs on GPU 1.
+  (Verified: `cuda:0` runs, `cuda:9` errors cleanly "index 9 out of range".)
+
+### Changed
+- **`parse_scale("")` now fails with an actionable message** instead of
+  `unknown YOLO8 scale: ` (trailing space). It deliberately does NOT default to
+  `n` — loading an x/l checkpoint as `n` would build the wrong architecture and
+  silently mis-predict (the class the load_from_state_dict backstop catches).
+  The message now tells the user to pass `--scale=n|s|m|l|x`.
+
 ## [0.101.33] — 2026-06-15
 
 ### Fixed
