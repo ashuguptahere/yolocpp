@@ -4,6 +4,21 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.6] — 2026-06-15
+
+### Fixed
+- **Explicit `--nc 80` ignored for classify/obb *export*** — the export-path
+  twin of the 0.107.4 predict fix. The 10 registry `export_onnx` lambdas
+  (v8/v11/v12/v13/v26 × classify/obb) carried the same `(nc<0||nc==80)?1000:nc`
+  / `(nc==80)?15:nc` overload, so `--mode export --task classify -m m.pt --nc 80`
+  exported a 1000-class head instead of the requested 80. Changed to the `nc<0`
+  sentinel (`(nc<0)?1000:nc` / `(nc<0)?15:nc`). Safe across both callers:
+  `cmd_export` resolves `nc<0` up front (0.107.3) and the non-detect benchmark
+  passes a resolved nc (1000 cls / 15 obb), so neither ever relied on the
+  `==80` branch for the default. Verified: classify export defaults to 1000;
+  `--nc 80` now builds an 80-class head (fc skip-mismatch). (yolo2.cpp's
+  `nc==80` is a legitimate COCO-vs-VOC anchor selector — left as-is.) Suite 46/46.
+
 ## [0.107.5] — 2026-06-15
 
 ### Notes

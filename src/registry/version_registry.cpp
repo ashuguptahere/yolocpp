@@ -671,7 +671,7 @@ VersionAdapter make_v8() {
       serialization::export_yolo8_onnx(m, path, cfg);
     } else if (task == "classify") {
       if (cfg.imgsz == 640) cfg.imgsz = 224;
-      int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;
+      int cls_nc = (nc < 0) ? 1000 : nc;
       models::Yolo8Classify m(sc, cls_nc);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo8_classify_onnx(m, path, cfg);
@@ -684,7 +684,7 @@ VersionAdapter make_v8() {
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo8_pose_onnx(m, path, cfg);
     } else if (task == "obb") {
-      int obb_nc = (nc == 80) ? 15 : nc;
+      int obb_nc = (nc < 0) ? 15 : nc;
       models::Yolo8OBB m(sc, obb_nc, /*ne=*/1);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo8_obb_onnx(m, path, cfg);
@@ -830,7 +830,7 @@ VersionAdapter make_v11() {
       serialization::export_yolo11_onnx(m, path, cfg);
     } else if (task == "classify") {
       if (cfg.imgsz == 640) cfg.imgsz = 224;
-      int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;
+      int cls_nc = (nc < 0) ? 1000 : nc;
       models::Yolo11Classify m(sc, cls_nc);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo11_classify_onnx(m, path, cfg);
@@ -843,7 +843,7 @@ VersionAdapter make_v11() {
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo11_pose_onnx(m, path, cfg);
     } else if (task == "obb") {
-      int obb_nc = (nc == 80) ? 15 : nc;
+      int obb_nc = (nc < 0) ? 15 : nc;
       models::Yolo11OBB m(sc, obb_nc, /*ne=*/1);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo11_obb_onnx(m, path, cfg);
@@ -909,7 +909,7 @@ VersionAdapter make_v12() {
       serialization::export_yolo12_onnx(m, path, cfg);
     } else if (task == "classify") {
       if (cfg.imgsz == 640) cfg.imgsz = 224;
-      int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;
+      int cls_nc = (nc < 0) ? 1000 : nc;
       models::Yolo12Classify m(sc, cls_nc);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo12_classify_onnx(m, path, cfg);
@@ -922,7 +922,7 @@ VersionAdapter make_v12() {
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo12_pose_onnx(m, path, cfg);
     } else if (task == "obb") {
-      int obb_nc = (nc == 80) ? 15 : nc;
+      int obb_nc = (nc < 0) ? 15 : nc;
       models::Yolo12OBB m(sc, obb_nc, /*ne=*/1);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo12_obb_onnx(m, path, cfg);
@@ -993,7 +993,7 @@ VersionAdapter make_v13() {
       serialization::export_yolo13_onnx(m, path, cfg);
     } else if (task == "classify") {
       if (cfg.imgsz == 640) cfg.imgsz = 224;
-      int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;
+      int cls_nc = (nc < 0) ? 1000 : nc;
       models::Yolo13Classify m(sc, cls_nc);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo13_classify_onnx(m, path, cfg);
@@ -1006,7 +1006,7 @@ VersionAdapter make_v13() {
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo13_pose_onnx(m, path, cfg);
     } else if (task == "obb") {
-      int obb_nc = (nc == 80) ? 15 : nc;
+      int obb_nc = (nc < 0) ? 15 : nc;
       models::Yolo13OBB m(sc, obb_nc, /*ne=*/1);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo13_obb_onnx(m, path, cfg);
@@ -1069,7 +1069,7 @@ VersionAdapter make_v26() {
       serialization::export_yolo26_onnx(m, path, cfg);
     } else if (task == "classify") {
       if (cfg.imgsz == 640) cfg.imgsz = 224;
-      int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;
+      int cls_nc = (nc < 0) ? 1000 : nc;
       models::Yolo26Classify m(sc, cls_nc);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo26_classify_onnx(m, path, cfg);
@@ -1082,7 +1082,7 @@ VersionAdapter make_v26() {
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo26_pose_onnx(m, path, cfg);
     } else if (task == "obb") {
-      int obb_nc = (nc == 80) ? 15 : nc;
+      int obb_nc = (nc < 0) ? 15 : nc;
       models::Yolo26OBB m(sc, obb_nc, /*ne=*/1);
       m->load_from_state_dict(sd.entries); m->eval();
       serialization::export_yolo26_obb_onnx(m, path, cfg);
