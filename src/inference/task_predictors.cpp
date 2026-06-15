@@ -1094,6 +1094,244 @@ std::vector<OBBInstance> Yolo11OBBPredictor::predict_to_file(
   return insts;
 }
 
+// ─── YOLO12 task predictors (thin wrappers over the templated decode) ────────
+Yolo12ClassifyPredictor::Yolo12ClassifyPredictor(const std::string& weights, int imgsz,
+                                                 std::string device, int nc,
+                                                 models::Yolo12Scale scale)
+    : model_(scale, nc), device_(pick_device(std::move(device))), imgsz_(imgsz) {
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model_->load_from_state_dict(sd.entries);
+  std::cout << "[v12-classify] loaded " << copied << " tensors from " << weights << "\n";
+  model_->to(device_); model_->eval(); models::fuse_model(*model_);
+}
+ClassifyResult Yolo12ClassifyPredictor::predict(const cv::Mat& bgr, int top_k) const {
+  return detail::run_classify(const_cast<models::Yolo12Classify&>(model_), device_, imgsz_, bgr, top_k);
+}
+
+Yolo12SegmentPredictor::Yolo12SegmentPredictor(const std::string& weights, int imgsz,
+                                               std::string device, int nc,
+                                               models::Yolo12Scale scale)
+    : model_(scale, nc), device_(pick_device(std::move(device))), imgsz_(imgsz) {
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model_->load_from_state_dict(sd.entries);
+  std::cout << "[v12-segment] loaded " << copied << " tensors from " << weights << "\n";
+  model_->to(device_); model_->eval(); models::fuse_model(*model_);
+}
+std::vector<SegInstance> Yolo12SegmentPredictor::predict(const cv::Mat& bgr, NMSConfig conf) const {
+  return detail::run_segment(const_cast<models::Yolo12Segment&>(model_), device_, imgsz_, bgr, conf);
+}
+std::vector<SegInstance> Yolo12SegmentPredictor::predict_to_file(
+    const std::string& in_path, const std::string& out_path, NMSConfig conf,
+    const std::vector<std::string>& names) const {
+  cv::Mat img = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (img.empty()) throw std::runtime_error("could not read " + in_path);
+  auto insts = predict(img, conf);
+  const auto& nm = names.empty() ? coco_names() : names;
+  cv::Mat overlay = img.clone();
+  for (const auto& inst : insts) {
+    cv::Scalar color((inst.box.cls * 41) % 256, (inst.box.cls * 73) % 256, (inst.box.cls * 11) % 256);
+    overlay.setTo(color, inst.mask);
+    cv::rectangle(img, {(int)inst.box.x1, (int)inst.box.y1}, {(int)inst.box.x2, (int)inst.box.y2}, color, 2);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f",
+                  (inst.box.cls < (int)nm.size() ? nm[inst.box.cls].c_str() : "?"), inst.box.conf);
+    cv::putText(img, buf, {(int)inst.box.x1 + 2, (int)inst.box.y1 + 14},
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+  }
+  cv::Mat blended; cv::addWeighted(img, 0.6, overlay, 0.4, 0, blended);
+  if (!cv::imwrite(out_path, blended)) throw std::runtime_error("could not write " + out_path);
+  return insts;
+}
+
+Yolo12PosePredictor::Yolo12PosePredictor(const std::string& weights, int imgsz,
+                                         std::string device, int num_kpts, int kpt_dim,
+                                         models::Yolo12Scale scale)
+    : model_(scale, /*nc=*/1, num_kpts, kpt_dim), device_(pick_device(std::move(device))),
+      imgsz_(imgsz), num_kpts_(num_kpts), kpt_dim_(kpt_dim) {
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model_->load_from_state_dict(sd.entries);
+  std::cout << "[v12-pose] loaded " << copied << " tensors from " << weights << "\n";
+  model_->to(device_); model_->eval(); models::fuse_model(*model_);
+}
+std::vector<PoseInstance> Yolo12PosePredictor::predict(const cv::Mat& bgr, NMSConfig conf) const {
+  return detail::run_pose(const_cast<models::Yolo12Pose&>(model_), device_, imgsz_, bgr, conf, num_kpts_, kpt_dim_);
+}
+std::vector<PoseInstance> Yolo12PosePredictor::predict_to_file(
+    const std::string& in_path, const std::string& out_path, NMSConfig conf) const {
+  cv::Mat img = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (img.empty()) throw std::runtime_error("could not read " + in_path);
+  auto insts = predict(img, conf);
+  static const int edges[][2] = {
+      {15, 13}, {13, 11}, {16, 14}, {14, 12}, {11, 12}, {5, 11}, {6, 12},
+      {5, 6}, {5, 7}, {6, 8}, {7, 9}, {8, 10}, {1, 2}, {0, 1},
+      {0, 2}, {1, 3}, {2, 4}, {3, 5}, {4, 6},
+  };
+  for (const auto& inst : insts) {
+    cv::rectangle(img, {(int)inst.box.x1, (int)inst.box.y1}, {(int)inst.box.x2, (int)inst.box.y2}, {0, 255, 0}, 2);
+    for (auto& kp : inst.keypoints)
+      if (kp[2] > 0.5f) cv::circle(img, {(int)kp[0], (int)kp[1]}, 3, {0, 0, 255}, -1);
+    for (auto& e : edges) {
+      const auto& a = inst.keypoints[e[0]]; const auto& b = inst.keypoints[e[1]];
+      if (a[2] > 0.5f && b[2] > 0.5f)
+        cv::line(img, {(int)a[0], (int)a[1]}, {(int)b[0], (int)b[1]}, {255, 0, 0}, 2);
+    }
+  }
+  if (!cv::imwrite(out_path, img)) throw std::runtime_error("could not write " + out_path);
+  return insts;
+}
+
+Yolo12OBBPredictor::Yolo12OBBPredictor(const std::string& weights, int imgsz,
+                                       std::string device, int nc, models::Yolo12Scale scale)
+    : model_(scale, nc, /*ne=*/1), device_(pick_device(std::move(device))), imgsz_(imgsz) {
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model_->load_from_state_dict(sd.entries);
+  std::cout << "[v12-obb] loaded " << copied << " tensors from " << weights << "\n";
+  model_->to(device_); model_->eval(); models::fuse_model(*model_);
+}
+std::vector<OBBInstance> Yolo12OBBPredictor::predict(const cv::Mat& bgr, NMSConfig conf) const {
+  return detail::run_obb(const_cast<models::Yolo12OBB&>(model_), device_, imgsz_, bgr, conf);
+}
+std::vector<OBBInstance> Yolo12OBBPredictor::predict_to_file(
+    const std::string& in_path, const std::string& out_path, NMSConfig conf,
+    const std::vector<std::string>& names) const {
+  cv::Mat img = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (img.empty()) throw std::runtime_error("could not read " + in_path);
+  auto insts = predict(img, conf);
+  const auto& nm = names.empty() ? dota_names() : names;
+  for (const auto& o : insts) {
+    cv::RotatedRect rr({o.cx, o.cy}, {o.w, o.h}, o.angle * 180.f / (float)M_PI);
+    cv::Point2f pts[4]; rr.points(pts);
+    cv::Scalar color((o.cls * 41) % 256, (o.cls * 73) % 256, (o.cls * 11) % 256);
+    for (int i = 0; i < 4; ++i) cv::line(img, pts[i], pts[(i + 1) % 4], color, 2);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f",
+                  (o.cls < (int)nm.size() ? nm[o.cls].c_str() : "?"), o.conf);
+    cv::putText(img, buf, {(int)pts[1].x, (int)pts[1].y - 4},
+                cv::FONT_HERSHEY_SIMPLEX, 0.4, color, 1);
+  }
+  if (!cv::imwrite(out_path, img)) throw std::runtime_error("could not write " + out_path);
+  return insts;
+}
+
+// ─── YOLO13 task predictors ──────────────────────────────────────────────────
+Yolo13ClassifyPredictor::Yolo13ClassifyPredictor(const std::string& weights, int imgsz,
+                                                 std::string device, int nc,
+                                                 models::Yolo13Scale scale)
+    : model_(scale, nc), device_(pick_device(std::move(device))), imgsz_(imgsz) {
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model_->load_from_state_dict(sd.entries);
+  std::cout << "[v13-classify] loaded " << copied << " tensors from " << weights << "\n";
+  model_->to(device_); model_->eval(); models::fuse_model(*model_);
+}
+ClassifyResult Yolo13ClassifyPredictor::predict(const cv::Mat& bgr, int top_k) const {
+  return detail::run_classify(const_cast<models::Yolo13Classify&>(model_), device_, imgsz_, bgr, top_k);
+}
+
+Yolo13SegmentPredictor::Yolo13SegmentPredictor(const std::string& weights, int imgsz,
+                                               std::string device, int nc,
+                                               models::Yolo13Scale scale)
+    : model_(scale, nc), device_(pick_device(std::move(device))), imgsz_(imgsz) {
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model_->load_from_state_dict(sd.entries);
+  std::cout << "[v13-segment] loaded " << copied << " tensors from " << weights << "\n";
+  model_->to(device_); model_->eval(); models::fuse_model(*model_);
+}
+std::vector<SegInstance> Yolo13SegmentPredictor::predict(const cv::Mat& bgr, NMSConfig conf) const {
+  return detail::run_segment(const_cast<models::Yolo13Segment&>(model_), device_, imgsz_, bgr, conf);
+}
+std::vector<SegInstance> Yolo13SegmentPredictor::predict_to_file(
+    const std::string& in_path, const std::string& out_path, NMSConfig conf,
+    const std::vector<std::string>& names) const {
+  cv::Mat img = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (img.empty()) throw std::runtime_error("could not read " + in_path);
+  auto insts = predict(img, conf);
+  const auto& nm = names.empty() ? coco_names() : names;
+  cv::Mat overlay = img.clone();
+  for (const auto& inst : insts) {
+    cv::Scalar color((inst.box.cls * 41) % 256, (inst.box.cls * 73) % 256, (inst.box.cls * 11) % 256);
+    overlay.setTo(color, inst.mask);
+    cv::rectangle(img, {(int)inst.box.x1, (int)inst.box.y1}, {(int)inst.box.x2, (int)inst.box.y2}, color, 2);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f",
+                  (inst.box.cls < (int)nm.size() ? nm[inst.box.cls].c_str() : "?"), inst.box.conf);
+    cv::putText(img, buf, {(int)inst.box.x1 + 2, (int)inst.box.y1 + 14},
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+  }
+  cv::Mat blended; cv::addWeighted(img, 0.6, overlay, 0.4, 0, blended);
+  if (!cv::imwrite(out_path, blended)) throw std::runtime_error("could not write " + out_path);
+  return insts;
+}
+
+Yolo13PosePredictor::Yolo13PosePredictor(const std::string& weights, int imgsz,
+                                         std::string device, int num_kpts, int kpt_dim,
+                                         models::Yolo13Scale scale)
+    : model_(scale, /*nc=*/1, num_kpts, kpt_dim), device_(pick_device(std::move(device))),
+      imgsz_(imgsz), num_kpts_(num_kpts), kpt_dim_(kpt_dim) {
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model_->load_from_state_dict(sd.entries);
+  std::cout << "[v13-pose] loaded " << copied << " tensors from " << weights << "\n";
+  model_->to(device_); model_->eval(); models::fuse_model(*model_);
+}
+std::vector<PoseInstance> Yolo13PosePredictor::predict(const cv::Mat& bgr, NMSConfig conf) const {
+  return detail::run_pose(const_cast<models::Yolo13Pose&>(model_), device_, imgsz_, bgr, conf, num_kpts_, kpt_dim_);
+}
+std::vector<PoseInstance> Yolo13PosePredictor::predict_to_file(
+    const std::string& in_path, const std::string& out_path, NMSConfig conf) const {
+  cv::Mat img = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (img.empty()) throw std::runtime_error("could not read " + in_path);
+  auto insts = predict(img, conf);
+  static const int edges[][2] = {
+      {15, 13}, {13, 11}, {16, 14}, {14, 12}, {11, 12}, {5, 11}, {6, 12},
+      {5, 6}, {5, 7}, {6, 8}, {7, 9}, {8, 10}, {1, 2}, {0, 1},
+      {0, 2}, {1, 3}, {2, 4}, {3, 5}, {4, 6},
+  };
+  for (const auto& inst : insts) {
+    cv::rectangle(img, {(int)inst.box.x1, (int)inst.box.y1}, {(int)inst.box.x2, (int)inst.box.y2}, {0, 255, 0}, 2);
+    for (auto& kp : inst.keypoints)
+      if (kp[2] > 0.5f) cv::circle(img, {(int)kp[0], (int)kp[1]}, 3, {0, 0, 255}, -1);
+    for (auto& e : edges) {
+      const auto& a = inst.keypoints[e[0]]; const auto& b = inst.keypoints[e[1]];
+      if (a[2] > 0.5f && b[2] > 0.5f)
+        cv::line(img, {(int)a[0], (int)a[1]}, {(int)b[0], (int)b[1]}, {255, 0, 0}, 2);
+    }
+  }
+  if (!cv::imwrite(out_path, img)) throw std::runtime_error("could not write " + out_path);
+  return insts;
+}
+
+Yolo13OBBPredictor::Yolo13OBBPredictor(const std::string& weights, int imgsz,
+                                       std::string device, int nc, models::Yolo13Scale scale)
+    : model_(scale, nc, /*ne=*/1), device_(pick_device(std::move(device))), imgsz_(imgsz) {
+  auto sd = serialization::load_state_dict(weights);
+  int copied = model_->load_from_state_dict(sd.entries);
+  std::cout << "[v13-obb] loaded " << copied << " tensors from " << weights << "\n";
+  model_->to(device_); model_->eval(); models::fuse_model(*model_);
+}
+std::vector<OBBInstance> Yolo13OBBPredictor::predict(const cv::Mat& bgr, NMSConfig conf) const {
+  return detail::run_obb(const_cast<models::Yolo13OBB&>(model_), device_, imgsz_, bgr, conf);
+}
+std::vector<OBBInstance> Yolo13OBBPredictor::predict_to_file(
+    const std::string& in_path, const std::string& out_path, NMSConfig conf,
+    const std::vector<std::string>& names) const {
+  cv::Mat img = cv::imread(in_path, cv::IMREAD_COLOR);
+  if (img.empty()) throw std::runtime_error("could not read " + in_path);
+  auto insts = predict(img, conf);
+  const auto& nm = names.empty() ? dota_names() : names;
+  for (const auto& o : insts) {
+    cv::RotatedRect rr({o.cx, o.cy}, {o.w, o.h}, o.angle * 180.f / (float)M_PI);
+    cv::Point2f pts[4]; rr.points(pts);
+    cv::Scalar color((o.cls * 41) % 256, (o.cls * 73) % 256, (o.cls * 11) % 256);
+    for (int i = 0; i < 4; ++i) cv::line(img, pts[i], pts[(i + 1) % 4], color, 2);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f",
+                  (o.cls < (int)nm.size() ? nm[o.cls].c_str() : "?"), o.conf);
+    cv::putText(img, buf, {(int)pts[1].x, (int)pts[1].y - 4},
+                cv::FONT_HERSHEY_SIMPLEX, 0.4, color, 1);
+  }
+  if (!cv::imwrite(out_path, img)) throw std::runtime_error("could not write " + out_path);
+  return insts;
+}
+
 const std::vector<std::string>& dota_names() {
   static const std::vector<std::string> n = {
       "plane", "ship", "storage tank", "baseball diamond", "tennis court",

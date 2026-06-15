@@ -1802,8 +1802,17 @@ int predict_one_image(const std::string& task, const std::string& weights,
   auto task_version = version_hint.empty()
                           ? yolocpp::cli::version_from_filename(weights)
                           : version_hint;
+  // Versionless trained checkpoints (best.pt / last.pt) carry no version token
+  // (version_from_filename defaults to v8) — recover from the state-dict
+  // architecture so a trained v12/v13 task model predicts with the right class.
+  if (task_version == "v8" && !weights.empty()) {
+    try { task_version = yolocpp::cli::infer_model_info(weights).version; }
+    catch (...) {}
+  }
   bool is_v11 = (task_version == "v11");
   bool is_v26 = (task_version == "v26");
+  bool is_v12 = (task_version == "v12");
+  bool is_v13 = (task_version == "v13");
 
   if (task == "classify") {
     int sz = (imgsz == 640) ? 224 : imgsz;  // classify default 224
@@ -1834,6 +1843,20 @@ int predict_one_image(const std::string& task, const std::string& weights,
         std::cout << "  " << cid << "  " << prob << "\n";
       return 0;
     }
+    if (is_v12 || is_v13) {
+      cv::Mat img = cv::imread(source, cv::IMREAD_COLOR);
+      if (img.empty()) throw std::runtime_error("could not read " + source);
+      yolocpp::inference::ClassifyResult r;
+      if (is_v12) r = yolocpp::inference::Yolo12ClassifyPredictor(
+          weights, sz, device, cls_nc,
+          yolocpp::models::yolo12_scale_from_letter(scale_s)).predict(img, 5);
+      else        r = yolocpp::inference::Yolo13ClassifyPredictor(
+          weights, sz, device, cls_nc,
+          yolocpp::models::yolo13_scale_from_letter(scale_s)).predict(img, 5);
+      std::cout << "[classify] (" << task_version << ") top-5:\n";
+      for (auto& [cid, prob] : r.topk) std::cout << "  " << cid << "  " << prob << "\n";
+      return 0;
+    }
     yolocpp::inference::ClassifyPredictor p(weights, sz, device, /*nc=*/cls_nc,
                                              parse_scale(scale_s));
     cv::Mat img = cv::imread(source, cv::IMREAD_COLOR);
@@ -1861,6 +1884,16 @@ int predict_one_image(const std::string& task, const std::string& weights,
       std::cout << "[segment] (v11) " << insts.size() << " instances, wrote " << out << "\n";
       return 0;
     }
+    if (is_v12 || is_v13) {
+      auto insts = is_v12
+          ? yolocpp::inference::Yolo12SegmentPredictor(weights, imgsz, device, nc,
+                yolocpp::models::yolo12_scale_from_letter(scale_s)).predict_to_file(source, out, c)
+          : yolocpp::inference::Yolo13SegmentPredictor(weights, imgsz, device, nc,
+                yolocpp::models::yolo13_scale_from_letter(scale_s)).predict_to_file(source, out, c);
+      std::cout << "[segment] (" << task_version << ") " << insts.size()
+                << " instances, wrote " << out << "\n";
+      return 0;
+    }
     yolocpp::inference::SegmentPredictor p(weights, imgsz, device, nc,
                                             parse_scale(scale_s));
     auto insts = p.predict_to_file(source, out, c);
@@ -1882,6 +1915,16 @@ int predict_one_image(const std::string& task, const std::string& weights,
           yolocpp::models::yolo11_scale_from_letter(scale_s));
       auto insts = p.predict_to_file(source, out, c);
       std::cout << "[pose] (v11) " << insts.size() << " people, wrote " << out << "\n";
+      return 0;
+    }
+    if (is_v12 || is_v13) {
+      auto insts = is_v12
+          ? yolocpp::inference::Yolo12PosePredictor(weights, imgsz, device, 17, 3,
+                yolocpp::models::yolo12_scale_from_letter(scale_s)).predict_to_file(source, out, c)
+          : yolocpp::inference::Yolo13PosePredictor(weights, imgsz, device, 17, 3,
+                yolocpp::models::yolo13_scale_from_letter(scale_s)).predict_to_file(source, out, c);
+      std::cout << "[pose] (" << task_version << ") " << insts.size()
+                << " people, wrote " << out << "\n";
       return 0;
     }
     yolocpp::inference::PosePredictor p(weights, imgsz, device,
@@ -1909,6 +1952,16 @@ int predict_one_image(const std::string& task, const std::string& weights,
           yolocpp::models::yolo11_scale_from_letter(scale_s));
       auto insts = p.predict_to_file(source, out, c);
       std::cout << "[obb] (v11) " << insts.size() << " rotated boxes, wrote " << out << "\n";
+      return 0;
+    }
+    if (is_v12 || is_v13) {
+      auto insts = is_v12
+          ? yolocpp::inference::Yolo12OBBPredictor(weights, sz, device, obb_nc,
+                yolocpp::models::yolo12_scale_from_letter(scale_s)).predict_to_file(source, out, c)
+          : yolocpp::inference::Yolo13OBBPredictor(weights, sz, device, obb_nc,
+                yolocpp::models::yolo13_scale_from_letter(scale_s)).predict_to_file(source, out, c);
+      std::cout << "[obb] (" << task_version << ") " << insts.size()
+                << " rotated boxes, wrote " << out << "\n";
       return 0;
     }
     yolocpp::inference::OBBPredictor p(weights, sz, device, /*nc=*/obb_nc,

@@ -17,6 +17,8 @@
 #include "yolocpp/inference/predictor.hpp"   // for Detection
 #include "yolocpp/models/yolo11.hpp"
 #include "yolocpp/models/yolo11_tasks.hpp"
+#include "yolocpp/models/yolo12_tasks.hpp"
+#include "yolocpp/models/yolo13_tasks.hpp"
 #include "yolocpp/models/yolo26.hpp"
 #include "yolocpp/models/yolo26_tasks.hpp"
 #include "yolocpp/models/yolo8.hpp"
@@ -209,6 +211,130 @@ class Yolo11OBBPredictor {
   int imgsz() const { return imgsz_; }
  private:
   models::Yolo11OBB model_;
+  torch::Device      device_;
+  int                imgsz_;
+};
+
+// ─── YOLO12 task predictors ────────────────────────────────────────────────
+// Same thin wrappers over the templated detail::run_* decode; the v12 task
+// heads (yolo12_tasks) reuse the shared Segment/Pose/OBB/Classify heads.
+class Yolo12ClassifyPredictor {
+ public:
+  Yolo12ClassifyPredictor(const std::string& weights, int imgsz = 224,
+                          std::string device = "", int nc = 1000,
+                          models::Yolo12Scale scale = models::kYolo12n);
+  ClassifyResult predict(const cv::Mat& bgr, int top_k = 5) const;
+  int imgsz() const { return imgsz_; }
+ private:
+  models::Yolo12Classify model_;
+  torch::Device          device_;
+  int                    imgsz_;
+};
+class Yolo12SegmentPredictor {
+ public:
+  Yolo12SegmentPredictor(const std::string& weights, int imgsz = 640,
+                         std::string device = "", int nc = 80,
+                         models::Yolo12Scale scale = models::kYolo12n);
+  std::vector<SegInstance> predict(const cv::Mat& bgr, NMSConfig conf = {}) const;
+  std::vector<SegInstance> predict_to_file(const std::string& in_path,
+                                           const std::string& out_path,
+                                           NMSConfig conf = {},
+                                           const std::vector<std::string>& names = {}) const;
+  int imgsz() const { return imgsz_; }
+ private:
+  models::Yolo12Segment model_;
+  torch::Device          device_;
+  int                    imgsz_;
+};
+class Yolo12PosePredictor {
+ public:
+  Yolo12PosePredictor(const std::string& weights, int imgsz = 640,
+                      std::string device = "", int num_kpts = 17, int kpt_dim = 3,
+                      models::Yolo12Scale scale = models::kYolo12n);
+  std::vector<PoseInstance> predict(const cv::Mat& bgr, NMSConfig conf = {}) const;
+  std::vector<PoseInstance> predict_to_file(const std::string& in_path,
+                                            const std::string& out_path,
+                                            NMSConfig conf = {}) const;
+  int imgsz() const { return imgsz_; }
+ private:
+  models::Yolo12Pose model_;
+  torch::Device      device_;
+  int                imgsz_, num_kpts_, kpt_dim_;
+};
+class Yolo12OBBPredictor {
+ public:
+  Yolo12OBBPredictor(const std::string& weights, int imgsz = 1024,
+                     std::string device = "", int nc = 15,
+                     models::Yolo12Scale scale = models::kYolo12n);
+  std::vector<OBBInstance> predict(const cv::Mat& bgr, NMSConfig conf = {}) const;
+  std::vector<OBBInstance> predict_to_file(const std::string& in_path,
+                                           const std::string& out_path,
+                                           NMSConfig conf = {},
+                                           const std::vector<std::string>& names = {}) const;
+  int imgsz() const { return imgsz_; }
+ private:
+  models::Yolo12OBB model_;
+  torch::Device      device_;
+  int                imgsz_;
+};
+
+// ─── YOLO13 task predictors ────────────────────────────────────────────────
+class Yolo13ClassifyPredictor {
+ public:
+  Yolo13ClassifyPredictor(const std::string& weights, int imgsz = 224,
+                          std::string device = "", int nc = 1000,
+                          models::Yolo13Scale scale = models::kYolo13n);
+  ClassifyResult predict(const cv::Mat& bgr, int top_k = 5) const;
+  int imgsz() const { return imgsz_; }
+ private:
+  models::Yolo13Classify model_;
+  torch::Device          device_;
+  int                    imgsz_;
+};
+class Yolo13SegmentPredictor {
+ public:
+  Yolo13SegmentPredictor(const std::string& weights, int imgsz = 640,
+                         std::string device = "", int nc = 80,
+                         models::Yolo13Scale scale = models::kYolo13n);
+  std::vector<SegInstance> predict(const cv::Mat& bgr, NMSConfig conf = {}) const;
+  std::vector<SegInstance> predict_to_file(const std::string& in_path,
+                                           const std::string& out_path,
+                                           NMSConfig conf = {},
+                                           const std::vector<std::string>& names = {}) const;
+  int imgsz() const { return imgsz_; }
+ private:
+  models::Yolo13Segment model_;
+  torch::Device          device_;
+  int                    imgsz_;
+};
+class Yolo13PosePredictor {
+ public:
+  Yolo13PosePredictor(const std::string& weights, int imgsz = 640,
+                      std::string device = "", int num_kpts = 17, int kpt_dim = 3,
+                      models::Yolo13Scale scale = models::kYolo13n);
+  std::vector<PoseInstance> predict(const cv::Mat& bgr, NMSConfig conf = {}) const;
+  std::vector<PoseInstance> predict_to_file(const std::string& in_path,
+                                            const std::string& out_path,
+                                            NMSConfig conf = {}) const;
+  int imgsz() const { return imgsz_; }
+ private:
+  models::Yolo13Pose model_;
+  torch::Device      device_;
+  int                imgsz_, num_kpts_, kpt_dim_;
+};
+class Yolo13OBBPredictor {
+ public:
+  Yolo13OBBPredictor(const std::string& weights, int imgsz = 1024,
+                     std::string device = "", int nc = 15,
+                     models::Yolo13Scale scale = models::kYolo13n);
+  std::vector<OBBInstance> predict(const cv::Mat& bgr, NMSConfig conf = {}) const;
+  std::vector<OBBInstance> predict_to_file(const std::string& in_path,
+                                           const std::string& out_path,
+                                           NMSConfig conf = {},
+                                           const std::vector<std::string>& names = {}) const;
+  int imgsz() const { return imgsz_; }
+ private:
+  models::Yolo13OBB model_;
   torch::Device      device_;
   int                imgsz_;
 };

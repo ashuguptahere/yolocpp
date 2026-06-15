@@ -4,6 +4,23 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.105.0] — 2026-06-15
+
+### Added
+- **Predict (CLI) for v12/v13 task variants** — segment / pose / obb / classify.
+  Completes the v12/v13 task pipeline (train + val landed in 0.103.0/0.104.0):
+  added `Yolo12{Classify,Segment,Pose,OBB}Predictor` + the v13 equivalents (thin
+  wrappers over the **version-agnostic, numerically-verified** `detail::run_*`
+  decode — same as the v8/v11/v26 task predictors), and `is_v12`/`is_v13`
+  dispatch in `cmd_predict_task`. The version is recovered from the checkpoint
+  architecture via `infer_model_info` when the filename carries no token (a
+  trained `best.pt`/`last.pt`), so a trained v12/v13 task model predicts with the
+  right class. Verified end-to-end: a trained v12-seg and v13-seg checkpoint
+  (versionless `last.pt`) → version recovered → masks decoded + written.
+  (Predicted quality awaits real #60 training; the predict *path* is what's
+  verified here.) ONNX/TRT export of v12/v13 task variants still needs per-task
+  emitters — a follow-up.
+
 ## [0.104.0] — 2026-06-15
 
 ### Added
