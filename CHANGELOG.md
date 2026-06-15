@@ -4,6 +4,20 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.7] — 2026-06-15
+
+### Notes
+- **Round-8 adversarial hunt over the older-version forwards + ONNX/TRT
+  emitters** (v3/v5 anchor-free DFL, v4 Darknet, v6 Meituan, v7 ELAN, v9 GELAN,
+  v10 NMS-free, v1/v2 Darknet-era) — the last code surface not yet swept this
+  session. 6 finders surfaced **0 candidate bugs** (nothing reached
+  verification), consistent with these passing per-layer parity + the 164/164
+  full-matrix sweep + cross-backend parity. **Completes a full-codebase
+  adversarial sweep this session** (rounds 6–8: mature core 0, periphery 2
+  fixed, older versions 0). The only real defects were the two nc-handling bugs
+  in the untested CLI/API periphery (fixed in 0.107.3/0.107.4/0.107.6).
+  Provenance only — no code change. Ledger §1.21.
+
 ## [0.107.6] — 2026-06-15
 
 ### Fixed
