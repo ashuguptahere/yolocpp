@@ -4,6 +4,22 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.1] — 2026-06-15
+
+### Notes
+- **Round-6 adversarial latent-bug hunt over the mature core** (the subsystems
+  the 0.106 task-export audit did *not* probe): NMS + letterbox, losses +
+  task-aligned assigner, augmentation + dataset loaders, `.pt`
+  (de)serialization, the TRT runtime, and the trainer engine. 60 agents — 6
+  finders × 3-lens refute-by-default verification (with a parity-quirk lens so
+  intentional upstream-matching behavior isn't flagged). **18 candidates → 0
+  confirmed bugs.** All rejected as guarded-upstream / by-design / unreachable;
+  e.g. the pickle POP/DUP stack-underflow is unreachable because the byte reader
+  is bounds-checked (`require()` → clean throw) and truncated files raise
+  "pickle truncated (no STOP)"; the TRT fp32 output binding is correct under
+  fp16 compute. No code change — provenance only (ledger §1.21). The core stands
+  verified.
+
 ## [0.107.0] — 2026-06-15
 
 ### Added
