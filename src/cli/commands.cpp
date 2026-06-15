@@ -1644,6 +1644,11 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
     auto fs_scale = yolocpp::cli::scale_from_filename(weights);
     if (!fs_scale.empty()) scale_s = fs_scale;
   }
+  // Resolve the "unset" nc sentinel (-1) to the task default once, here, so an
+  // explicit `--nc 80` on a classify/obb model is honored (it used to be
+  // indistinguishable from the default and got overridden to 1000/15).
+  if (nc < 0)
+    nc = (task == "classify") ? 1000 : (task == "obb") ? 15 : 80;
 
   // Classify the source. Image / Dir / Glob fan out to a per-image
   // loop. Video / URL / Webcam open `cv::VideoCapture`, run frames
@@ -1700,7 +1705,7 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
       }
       if (task == "obb") {
         int sz = (imgsz == 640) ? 1024 : imgsz;          // OBB default 1024
-        int obb_nc = (nc < 0 || nc == 80) ? 15 : nc;     // DOTA default 15
+        int obb_nc = (nc < 0) ? 15 : nc;     // DOTA default 15
         auto draw = [&](cv::Mat& f, const std::vector<inf::OBBInstance>& v) {
           inf::draw_obbs(f, v);
         };
@@ -1716,7 +1721,7 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
       }
       if (task == "classify") {
         int sz = (imgsz == 640) ? 224 : imgsz;           // classify default 224
-        int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;   // ImageNet default
+        int cls_nc = (nc < 0) ? 1000 : nc;   // ImageNet default
         auto draw = [&](cv::Mat& f, const inf::ClassifyResult& r) {
           inf::draw_classify(f, r);
         };
@@ -1962,7 +1967,7 @@ int predict_one_image(const std::string& task, const std::string& weights,
     int sz = (imgsz == 640) ? 224 : imgsz;  // classify default 224
     // Honour --nc; fall back to the ImageNet 1000 default when --nc wasn't set
     // (the global default is the detect 80). Was hardcoded to 1000, ignoring --nc.
-    int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;
+    int cls_nc = (nc < 0) ? 1000 : nc;
     if (is_v26) {
       yolocpp::inference::Yolo26ClassifyPredictor p(
           weights, sz, device, /*nc=*/cls_nc,
@@ -2081,7 +2086,7 @@ int predict_one_image(const std::string& task, const std::string& weights,
   if (task == "obb") {
     int sz = (imgsz == 640) ? 1024 : imgsz;  // OBB default 1024
     // Honour --nc; fall back to the DOTA 15 default when --nc wasn't set.
-    int obb_nc = (nc < 0 || nc == 80) ? 15 : nc;
+    int obb_nc = (nc < 0) ? 15 : nc;
     if (is_v26) {
       yolocpp::inference::Yolo26OBBPredictor p(
           weights, sz, device, /*nc=*/obb_nc,

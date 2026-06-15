@@ -4,6 +4,23 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.4] — 2026-06-15
+
+### Fixed
+- **Explicit `--nc 80` ignored for classify/obb predict** (found by the
+  periphery bug hunt). The predict paths used `(nc < 0 || nc == 80) ? task_default
+  : nc`, treating an explicit `--nc 80` as "unset" and overriding it to 1000
+  (classify) / 15 (obb) — since `nc` defaulted to 80 there was no way to tell
+  "user passed 80" from "user passed nothing". Fix: the CLI passes the `nc<0`
+  sentinel when `--nc` wasn't given (`app.count("--nc")`), `PredictArgs.nc`
+  default `80 → -1`, and `cmd_predict_task` resolves `nc<0 → task default` once
+  up front; the four classify/obb sites drop the `== 80` clause so an explicit
+  value (incl. 80) is honored. Verified: `--task classify --nc 80` now builds an
+  80-class head (the 1000-class fc skip-mismatches — "re-purposed for custom nc")
+  instead of silently using 1000; detect/obb/classify defaults unchanged
+  (5 dets / 1 obb / top-1 = 654). Also cleans up the same pattern I had
+  propagated into the 0.107.0 video branch. Suite 46/46.
+
 ## [0.107.3] — 2026-06-15
 
 ### Fixed

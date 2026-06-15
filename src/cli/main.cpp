@@ -226,8 +226,11 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
     // #97: collect last-image detections so we can emit Ultralytics-
     // style sidecar files (.json / .txt) when the user asks for them.
     std::vector<yolocpp::inference::Detection> last_dets;
+    // nc<0 when --nc wasn't given → cmd_predict_task picks the task default
+    // (so an explicit `--nc 80` on a classify/obb model is honored, not
+    // mistaken for "unset" and overridden to 1000/15).
     int rc = cmd_predict_task(task, weights, source, out, imgsz, device,
-                              scale_s, nc, conf, iou,
+                              scale_s, app.count("--nc") ? nc : -1, conf, iou,
                               /*version_hint=*/"", &last_dets);
     if (rc == 0 && (!save_json.empty() || !save_txt.empty())) {
       // Wrap last-image detections in a Results object so callers get

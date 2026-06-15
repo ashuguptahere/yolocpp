@@ -50,7 +50,7 @@ struct PredictArgs {
   int         imgsz = 640;
   std::string device;       // cpu | cuda | cuda:N | mps | auto (empty)
   std::string scale;        // n/s/m/l/x; auto-resolved from filename if empty
-  int         nc = 80;
+  int         nc = -1;      // -1 → task default (80 detect/seg, 1000 cls, 15 obb)
   float       conf = 0.25f;
   float       iou  = 0.45f;
   std::string task = "detect";
