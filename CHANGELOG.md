@@ -4,6 +4,18 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.35] — 2026-06-15
+
+### Fixed
+- **Classify training resized with `INTER_LINEAR` while inference uses
+  `INTER_AREA` → train/eval distribution mismatch (latent, from hunt #5).** The
+  inference predictor (`run_classify`) deliberately picks `INTER_AREA` for
+  downsampling to match torchvision's antialiased BILINEAR (documented: plain
+  `INTER_LINEAR` causes top-1 disagreement), but `ClassifyDataset::get`
+  unconditionally used `INTER_LINEAR`, so a model trained on aliased images was
+  evaluated on antialiased ones. Training now uses the same conditional
+  `INTER_AREA`-on-downscale as inference.
+
 ## [0.101.34] — 2026-06-15
 
 ### Fixed

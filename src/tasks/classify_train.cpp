@@ -55,11 +55,15 @@ ClassifyExample ClassifyDataset::get(std::size_t idx, uint64_t seed) const {
   cv::Mat img = cv::imread(ex.path, cv::IMREAD_COLOR);
   if (img.empty()) throw std::runtime_error("could not load: " + ex.path);
 
-  // Resize-shortest + center/random crop.
+  // Resize-shortest + center/random crop. Use INTER_AREA when downsampling to
+  // match torchvision's antialiased BILINEAR (and the inference predictor's
+  // run_classify) — plain INTER_LINEAR aliases and shifts the train-time pixel
+  // distribution away from what inference/val sees.
   int short_side = std::min(img.rows, img.cols);
   double scale = (double)imgsz_ / short_side;
   cv::Mat resized;
-  cv::resize(img, resized, {}, scale, scale, cv::INTER_LINEAR);
+  int interp = (scale < 1.0) ? cv::INTER_AREA : cv::INTER_LINEAR;
+  cv::resize(img, resized, {}, scale, scale, interp);
 
   std::mt19937 rng(seed ? seed : (uint64_t)idx * 0x9E3779B97F4A7C15ULL);
   int x0, y0;
