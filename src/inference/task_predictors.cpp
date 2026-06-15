@@ -1509,4 +1509,88 @@ std::vector<OBBInstance> Yolo26OBBPredictor::predict_to_file(
   return insts;
 }
 
+// ─── Draw-on-Mat helpers ────────────────────────────────────────────────────
+// Same overlays the `predict_to_file` paths bake in, factored out for the
+// video frame loop. Annotate `img` in place.
+
+void draw_segments(cv::Mat& img, const std::vector<SegInstance>& insts,
+                   const std::vector<std::string>& names) {
+  const auto& nm = names.empty() ? coco_names() : names;
+  cv::Mat overlay = img.clone();
+  for (const auto& inst : insts) {
+    cv::Scalar color((inst.box.cls * 41) % 256, (inst.box.cls * 73) % 256,
+                     (inst.box.cls * 11) % 256);
+    overlay.setTo(color, inst.mask);
+    cv::rectangle(img, {(int)inst.box.x1, (int)inst.box.y1},
+                  {(int)inst.box.x2, (int)inst.box.y2}, color, 2);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f",
+                  (inst.box.cls < (int)nm.size() ? nm[inst.box.cls].c_str()
+                                                  : "?"),
+                  inst.box.conf);
+    cv::putText(img, buf, {(int)inst.box.x1 + 2, (int)inst.box.y1 + 14},
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+  }
+  cv::addWeighted(img, 0.6, overlay, 0.4, 0, img);  // in-place blend
+}
+
+void draw_poses(cv::Mat& img, const std::vector<PoseInstance>& insts) {
+  // COCO 17-keypoint skeleton edges (same table as PosePredictor).
+  static const int edges[][2] = {
+      {15, 13}, {13, 11}, {16, 14}, {14, 12}, {11, 12}, {5, 11}, {6, 12},
+      {5, 6},   {5, 7},   {6, 8},   {7, 9},   {8, 10},  {1, 2},  {0, 1},
+      {0, 2},   {1, 3},   {2, 4},   {3, 5},   {4, 6},
+  };
+  for (const auto& inst : insts) {
+    cv::rectangle(img, {(int)inst.box.x1, (int)inst.box.y1},
+                  {(int)inst.box.x2, (int)inst.box.y2}, {0, 255, 0}, 2);
+    for (auto& kp : inst.keypoints)
+      if (kp[2] > 0.5f) cv::circle(img, {(int)kp[0], (int)kp[1]}, 3,
+                                   {0, 0, 255}, -1);
+    for (auto& e : edges) {
+      const auto& a = inst.keypoints[e[0]];
+      const auto& b = inst.keypoints[e[1]];
+      if (a[2] > 0.5f && b[2] > 0.5f)
+        cv::line(img, {(int)a[0], (int)a[1]}, {(int)b[0], (int)b[1]},
+                 {255, 0, 0}, 2);
+    }
+  }
+}
+
+void draw_obbs(cv::Mat& img, const std::vector<OBBInstance>& insts,
+               const std::vector<std::string>& names) {
+  const auto& nm = names.empty() ? dota_names() : names;
+  for (const auto& o : insts) {
+    cv::RotatedRect rr({o.cx, o.cy}, {o.w, o.h}, o.angle * 180.f / (float)M_PI);
+    cv::Point2f pts[4];
+    rr.points(pts);
+    cv::Scalar color((o.cls * 41) % 256, (o.cls * 73) % 256, (o.cls * 11) % 256);
+    for (int i = 0; i < 4; ++i)
+      cv::line(img, pts[i], pts[(i + 1) % 4], color, 2);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %.2f",
+                  (o.cls < (int)nm.size() ? nm[o.cls].c_str() : "?"), o.conf);
+    cv::putText(img, buf, {(int)pts[1].x, (int)pts[1].y - 4},
+                cv::FONT_HERSHEY_SIMPLEX, 0.4, color, 1);
+  }
+}
+
+void draw_classify(cv::Mat& img, const ClassifyResult& r,
+                   const std::vector<std::string>& names) {
+  if (r.topk.empty()) return;
+  const auto& nm = names.empty() ? imagenet_names() : names;
+  auto [cid, prob] = r.topk[0];
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "%s %.2f",
+                (cid >= 0 && cid < (int)nm.size() ? nm[cid].c_str()
+                                                  : std::to_string(cid).c_str()),
+                prob);
+  // Filled banner behind the text for legibility over any frame.
+  int base = 0;
+  auto sz = cv::getTextSize(buf, cv::FONT_HERSHEY_SIMPLEX, 0.7, 2, &base);
+  cv::rectangle(img, {0, 0}, {sz.width + 10, sz.height + 12}, {0, 0, 0}, -1);
+  cv::putText(img, buf, {5, sz.height + 5}, cv::FONT_HERSHEY_SIMPLEX, 0.7,
+              {255, 255, 255}, 2);
+}
+
 }  // namespace yolocpp::inference

@@ -4,6 +4,34 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.0] — 2026-06-15
+
+### Added
+- **Non-detect tasks now run on video / URL / webcam in predict mode** —
+  `--mode predict --task {segment,pose,obb,classify} --source <video|url|N>`
+  decodes frames, runs the matching per-version task predictor, draws the task
+  overlay, and writes an annotated `.mp4` (`runs/predict/<stem>_<task>.mp4`).
+  Previously only `--task detect` was wired for the frame loop (the others
+  errored as a "#51C2 follow-up"). Closes that gap (surfaced by the #33 audit).
+  - New templated `run_task_video` frame loop in `cmd_predict_task` mirrors the
+    detect path (lazy `VideoWriter`, 600-frame webcam disk-guard, runtime-I/O
+    exit codes) but is generic over the predictor + result type; a per-task
+    dispatch constructs the right v8/v11/v12/v13/v26 predictor (version
+    recovered from the checkpoint architecture for versionless `best.pt`).
+  - New reusable draw-on-Mat helpers in `inference`: `draw_segments` /
+    `draw_poses` / `draw_obbs` / `draw_classify` (the same overlays the
+    `predict_to_file` image path bakes in, factored out so the frame loop can
+    annotate without re-reading from disk).
+- New `tests/test_task_draw.cpp`: weight-gated unit smoke for the four draw
+  helpers (predict on bus.jpg → draw onto a clone → assert the frame mutated).
+  Verified 4/4 with the v8 task weights (seg 6 insts, pose 4, obb 3, classify
+  top-1 = 654 "minibus"). Suite now 46 tests, all green.
+
+### Verified
+- All four non-detect tasks process a 12-frame synthetic video end-to-end and
+  write valid annotated `.mp4`; frames confirmed annotated (ffmpeg frame-5
+  decode differs from the raw frame for seg/pose/classify).
+
 ## [0.106.2] — 2026-06-15
 
 ### Changed

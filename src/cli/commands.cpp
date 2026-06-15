@@ -1557,6 +1557,57 @@ int predict_one_image(const std::string& task, const std::string& weights,
                       const std::string& version_hint,
                       std::vector<yolocpp::inference::Detection>* out_dets);
 
+// Frame loop for a non-detect task over video / URL / webcam. `predict`
+// runs one frame → task result; `draw` annotates the frame in place. Mirrors
+// the detect video path (lazy VideoWriter, webcam frame cap, runtime-I/O exit
+// codes) but is generic over the task predictor + result type. (#51C2 follow-up.)
+template <class PredictFn, class DrawFn>
+int run_task_video(PredictFn predict, DrawFn draw, const std::string& source,
+                   SourceKind kind, std::string out, const std::string& task,
+                   const std::string& tag) {
+  cv::VideoCapture cap;
+  if (kind == SourceKind::Webcam) cap.open(std::stoi(source));
+  else                            cap.open(source);
+  if (!cap.isOpened()) {
+    std::cerr << "[error] could not open source: " << source << "\n";
+    return 1;  // runtime I/O failure (#51I2)
+  }
+  std::string out_path;
+  if (!out.empty()) {
+    out_path = out;
+  } else {
+    std::filesystem::create_directories("runs/predict");
+    auto stem = (kind == SourceKind::Webcam)
+                    ? ("webcam" + source)
+                    : std::filesystem::path(source).stem().string();
+    if (stem.empty()) stem = "out";
+    out_path = "runs/predict/" + stem + "_" + task + ".mp4";
+  }
+  cv::VideoWriter writer;
+  int n_frames = 0;
+  cv::Mat frame;
+  while (cap.read(frame) && !frame.empty()) {
+    auto res = predict(frame);
+    draw(frame, res);
+    if (!writer.isOpened()) {
+      double fps = cap.get(cv::CAP_PROP_FPS);
+      if (fps <= 1.0 || std::isnan(fps)) fps = 25.0;  // webcams often report 0
+      int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+      if (!writer.open(out_path, fourcc, fps, frame.size())) {
+        std::cerr << "[error] could not open output writer: " << out_path
+                  << "\n";
+        return 1;
+      }
+    }
+    writer.write(frame);
+    ++n_frames;
+    if (kind == SourceKind::Webcam && n_frames >= 600) break;  // disk guard
+  }
+  std::cout << "[" << task << "] (" << tag << "/video) " << n_frames
+            << " frames, wrote " << out_path << "\n";
+  return 0;
+}
+
 int cmd_predict_task(const std::string& task, const std::string& weights,
                      const std::string& source, std::string out, int imgsz,
                      std::string device, std::string scale_s, int nc,
@@ -1584,9 +1635,84 @@ int cmd_predict_task(const std::string& task, const std::string& weights,
   if (kind == SourceKind::Video || kind == SourceKind::Url ||
       kind == SourceKind::Webcam) {
     if (task != "detect") {
-      std::cerr << "[error] --task=" << task
-                << " not yet wired for video/URL/webcam frame loop "
-                   "(only detect is). Filed as a follow-up to #51C2.\n";
+      // Non-detect tasks: resolve version (filename token → state-dict
+      // architecture for versionless best.pt/last.pt), construct the matching
+      // per-version task predictor, and run the shared frame loop with the
+      // task's draw helper.
+      namespace inf = yolocpp::inference;
+      namespace mdl = yolocpp::models;
+      auto tver = version_hint.empty()
+                      ? yolocpp::cli::version_from_filename(weights)
+                      : version_hint;
+      if (tver == "v8" && !weights.empty()) {
+        try { tver = yolocpp::cli::infer_model_info(weights).version; }
+        catch (...) {}
+      }
+      const bool v11 = tver == "v11", v12 = tver == "v12",
+                 v13 = tver == "v13", v26 = tver == "v26";
+      inf::NMSConfig nm; nm.conf_thresh = conf; nm.iou_thresh = iou;
+
+      if (task == "segment") {
+        auto draw = [&](cv::Mat& f, const std::vector<inf::SegInstance>& v) {
+          inf::draw_segments(f, v);
+        };
+        auto run = [&](auto p) {
+          return run_task_video([&](cv::Mat& f) { return p.predict(f, nm); },
+                                draw, source, kind, out, "segment", tver);
+        };
+        if (v11) return run(inf::Yolo11SegmentPredictor(weights, imgsz, device, nc, mdl::yolo11_scale_from_letter(scale_s)));
+        if (v12) return run(inf::Yolo12SegmentPredictor(weights, imgsz, device, nc, mdl::yolo12_scale_from_letter(scale_s)));
+        if (v13) return run(inf::Yolo13SegmentPredictor(weights, imgsz, device, nc, mdl::yolo13_scale_from_letter(scale_s)));
+        if (v26) return run(inf::Yolo26SegmentPredictor(weights, imgsz, device, nc, mdl::yolo26_scale_from_letter(scale_s)));
+        return run(inf::SegmentPredictor(weights, imgsz, device, nc, parse_scale(scale_s)));
+      }
+      if (task == "pose") {
+        auto draw = [&](cv::Mat& f, const std::vector<inf::PoseInstance>& v) {
+          inf::draw_poses(f, v);
+        };
+        auto run = [&](auto p) {
+          return run_task_video([&](cv::Mat& f) { return p.predict(f, nm); },
+                                draw, source, kind, out, "pose", tver);
+        };
+        if (v11) return run(inf::Yolo11PosePredictor(weights, imgsz, device, 17, 3, mdl::yolo11_scale_from_letter(scale_s)));
+        if (v12) return run(inf::Yolo12PosePredictor(weights, imgsz, device, 17, 3, mdl::yolo12_scale_from_letter(scale_s)));
+        if (v13) return run(inf::Yolo13PosePredictor(weights, imgsz, device, 17, 3, mdl::yolo13_scale_from_letter(scale_s)));
+        if (v26) return run(inf::Yolo26PosePredictor(weights, imgsz, device, 17, 3, mdl::yolo26_scale_from_letter(scale_s)));
+        return run(inf::PosePredictor(weights, imgsz, device, 17, 3, parse_scale(scale_s)));
+      }
+      if (task == "obb") {
+        int sz = (imgsz == 640) ? 1024 : imgsz;          // OBB default 1024
+        int obb_nc = (nc < 0 || nc == 80) ? 15 : nc;     // DOTA default 15
+        auto draw = [&](cv::Mat& f, const std::vector<inf::OBBInstance>& v) {
+          inf::draw_obbs(f, v);
+        };
+        auto run = [&](auto p) {
+          return run_task_video([&](cv::Mat& f) { return p.predict(f, nm); },
+                                draw, source, kind, out, "obb", tver);
+        };
+        if (v11) return run(inf::Yolo11OBBPredictor(weights, sz, device, obb_nc, mdl::yolo11_scale_from_letter(scale_s)));
+        if (v12) return run(inf::Yolo12OBBPredictor(weights, sz, device, obb_nc, mdl::yolo12_scale_from_letter(scale_s)));
+        if (v13) return run(inf::Yolo13OBBPredictor(weights, sz, device, obb_nc, mdl::yolo13_scale_from_letter(scale_s)));
+        if (v26) return run(inf::Yolo26OBBPredictor(weights, sz, device, obb_nc, mdl::yolo26_scale_from_letter(scale_s)));
+        return run(inf::OBBPredictor(weights, sz, device, obb_nc, parse_scale(scale_s)));
+      }
+      if (task == "classify") {
+        int sz = (imgsz == 640) ? 224 : imgsz;           // classify default 224
+        int cls_nc = (nc < 0 || nc == 80) ? 1000 : nc;   // ImageNet default
+        auto draw = [&](cv::Mat& f, const inf::ClassifyResult& r) {
+          inf::draw_classify(f, r);
+        };
+        auto run = [&](auto p) {
+          return run_task_video([&](cv::Mat& f) { return p.predict(f, 5); },
+                                draw, source, kind, out, "classify", tver);
+        };
+        if (v11) return run(inf::Yolo11ClassifyPredictor(weights, sz, device, cls_nc, mdl::yolo11_scale_from_letter(scale_s)));
+        if (v12) return run(inf::Yolo12ClassifyPredictor(weights, sz, device, cls_nc, mdl::yolo12_scale_from_letter(scale_s)));
+        if (v13) return run(inf::Yolo13ClassifyPredictor(weights, sz, device, cls_nc, mdl::yolo13_scale_from_letter(scale_s)));
+        if (v26) return run(inf::Yolo26ClassifyPredictor(weights, sz, device, cls_nc, mdl::yolo26_scale_from_letter(scale_s)));
+        return run(inf::ClassifyPredictor(weights, sz, device, cls_nc, parse_scale(scale_s)));
+      }
+      std::cerr << "[error] --task=" << task << " unknown\n";
       return 2;
     }
     auto version = version_hint.empty()

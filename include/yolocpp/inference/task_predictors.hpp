@@ -140,6 +140,20 @@ class OBBPredictor {
 // 15-class DOTA names (default for OBB).
 const std::vector<std::string>& dota_names();
 
+// ─── Draw-on-Mat helpers ────────────────────────────────────────────────────
+//
+// Annotate a frame in place with task results — the same overlays the
+// `predict_to_file` paths bake in, factored out so the video/URL/webcam
+// frame loop (cmd_predict_task) can draw without re-reading from disk.
+// `names` empty → the task's default name list (coco / dota / imagenet).
+void draw_segments(cv::Mat& img, const std::vector<SegInstance>& insts,
+                   const std::vector<std::string>& names = {});
+void draw_poses(cv::Mat& img, const std::vector<PoseInstance>& insts);
+void draw_obbs(cv::Mat& img, const std::vector<OBBInstance>& insts,
+               const std::vector<std::string>& names = {});
+void draw_classify(cv::Mat& img, const ClassifyResult& r,
+                   const std::vector<std::string>& names = {});
+
 // ─── YOLO11 task predictors ────────────────────────────────────────────────
 //
 // Same interfaces as the v8 versions above, but built on Yolo11Classify /
