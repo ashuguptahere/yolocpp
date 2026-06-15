@@ -78,4 +78,16 @@ struct TrtOBBModel {
   }
 };
 
+// Classify is single-output (`forward(x) → logits [N, nc]`, no `forward_eval`).
+struct TrtClassifyModel {
+  TrtMultiForward fwd;
+  TrtClassifyModel*       operator->()       { return this; }
+  const TrtClassifyModel* operator->() const { return this; }
+  void to(torch::Device) {}
+  void eval() {}
+  torch::Tensor forward(torch::Tensor x) {
+    return fwd(std::move(x)).at("output");
+  }
+};
+
 }  // namespace yolocpp::inference

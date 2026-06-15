@@ -780,6 +780,24 @@ int cmd_benchmark_task(const std::string& task, const std::string& weights,
     ms = time_fwd([&]{ c10::InferenceMode g; m->forward(x).cpu(); });
     metric_name = "top1-acc";
     if (have_map) metric = yolocpp::tasks::validate_classify(m, *ds, dev).top1_acc;
+    if (dev.is_cuda()) {
+      yolocpp::registry::register_all_versions();
+      const auto* adapter = yolocpp::registry::Registry::instance().find("v8");
+      // Classify val images live in per-class subdirs, not a flat dir the INT8
+      // calibrator can read — empty calib ⇒ only the fp16 row builds.
+      for (const char* prec : {"fp16"}) {
+        auto rr = build_task_trt_runner(adapter, weights, scale, nc, "classify",
+                                        sz, prec, /*calib=*/"", dev, warmup, iters);
+        if (!rr.ok) continue;
+        double mm = -1.0;
+        if (have_map) {
+          yolocpp::inference::TrtClassifyModel tm{rr.fwd};
+          mm = yolocpp::tasks::validate_classify_t(tm, *ds, dev).top1_acc;
+        }
+        trt_rows.push_back({std::string("TRT-") + prec, rr.size_mb, rr.ms, mm,
+                            have_map});
+      }
+    }
   } else if (task == "segment") {
     auto names = split_csv(names_csv);
     if (names.empty()) names = yolocpp::inference::coco_names();

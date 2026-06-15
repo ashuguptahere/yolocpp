@@ -4,6 +4,18 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.102.1] — 2026-06-15
+
+### Added
+- **Classify TRT (fp16) benchmark row** — `--mode benchmark --task classify` now
+  adds a TRT-fp16 row (size · ms/im · img/s) beside PyTorch, completing the
+  benchmark matrix's non-detect TRT coverage. `TrtClassifyModel` (single-output
+  adapter: `forward(x) → logits`) reuses `validate_classify_t` for the top-1
+  metric, exactly like the seg/pose/obb adapters. INT8 + a meaningful top-1
+  require a full ImageNet val set (the same limitation the PT classify path
+  already has), so the classify TRT row is fp16 timing only for now. Verified
+  the engine builds + runs (yolov8n-cls: PT 363 → TRT-fp16 411 img/s).
+
 ## [0.102.0] — 2026-06-15
 
 ### Added

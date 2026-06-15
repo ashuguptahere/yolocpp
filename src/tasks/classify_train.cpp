@@ -1,5 +1,7 @@
 #include "yolocpp/tasks/classify_train.hpp"
 
+#include "yolocpp/inference/trt_task_eval.hpp"  // TrtClassifyModel (TRT val)
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <torch/optim.h>
@@ -232,5 +234,8 @@ template ClassifyValResult validate_classify_t<models::Yolo8Classify>(
     models::Yolo8Classify&, const ClassifyDataset&, torch::Device);
 template ClassifyValResult validate_classify_t<models::Yolo11Classify>(
     models::Yolo11Classify&, const ClassifyDataset&, torch::Device);
+// TRT-backed validation (per-format benchmark top-1) reuses the same metric.
+template ClassifyValResult validate_classify_t<inference::TrtClassifyModel>(
+    inference::TrtClassifyModel&, const ClassifyDataset&, torch::Device);
 
 }  // namespace yolocpp::tasks
