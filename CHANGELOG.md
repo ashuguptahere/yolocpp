@@ -4,6 +4,18 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.31] — 2026-06-15
+
+### Fixed
+- **INT8 calibration silently truncated on a single unreadable image (latent,
+  from hunt #4).** `ImgDirCalibrator::getBatch()` returned `false` (TensorRT's
+  end-of-calibration signal) whenever any one image in a batch failed to
+  `cv::imread` — so one corrupted/unreadable file in the calibration directory
+  capped the calibration at the data seen before it, computing INT8 scales from
+  a partial set and degrading quantised accuracy (the log even said "skipping
+  batch" while actually aborting). Now the bad sample is filled with the neutral
+  letterbox pad colour (114/255) and calibration continues over the full set.
+
 ## [0.101.30] — 2026-06-15
 
 ### Fixed

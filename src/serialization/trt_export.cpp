@@ -87,9 +87,17 @@ class ImgDirCalibrator final : public nvinfer1::IInt8MinMaxCalibrator {
     for (int b = 0; b < batch_size_; ++b) {
       cv::Mat im = cv::imread(files_[idx_ + (std::size_t)b], cv::IMREAD_COLOR);
       if (im.empty()) {
+        // Fill this sample with the neutral letterbox pad colour and continue.
+        // Returning false here signals end-of-calibration to TensorRT, which
+        // would compute INT8 scales from only the data seen BEFORE the bad
+        // file — a single unreadable image silently truncated the whole
+        // calibration set and degraded quantisation.
         std::cerr << "[trt-int8] WARN: failed to read "
-                  << files_[idx_ + (std::size_t)b] << ", skipping batch\n";
-        return false;
+                  << files_[idx_ + (std::size_t)b]
+                  << ", using neutral frame for this calibration sample\n";
+        float* dst = h_buf.data() + (std::size_t)b * per;
+        std::fill(dst, dst + per, 114.0f / 255.0f);
+        continue;
       }
       auto lb = inference::letterbox(im, imgsz_,
                                       /*pad_color=*/cv::Scalar(114, 114, 114),
