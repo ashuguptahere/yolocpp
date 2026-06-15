@@ -1,4 +1,78 @@
-# Session digest — 2026-06-14 (current)
+# Session digest — 2026-06-15 (current)
+
+End-state of the most recent session. For the live version see `./VERSION` /
+`yolocpp --version`. **ctest 46/46 green; VERSION 0.107.8; all work pushed to
+`main`.** This session **completed the v12/v13 task pipeline**, built the
+**#60C publish pipeline**, and ran a **full-codebase adversarial bug sweep**
+(4 rounds) that fixed the only real defects found — the nc-handling bug class
+in the CLI/API.
+
+**Where the next session starts: the remaining work is all blocked on the
+maintainer or hardware** — the actionable, in-environment backlog is exhausted.
+- **#60** retrain + publish the (version × scale × task) weight matrix —
+  compute-bound. Run `scripts/train_matrix.sh` on real COCO →
+  `scripts/publish_weights.sh --upload`. Harness + publish pipeline are wired;
+  only GPU time is missing. **#60B** (compute budget) + **#60D** (weights table
+  + CLI auto-resolver) then get real numbers to fill in.
+- **#70** ONNX-format benchmark mAP — needs the onnxruntime dep (maintainer
+  decision; cv::dnn 4.6 can't run the decode subgraph).
+- **#55** trackers (SORT/OC-SORT/ByteTrack/BoT-SORT/NvSORT + SAHI) —
+  maintainer-deferred; needs a clean abstract `Tracker` base first.
+- Hardware-blocked: #58/#59 Jetson/edge deploy, two-GPU DDP. Low/risky: **#48C**
+  trim `third_party` deb extractions (~2.6 GB; edits the install script).
+
+| ver | scope | what landed |
+|-----|-------|-------------|
+| 0.106.0 | feature | **v12/v13 task ONNX+TRT export** (seg/pose/obb/classify). `walk_v1{2,3}_bb_neck` trunks + 8 task emitters reusing the version-agnostic task-head emitters; registry `export_onnx` dispatches all 5 tasks. Data-free smoke `test_v12_v13_task_export`. v12-seg/v13-seg build real TRT engines. |
+| 0.106.1 | test | **#53C** cross-backend PT↔TRT numerical parity for the task heads — 16 cells (v8/v11/v12/v13 × seg/pose/obb/cls), max relL2 4.1e-7, classify bit-exact. `test_task_cross_backend_parity`, gated behind `YOLOCPP_TRT_PARITY=1`. |
+| 0.106.2 | docs | README v12/v13 task-status corrected + **#33 gap audit** (29 findings → 0 confirmed bugs). |
+| 0.107.0 | feature | **#51C3 non-detect video/URL/webcam predict** — `run_task_video` frame loop + per-version task dispatch in `cmd_predict_task`; reusable `inference::draw_{segments,poses,obbs,classify}` helpers + `test_task_draw`. |
+| 0.107.1 | notes | **round-6 bug hunt** over the mature core (NMS/letterbox/loss/aug/serialize/TRT/trainer) — 18 candidates → 0 confirmed. |
+| 0.107.2 | feature | **#60C `scripts/publish_weights.sh`** — stages trained matrix checkpoints under canonical names + `RELEASE.md`; `gh` upload opt-in (`--upload`), dry-run by default; never auto-pushes. |
+| 0.107.3 | fix | **export recovers nc from the checkpoint head** (was hardcoded 80 → untrained 80-class head for non-COCO models); `cmd_export` resolves the `nc<0` sentinel via `infer_model_info`. |
+| 0.107.4 | fix | **explicit `--nc 80` honored for classify/obb predict** (the `(nc<0||nc==80)` overload silently used 1000/15). |
+| 0.107.5 | notes | **round-7 bug hunt** over the periphery (CLI/web/resolve/converters/registry/api) — 9 candidates → the 2 nc bugs above + 7 rejected. |
+| 0.107.6 | fix | **explicit `--nc 80` honored for classify/obb export** — the export-path twin (10 registry lambdas). nc bug-class now fully closed. |
+| 0.107.7 | notes | **round-8 bug hunt** over older-version forwards+emitters (v1–v10) — 0 candidates. Full-codebase adversarial sweep complete (rounds 6–8). |
+| 0.107.8 | docs | **comprehensive doc sync** for this handoff — README / CLAUDE.md / SESSION_DIGEST / TODO reconciled to the 0.107.x state (ctest 46, nc auto-resolve rule, video predict, task-pipeline status). |
+
+## Key patterns established this session
+
+1. **nc auto-resolve** (mirrors the scale auto-resolve rule) — never default
+   `nc` to a literal 80; pass the `nc < 0` sentinel when `--nc` is absent.
+   Predict resolves to the task default at `cmd_predict_task` entry; export
+   recovers nc from the checkpoint head in `cmd_export`. See CLAUDE.md
+   "Cross-cutting parity rules".
+2. **`run_task_video<PredictFn, DrawFn>`** — generic frame loop in
+   `cmd_predict_task`; per-(version, task) dispatch constructs the predictor and
+   `draw_*` annotates each Mat.
+3. **Task cross-backend parity** — compare `forward_eval` vs
+   `make_trt_multi_forward` raw outputs by relative-L2; mint per-cell-seeded
+   random weights (no external data, so v12/v13 are covered).
+4. **`walk_v1{2,3}_bb_neck`** — standalone trunk walkers (verbatim copies of the
+   detect inline walks minus the Detect step) so the task exporters reuse them
+   without touching the parity-tested detect emitters.
+5. **Adversarial bug-hunt pattern** — multi-agent finders → 3-lens
+   refute-by-default verification (incl. a parity-quirk lens); hand-verify
+   split-votes. 4 rounds swept the whole codebase; only the untested CLI/API
+   periphery had real bugs.
+
+## Reproducibility cheatsheet
+
+```bash
+source /tmp/yolocpp_env.sh             # toolchain env (ephemeral, /tmp)
+cmake --build build -j$(nproc)         # ~30s incremental
+ctest --test-dir build                 # 46/46 green (~50s)
+# Heavy task PT↔TRT parity (builds 16 engines, gated behind the env var):
+YOLOCPP_TRT_PARITY=1 ./build/tests/test_task_cross_backend_parity
+bash scripts/full_matrix_sweep.sh      # PASS=164 (~3min, builds 12 TRT engines)
+./build/yolocpp --version
+./build/yolocpp --mode predict -m data/yolo11n.pt -s data/bus.jpg
+```
+
+---
+
+# Session digest — 2026-06-14 (previous)
 
 End-state of the most recent session. For the live version see `./VERSION` /
 `yolocpp --version`. ctest 40/40 green; work landed on branch

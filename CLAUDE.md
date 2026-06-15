@@ -345,12 +345,25 @@ ImageNet val, the same limitation the PT path has). The only remaining
 benchmark gap is the ONNX format — gated on #70 (cv::dnn can't run the
 decode subgraph).
 
+Predict (CLI) covers image / dir / glob **and video / URL / webcam** for
+all five tasks — the non-detect frame loop (`run_task_video` in
+`cmd_predict_task`, 0.107.0) constructs the matching per-version
+predictor and annotates each frame via the shared
+`inference::draw_{segments,poses,obbs,classify}` helpers, writing
+`runs/predict/<stem>_<task>.mp4`. Predict + ONNX/TRT export of v8/v11/v26
+task variants route through the registry; v12/v13 task export routes
+through the registry too (0.106.0).
+
 ### Reference smokes / sweeps
 
-- **End-to-end ctest** (`ctest --test-dir build`): 39 tests, all green
+- **End-to-end ctest** (`ctest --test-dir build`): 46 tests, all green
   on the latest release. Per-version smokes are
   `tests/test_v<N>_e2e.cpp` / `test_v<N>_train.cpp`; SKIP-gated when
-  weights/data missing.
+  weights/data missing. Task-head coverage: `test_v12_v13_task_export`
+  (data-free v12/v13 task ONNX smoke), `test_task_draw` (the video-loop
+  draw helpers), and `test_task_cross_backend_parity` (#53C — PT↔TRT
+  numerical parity for seg/pose/obb/classify, 16 cells at relL2 ≤ 1e-3,
+  gated behind `YOLOCPP_TRT_PARITY=1` since it builds 16 engines).
 - **Full matrix sweep** (`scripts/full_matrix_sweep.sh`): walks every
   applicable (version, variant, task, mode) cell. Last-known-good
   reading is `PASS=164 FAIL=0 SKIP=0` (predict 121, val 4, train 3,
@@ -395,6 +408,17 @@ preserve them through any forward/converter changes.
   any CLI11 layer. Default empty; resolve via
   `cli::scale_from_filename(weights)` at function entry. The "scale=n"
   default has bitten three times (#40 v10, v11 benchmark, v6 export).
+- **CLI nc auto-resolve**: never default `nc` to a literal (80) in any
+  CLI11 layer — a literal 80 default is indistinguishable from an explicit
+  `--nc 80`. Pass the `nc < 0` sentinel when `--nc` wasn't given
+  (`main.cpp`: `app.count("--nc") ? nc : -1`; `PredictArgs`/`ExportArgs.nc`
+  default `-1`). Predict resolves `nc < 0` → task default (80 detect/seg,
+  1000 classify, 15 obb) once at `cmd_predict_task` entry; export recovers
+  the class count from the checkpoint head (`infer_model_info().nc`) in
+  `cmd_export`. The `(nc < 0 || nc == 80)` overload silently overrode an
+  explicit `--nc 80` for classify/obb predict + export (fixed
+  0.107.3–0.107.6). The one legitimate `nc == 80` is yolo2.cpp's
+  COCO-vs-VOC anchor selector.
 - **Sigmoid-cls + DFL output contract**: every model's `forward_eval`
   returns `[B, 4+nc, A]` xyxy + sigmoided cls — drop-in for
   `inference::nms`. Holds across v3/v5/v8/v9/v10/v11/v12/v13/v26
@@ -446,10 +470,11 @@ Documented as ❌ in `TODO.md §3`, NOT regressions:
 - v6 lite / face variants.
 - v7 `IAuxDetect` (training-only, stripped at deploy upstream).
 - v9 PGI auxiliary branch (training-only, intentionally not wired).
-- v3/v4/v5/v6/v7/v9/v10/v12/v13 cls/seg/pose/obb weights — upstream
-  ships only detect; v8/v11/v26 are the full-task families.
-  v12/v13 task heads scaffolded; need COCO-trained weights (future
-  session).
+- v3/v4/v5/v6/v7/v9/v10/v12/v13 cls/seg/pose/obb *weights* — upstream
+  ships only detect; v8/v11/v26 are the full-task families. v12/v13 task
+  heads + the full pipeline (train/val/predict/export/parity) are wired;
+  only the COCO-trained weights are deferred to #60 (compute-bound). The
+  other versions (v3/v4/v5/v6/v7/v9/v10) have no task heads — detect-only.
 
 ## Build, test, run
 

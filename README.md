@@ -52,10 +52,11 @@ to `data/`. The runtime / CLI / registry / tests then consume
 Reference reading on the current state:
 
 ```
-ctest --test-dir build                # 39/39 green
+ctest --test-dir build                # 46/46 green
 bash scripts/full_matrix_sweep.sh     # PASS=164 FAIL=0 SKIP=0
                                       #   predict 121, val 4, train 3,
-                                      #   export 12, benchmark 12
+                                      #   export 12, benchmark 12,
+                                      #   trt-roundtrip 12
 ```
 
 ## Training — yolocpp vs Ultralytics
@@ -421,8 +422,11 @@ Pass `--scale` / `--nc` only to override.
 
 `--task` defaults to `detect` and accepts `detect | classify | segment
 | pose | obb`. Detect routes through the registry for every supported
-YOLO version; the four non-detect tasks use the v8 task families
-(`Yolo8Classify`, `Yolo8Segment`, `Yolo8Pose`, `Yolo8OBB`).
+YOLO version; the four non-detect tasks route per-version — v8 / v11 /
+v26 (the full upstream weight families) plus v12 / v13 (heads + pipeline
+wired, weights via #60). Predict accepts image / dir / glob **and
+video / URL / webcam** for every task — the non-detect frame loop
+annotates each frame and writes `runs/predict/<stem>_<task>.mp4`.
 
 ```
 yolocpp --mode train --task classify -d DATA -m yolo8n-cls.pt -e 30
@@ -639,16 +643,20 @@ output matches libtorch detections within 30 px box-center tolerance and
 
 The full deferred / pending list lives in **[TODO.md](TODO.md)**. Highlights:
 
-- **v12 / v13 task heads (segment / pose / obb / classify)** — neither
-  upstream nor iMoonLab publishes task weights (only detect ships).
-  Scaffolding exists in `src/models/yolo12_tasks.cpp`; we'll train
-  our own task heads on COCO under task #60.
+- **v12 / v13 task *weights* (segment / pose / obb / classify)** — neither
+  upstream nor iMoonLab publishes task weights (only detect ships). The
+  task *heads* and the **full pipeline are wired** — train / val / predict
+  (image + video) / ONNX+TRT export, with cross-backend PT↔TRT parity
+  verified (`src/models/yolo1{2,3}_tasks.cpp`); only the COCO-trained
+  weights await task #60's compute.
 - **simdjson for COCO instances.json** — currently a hand-rolled
   tokenizer in `src/datasets/coco_dataset.cpp`. simdjson would be
   faster + cleaner; deferred because the YOLO-format pipeline doesn't
   hit this path.
-- **TRT INT8 calibration** + dynamic-shape multi-batch profiles —
-  easy on top of `TrtBuildConfig` once a calibration set exists.
+- **TRT INT8 dynamic-shape multi-batch profiles** — static INT8 PTQ
+  calibration landed (`-p int8 --int8-calib <dir>`, #51F2); dynamic
+  multi-batch profiles are the remaining easy extension on
+  `TrtBuildConfig`. INT4 / NVFP4 need Blackwell-era TRT low-bit APIs.
 - **Two-GPU DDP training** — wiring is in place, world_size=1
   verified; no two-GPU box has run training yet.
 

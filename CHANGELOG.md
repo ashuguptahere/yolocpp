@@ -4,6 +4,23 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.8] — 2026-06-15
+
+### Changed
+- **Comprehensive doc sync for a fresh-session handoff** (no code change).
+  `SESSION_DIGEST.md` rewritten with a current-session section covering the
+  0.106.0–0.107.7 work (landing table, key patterns, blocked-items map,
+  flag-style reproducibility cheatsheet); the prior session demoted to
+  "previous". `README.md`: ctest count 39→46, sweep breakdown includes the 12
+  trt-roundtrip cells, v12/v13 task heads moved from "deferred/scaffolding" to
+  "pipeline wired (weights via #60)", INT8 PTQ noted as landed, the CLI
+  task/video coverage corrected. `CLAUDE.md`: ctest 39→46, a new **nc
+  auto-resolve** cross-cutting rule (the `nc<0` sentinel — so the
+  `(nc<0||nc==80)` bug class can't be reintroduced), the non-detect video
+  predict path + the `test_v12_v13_task_export` / `test_task_draw` /
+  `test_task_cross_backend_parity` smokes documented, and the out-of-scope
+  v12/v13 line corrected (heads wired; only weights deferred).
+
 ## [0.107.7] — 2026-06-15
 
 ### Notes
