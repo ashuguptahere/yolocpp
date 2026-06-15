@@ -196,7 +196,12 @@ std::vector<SegInstance> run_segment(M& model, torch::Device dev, int imgsz,
     inst.box.conf = a_c[i];
     inst.box.cls  = (int)a_l[i];
 
-    auto m = masks[i].gt(0.5).to(torch::kU8) * 255;
+    // Carry the CONTINUOUS sigmoid (0..255 grayscale) through both resizes and
+    // threshold once at the end (`full > 127`), matching the validation path
+    // (segment_train.cpp: sigmoid → interpolate → gt(0.5)). Thresholding at
+    // proto resolution first and then bilinear-upsampling the binary mask
+    // aliased the boundary.
+    auto m = (masks[i] * 255.0f).clamp(0, 255).to(torch::kU8);
     cv::Mat mat(h_p, w_p, CV_8UC1, m.data_ptr<uint8_t>());
     cv::Mat lb_mask;
     cv::resize(mat, lb_mask, {imgsz, imgsz}, 0, 0, cv::INTER_LINEAR);
@@ -560,10 +565,12 @@ std::vector<SegInstance> SegmentPredictor::predict(const cv::Mat& bgr,
     inst.box.conf = a_c[i];
     inst.box.cls  = (int)a_l[i];
 
-    // Mask: threshold at 0.5 in proto-resolution, then resize to letterbox
-    // image (imgsz × imgsz), then crop to the unpadded region, then resize
-    // to original image size.
-    auto m = masks[i].gt(0.5).to(torch::kU8) * 255;
+    // Mask: carry the CONTINUOUS sigmoid (0..255 grayscale) through the resize
+    // to the letterbox image (imgsz × imgsz), crop to the unpadded region,
+    // resize to original image size, and threshold ONCE at the end
+    // (`full > 127`) — matching the validation path. Thresholding at proto
+    // resolution before upsampling aliased the mask boundary.
+    auto m = (masks[i] * 255.0f).clamp(0, 255).to(torch::kU8);
     cv::Mat mat(h_p, w_p, CV_8UC1, m.data_ptr<uint8_t>());
     cv::Mat lb_mask;
     cv::resize(mat, lb_mask, {imgsz_, imgsz_}, 0, 0, cv::INTER_LINEAR);

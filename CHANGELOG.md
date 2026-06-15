@@ -4,6 +4,20 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.30] — 2026-06-15
+
+### Fixed
+- **Segment predict thresholded masks before upsampling → aliased boundaries
+  (latent, from hunt #4).** Both `run_segment` paths (v8 + v11/v26) thresholded
+  the proto-resolution sigmoid (`masks[i].gt(0.5)`) and then bilinear-upsampled
+  the **binary** mask twice (to imgsz, then to original size), so the boundary
+  was interpolated from hard 0/255 edges and re-thresholded — blockier than the
+  true mask. The validation path (`segment_train.cpp`) does it correctly:
+  sigmoid → interpolate the **continuous** values → threshold once. Predict now
+  matches: it carries the sigmoid as 0..255 grayscale through both resizes and
+  thresholds once at the end (`full > 127`). Verified on a live v8-seg predict
+  (6 instances, boundaries follow the continuous sigmoid).
+
 ## [0.101.29] — 2026-06-15
 
 ### Fixed
