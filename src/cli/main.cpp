@@ -307,8 +307,11 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
           }
           std::filesystem::path out_path = src;
           out_path.replace_extension("." + fmt);
+          // nc<0 when --nc wasn't given → cmd_export recovers the trained
+          // class count from best.pt (hardcoding 80 broke non-COCO exports).
+          int exp_nc = app.count("--nc") ? nc : -1;
           int xrc = cmd_export(src.string(), fmt, out_path.string(),
-                                imgsz, scale_s, nc,
+                                imgsz, scale_s, exp_nc,
                                 /*input_name=*/"images",
                                 /*fp16=*/true, train_version_hint);
           if (xrc != 0) return xrc;
@@ -352,7 +355,10 @@ int cmd_dispatch_flag_style(int argc, char** argv) {
         return 2;
       }
     }
-    return cmd_export(weights, export_fmt, out, imgsz, scale_s, nc,
+    // nc<0 when --nc wasn't given → cmd_export recovers the class count from
+    // the checkpoint head (so `--mode export -m custom.pt` matches the model).
+    return cmd_export(weights, export_fmt, out, imgsz, scale_s,
+                       app.count("--nc") ? nc : -1,
                        export_input_name, export_fp16,
                        /*version_hint=*/"", task,
                        export_int8, int8_calib_dir, int8_calib_cache);

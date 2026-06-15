@@ -91,7 +91,8 @@ struct ExportArgs {
   std::string out;
   int         imgsz     = 640;
   std::string scale;
-  int         nc        = 80;
+  int         nc        = -1;   // -1 → recover the class count from the
+                                //      checkpoint head (pass to override)
   std::string input_name = "images";
   std::string precision  = "fp16"; // fp32 | fp16 | int8 (int4/nvfp4 — #51F2)
   std::string task       = "detect";

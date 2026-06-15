@@ -1109,6 +1109,24 @@ int cmd_export(const std::string& weights, const std::string& format,
               << "(version=" << version << ")\n";
     weights_eff.clear();
   }
+  // Recover the class count from the checkpoint head when the caller didn't
+  // specify it (nc < 0). Defaulting to 80 silently exported an untrained
+  // 80-class head for any model trained on a non-COCO (nc≠80) dataset — both
+  // the CLI and API export-after-train paths, plus a bare `--mode export`
+  // without `--nc`, pass the sentinel so this is the single resolution point.
+  if (nc < 0) {
+    int inferred = -1;
+    if (!weights_eff.empty()) {
+      try { inferred = yolocpp::cli::infer_model_info(weights_eff).nc; }
+      catch (...) { /* head unreadable → task default below */ }
+    }
+    nc = (inferred > 0)
+             ? inferred
+             : (task == "obb") ? 15 : (task == "classify") ? 1000 : 80;
+    if (inferred > 0)
+      std::cerr << "[hint] inferred nc=" << nc << " from " << weights_eff
+                << " (pass --nc to override)\n";
+  }
   // Resolve scale: explicit CLI flag wins; otherwise infer from filename.
   // Without this, `yolo10s.pt` exports as scale=N (the default of
   // yolo10_scale_from_letter("")) and silently load_state_dict's the

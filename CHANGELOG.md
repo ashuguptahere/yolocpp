@@ -4,6 +4,24 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.3] — 2026-06-15
+
+### Fixed
+- **Export silently used nc=80 for non-COCO models** (found by the periphery
+  bug hunt). `export_after_train` hardcoded `nc=80` (`api.cpp`, and the CLI
+  `--export-after-train` path in `main.cpp`), and a bare `--mode export` /
+  `YOLO::export_` defaulted `nc=80` — so a model trained on an N≠80-class
+  dataset exported with an **untrained 80-class head** (`load_from_state_dict`
+  skips the shape-mismatched cls conv). Fix: `cmd_export` now **recovers the
+  class count from the checkpoint head** (`infer_model_info().nc`, falling back
+  to the task default — 80 detect / 1000 classify / 15 obb) whenever the caller
+  passes the `nc<0` sentinel; the CLI/API export paths pass `-1` when `--nc`
+  wasn't given and the user's explicit `--nc` is honored unchanged. Single
+  resolution point in `cmd_export`. `ExportArgs.nc` default `80 → -1`.
+  Verified: `--mode export --task obb -m yolov8n-obb.pt` (no `--nc`) now infers
+  `nc=15` (was 80 → wrong-shape ONNX); detect still infers 80; explicit `--nc 7`
+  is honored without inference. Suite 46/46.
+
 ## [0.107.2] — 2026-06-15
 
 ### Added

@@ -149,8 +149,11 @@ YOLO& YOLO::train(const TrainArgs& a) {
         // resolved from the *original* weights (best.pt has no scale
         // letter in name).
         std::string vh; // resolved by cmd_export from filename if empty.
+        // nc=-1 → cmd_export recovers the trained class count from the
+        // checkpoint head (hardcoding 80 exported an untrained 80-class head
+        // for any non-COCO model).
         int xrc = cli::cmd_export(src.string(), fmt, out_path.string(),
-                                   a.imgsz, a.scale, /*nc=*/80,
+                                   a.imgsz, a.scale, /*nc=*/-1,
                                    /*input_name=*/"images",
                                    /*fp16=*/true, vh, task);
         if (xrc != 0) {
