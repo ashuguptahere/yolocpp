@@ -4,6 +4,29 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.29] — 2026-06-15
+
+### Fixed
+- **Letterbox stored the fractional pad instead of the applied integer pad →
+  sub-pixel box/label misalignment (latent, from hunt #4).** `letterbox()` (and
+  `gpu_letterbox_batch()`) pad the image via `copyMakeBorder` at integer offsets
+  `top/left = round(pad − 0.1)`, but stored the fractional `dw/2` in
+  `LetterboxResult.pad_x/pad_y`. Every consumer that inverts the letterbox —
+  `scale_boxes` (detect predict), the segment/pose/obb un-projections, and the
+  dataset label transforms — used that fractional value, so on **odd** padding
+  the recovered coordinates were up to ~0.5px off from where the image content
+  actually landed, and diverged from upstream `scale_boxes` (which subtracts
+  `round(dw/2 − 0.1)`). Now `pad_x/pad_y` hold the applied integer `left/top`,
+  matching the header's stated contract ("the offset needed to map detections
+  back"). val mAP is invariant (GT placement and pred un-projection use the same
+  pad — verified: yolo11n/coco8 mAP@0.5 unchanged at 0.870901), and training
+  image↔label alignment is tightened to the actual content offset. New
+  `test_letterbox_pad` pins the applied-pad value + an exact box round-trip on
+  odd padding (fails on the pre-fix fractional store).
+
+### Added
+- `tests/test_letterbox_pad.cpp` — guards the applied-pad fix above.
+
 ## [0.101.28] — 2026-06-15
 
 ### Fixed

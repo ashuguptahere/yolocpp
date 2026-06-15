@@ -68,6 +68,7 @@ set_target_properties(dump_v10_forward PROPERTIES
 
 yolocpp_add_test(smoke_test         smoke_test.cpp smoke_kernel.cu)
 yolocpp_add_test(test_pt_save_layout test_pt_save_layout.cpp)
+yolocpp_add_test(test_letterbox_pad test_letterbox_pad.cpp)
 yolocpp_add_test(test_v7_reorg_onnx test_v7_reorg_onnx.cpp)
 set_tests_properties(test_v7_reorg_onnx PROPERTIES
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" TIMEOUT 120)

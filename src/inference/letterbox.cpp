@@ -31,8 +31,6 @@ LetterboxResult letterbox(const cv::Mat& src, int new_shape,
   double pad_x = dw / 2.0;
   double pad_y = dh / 2.0;
   out.gain  = r;
-  out.pad_x = pad_x;
-  out.pad_y = pad_y;
 
   cv::Mat resized;
   if (src.cols != new_unpad_w || src.rows != new_unpad_h) {
@@ -44,6 +42,14 @@ LetterboxResult letterbox(const cv::Mat& src, int new_shape,
   int bottom = (int)std::round(pad_y + 0.1);
   int left   = (int)std::round(pad_x - 0.1);
   int right  = (int)std::round(pad_x + 0.1);
+  // Store the ACTUALLY-APPLIED integer pad (the copyMakeBorder top/left), not
+  // the fractional dw/2. scale_boxes / dataset label transforms invert this to
+  // stay pixel-aligned with where the image content actually landed; the
+  // fractional value shifted boxes by up to 0.5px on odd padding and diverged
+  // from upstream scale_boxes (which uses round(dw/2 - 0.1)). val mAP is
+  // invariant (GT placement + pred un-projection both use this same pad).
+  out.pad_x = left;
+  out.pad_y = top;
   cv::copyMakeBorder(resized, out.img, top, bottom, left, right,
                      cv::BORDER_CONSTANT, pad_color);
   return out;
@@ -149,7 +155,12 @@ GpuLetterboxBatch gpu_letterbox_batch(const std::vector<cv::Mat>& bgrs,
     int new_h = (int)std::round(src.rows * r);
     int dw = imgsz - new_w, dh = imgsz - new_h;
     double pad_x = dw / 2.0, pad_y = dh / 2.0;
-    lb.gain = r; lb.pad_x = pad_x; lb.pad_y = pad_y;
+    // Store the actually-applied integer pad (see letterbox() above) — the
+    // F::pad() call below uses round(pad - 0.1) for the top/left, so
+    // scale_boxes must invert that exact offset, not the fractional dw/2.
+    lb.gain = r;
+    lb.pad_x = std::round(pad_x - 0.1);
+    lb.pad_y = std::round(pad_y - 0.1);
 
     // Upload raw HWC uint8 directly (cv::Mat data is HWC-contiguous, so this
     // is a clean contiguous H2D with NO CPU transpose), then do the HWC→CHW
