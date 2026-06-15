@@ -4,6 +4,23 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.107.2] — 2026-06-15
+
+### Added
+- **#60C — `scripts/publish_weights.sh`**, the release/publish pipeline for the
+  trained (version × scale × task) weight matrix. Reads `runs/matrix/results.csv`
+  (the #60A harness output), stages each successful cell's checkpoint under the
+  canonical published name (`yolo<N><scale>[-seg|-pose|-obb|-cls].pt` — no `v`,
+  per CLAUDE.md), and writes a `RELEASE.md` manifest table (weight / version /
+  scale / task / metric / epochs / size). **Safe by default**: no flags = dry-run
+  (prints the plan, touches nothing); `--stage` copies into `runs/release/` +
+  writes the manifest; `--upload --tag <tag>` additionally runs `gh release
+  create/upload`. The upload is maintainer-invoked — the script never pushes on
+  its own. Failed (`status≠ok`), artifact-missing, and malformed-cell rows are
+  skipped with a reason. Verified end-to-end on a synthetic matrix (correct
+  canonical names across v8/v12/v13/v26 × all five tasks; dry-run + stage +
+  manifest). The real upload awaits #60 producing trained weights.
+
 ## [0.107.1] — 2026-06-15
 
 ### Notes
