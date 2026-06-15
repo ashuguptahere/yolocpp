@@ -1,6 +1,7 @@
 #include "yolocpp/tasks/pose_obb_train.hpp"
 
 #include "yolocpp/inference/trt_task_eval.hpp"  // TrtPose/OBBModel (TRT val)
+#include "yolocpp/serialization/pt_save.hpp"     // save_module_state_dict
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -266,7 +267,7 @@ void train_pose_t(M model,
               << " in " << std::chrono::duration<double>(t1 - t0).count() << "s\n";
   }
   auto ckpt = fs::path(cfg.save_dir) / "last.pt";
-  torch::save(model, ckpt.string());
+  serialization::save_module_state_dict(*model, ckpt.string());
   std::cout << "[pose-train] saved → " << ckpt << "\n";
 }
 
@@ -563,7 +564,7 @@ void train_obb_t(M model,
               << " in " << std::chrono::duration<double>(t1 - t0).count() << "s\n";
   }
   auto ckpt = fs::path(cfg.save_dir) / "last.pt";
-  torch::save(model, ckpt.string());
+  serialization::save_module_state_dict(*model, ckpt.string());
   std::cout << "[obb-train] saved → " << ckpt << "\n";
 }
 

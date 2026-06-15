@@ -4,7 +4,22 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.102.1] — 2026-06-15
+## [0.102.2] — 2026-06-15
+
+### Fixed
+- **Task trainers saved un-loadable checkpoints (latent, found wiring up #60).**
+  The classify / segment / pose / obb trainers wrote `last.pt` via
+  `torch::save(model, …)` — a torch *module-archive* form — whereas every loader
+  (`load_state_dict` / `Predictor` / `mode=val` / export / benchmark) expects the
+  flat upstream-shape state-dict the **detect** trainer emits via
+  `save_state_dict`. So a model you just trained with any task trainer could not
+  be validated, predicted, exported, or published: `--mode val --task segment
+  --model last.pt` failed with `submodel key not found: model`. Added
+  `serialization::save_module_state_dict(module, path)` (the detect trainer's
+  named_parameters+buffers → `save_state_dict` pattern, centralised) and switched
+  all four task trainers to it. Verified the train→val round-trip now works
+  (e.g. segment last.pt → mask-mAP 0.291; classify → top1; etc.). Directly
+  unblocks the #60 train-and-publish effort for non-detect tasks.
 
 ### Added
 - **Classify TRT (fp16) benchmark row** — `--mode benchmark --task classify` now

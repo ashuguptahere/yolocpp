@@ -30,4 +30,11 @@ void save_state_dict(
     const std::string& path,
     const std::vector<std::pair<std::string, at::Tensor>>& entries);
 
+// Save a module's full state (named_parameters + named_buffers) as a flat
+// state-dict `.pt` that `load_state_dict` / `load_from_state_dict` /
+// `Predictor` / `mode=val` can read back — the same format the detect trainer
+// emits. Use this instead of `torch::save(module, …)` (a torch-archive form the
+// loaders can't consume) for any trainer checkpoint.
+void save_module_state_dict(const torch::nn::Module& m, const std::string& path);
+
 }  // namespace yolocpp::serialization

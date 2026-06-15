@@ -277,6 +277,16 @@ std::string build_data_pkl(
 
 }  // anonymous namespace
 
+void save_module_state_dict(const torch::nn::Module& m,
+                            const std::string& path) {
+  std::vector<std::pair<std::string, at::Tensor>> entries;
+  for (const auto& kv : m.named_parameters())
+    entries.emplace_back(kv.key(), kv.value().detach());
+  for (const auto& kv : m.named_buffers())
+    entries.emplace_back(kv.key(), kv.value().detach());
+  save_state_dict(path, entries);
+}
+
 void save_state_dict(
     const std::string& path,
     const std::vector<std::pair<std::string, at::Tensor>>& entries) {

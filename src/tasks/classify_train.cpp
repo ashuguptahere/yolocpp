@@ -1,6 +1,7 @@
 #include "yolocpp/tasks/classify_train.hpp"
 
 #include "yolocpp/inference/trt_task_eval.hpp"  // TrtClassifyModel (TRT val)
+#include "yolocpp/serialization/pt_save.hpp"     // save_module_state_dict
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -188,7 +189,7 @@ void train_classify_t(M model,
   }
 
   auto ckpt = fs::path(cfg.save_dir) / "last.pt";
-  torch::save(model, ckpt.string());
+  serialization::save_module_state_dict(*model, ckpt.string());
   std::cout << "[cls-train] saved → " << ckpt << "\n";
 }
 

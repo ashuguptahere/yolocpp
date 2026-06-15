@@ -1,6 +1,7 @@
 #include "yolocpp/tasks/segment_train.hpp"
 
 #include "yolocpp/inference/trt_task_eval.hpp"  // TrtSegModel (TRT-backed val)
+#include "yolocpp/serialization/pt_save.hpp"     // save_module_state_dict
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -394,7 +395,7 @@ void train_segment_t(M model,
               << " in " << std::chrono::duration<double>(t1 - t0).count() << "s\n";
   }
   auto ckpt = fs::path(cfg.save_dir) / "last.pt";
-  torch::save(model, ckpt.string());
+  serialization::save_module_state_dict(*model, ckpt.string());
   std::cout << "[seg-train] saved → " << ckpt << "\n";
 }
 
