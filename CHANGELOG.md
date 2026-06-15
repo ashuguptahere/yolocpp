@@ -4,6 +4,23 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.102.3] — 2026-06-15
+
+### Added
+- **#60A train-matrix harness** — `scripts/train_matrix.sh` (+ `train_matrix.tsv`
+  work-list) drives `yolocpp --mode train` across a (version × scale × task)
+  matrix for the #60 train-and-publish effort. Each manifest cell trains to its
+  own `runs/matrix/<cell>/`, is resumable at cell granularity (skip if a
+  checkpoint exists), logs per-cell, and gets a post-train **val pass** that
+  records a uniform eval metric (detect mAP@0.5:0.95 / segment mask-mAP / pose
+  OKS-mAP / obb rotated-mAP / classify top-1) into `runs/matrix/results.csv`.
+  Options: `--smoke` (2-epoch coco8* verification), `--dry-run`, `--filter`,
+  `--epochs`, `--export`, `--force`, `--device`; full-scale datasets via
+  `YOLOCPP_DATA_{DETECT,SEGMENT,POSE,OBB,CLASSIFY}` env vars. Verified offline on
+  all five v8n cells (train → save → val end-to-end). The v12/v13 task cells in
+  the manifest are commented out pending their task-trainer wiring (new
+  follow-up #60A-task; registry `supported_tasks={"detect"}` today).
+
 ## [0.102.2] — 2026-06-15
 
 ### Fixed

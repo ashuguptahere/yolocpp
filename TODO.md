@@ -324,7 +324,8 @@ Filed in priority order. Tasks are grouped so dependent items land together. Sub
 | # | scope | priority | session-cost estimate | blockers |
 |---|-------|----------|------------------------|----------|
 | #60  | Retrain every (version × scale × task) on COCO; publish weights to GitHub Releases | medium | many sessions | license decided (AGPL-3.0, #50 ✅); now gated only on #54 (dataset infra) + compute |
-| #60A | Train script harness driving the templated trainer across the matrix | — | within #60 | — |
+| ~~#60A~~ | ✅ **landed — `scripts/train_matrix.sh` + `scripts/train_matrix.tsv`.** Manifest-driven harness over `yolocpp --mode train`: per-cell `runs/matrix/<cell>/`, cell-level resume (skip if a checkpoint exists), per-cell log + a post-train val pass that records a uniform eval metric (detect mAP / seg mask-mAP / pose OKS / obb rotated-mAP / cls top1) into `runs/matrix/results.csv`. Flags: `--smoke` (2-epoch coco8* verification), `--dry-run`, `--filter`, `--epochs`, `--export`, `--force`; full datasets via `YOLOCPP_DATA_*` env. Verified: all 5 v8n cells (detect/seg/pose/obb/cls) train → save → val end-to-end. **Wiring it up surfaced + fixed a real bug** — the task trainers saved un-loadable checkpoints (0.102.2). | — | landed | — |
+| #60A-task | Wire v12/v13 (and any non-v8) task-head **trainers** into `cmd_train_task` so the harness can produce their seg/pose/obb/classify weights (today the task trainers only instantiate the v8 families; registry `supported_tasks={"detect"}` for v12/v13). Prereq for the v12/v13 task cells in the manifest. | medium | within #60 | v12/v13 task heads (#14) |
 | #60B | Compute budget plan (GPUs × hours per cell) | — | within #60 | — |
 | #60C | Release artifact upload pipeline | — | within #60 | — |
 | #60D | Mirror the resulting weights table in README + CLI auto-resolver | — | within #60 | — |

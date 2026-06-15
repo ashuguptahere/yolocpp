@@ -1,0 +1,43 @@
+# train_matrix.tsv — work-list for scripts/train_matrix.sh (#60).
+#
+# Tab-separated. Columns:
+#   cell      unique deterministic name → runs/matrix/<cell>/
+#   scale     n | s | m | l | x
+#   task      detect | segment | pose | obb | classify
+#   init      init weights (.pt path or upstream name that auto-resolves), or
+#             "scratch" for random init (the from-scratch publish runs)
+#   epochs    full-run epoch count (--smoke forces 2)
+#   imgsz     input size (detect/seg/pose 640; obb 1024; classify 224)
+#   batch     batch size (--smoke forces 4)
+#
+# Datasets come from the task token via the harness (env-overridable; --smoke
+# uses data/coco8*). For a real publish run: set init=scratch, full epochs, and
+# point YOLOCPP_DATA_* at full COCO / COCO-seg / COCO-pose / DOTA / ImageNet.
+#
+# The v8n rows below init from the LOCAL data/yolov8n*.pt so `--smoke` runs
+# fully offline. The v8 task families (Yolo8{Segment,Pose,OBB,Classify}) are the
+# architectures the task trainers instantiate today.
+#
+# cell	scale	task	init	epochs	imgsz	batch
+v8n_detect	n	detect	data/yolov8n.pt	100	640	16
+v8n_segment	n	segment	data/yolov8n-seg.pt	100	640	16
+v8n_pose	n	pose	data/yolov8n-pose.pt	100	640	16
+v8n_obb	n	obb	data/yolov8n-obb.pt	100	1024	8
+v8n_classify	n	classify	data/yolov8n-cls.pt	100	224	64
+#
+# --- expansion (init auto-resolves/downloads upstream in a full run) ----------
+v8s_detect	s	detect	yolo8s.pt	100	640	16
+v8m_detect	m	detect	yolo8m.pt	100	640	16
+v8l_detect	l	detect	yolo8l.pt	100	640	16
+v8x_detect	x	detect	yolo8x.pt	100	640	16
+v11n_detect	n	detect	yolo11n.pt	100	640	16
+v26n_detect	n	detect	yolo26n.pt	100	640	16
+#
+# --- from-scratch publish examples (uncomment + point at full datasets) -------
+# v8n_detect_scratch	n	detect	scratch	300	640	64
+#
+# --- BLOCKED: v12/v13 task heads not yet wired into cmd_train_task -------------
+#     (registry supported_tasks={"detect"}); enable these rows once the
+#     v12/v13 Segment/Pose/OBB/Classify trainers land.
+# v12n_segment	n	segment	scratch	100	640	16
+# v13n_pose	n	pose	scratch	100	640	16
