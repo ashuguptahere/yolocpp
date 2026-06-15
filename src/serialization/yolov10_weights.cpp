@@ -77,7 +77,7 @@ fuse_all_repvggdw(const std::vector<std::pair<std::string, at::Tensor>>& src) {
   for (auto& [prefix, p] : pairs) {
     if (!p.seven.conv_weight.defined() || !p.three.conv_weight.defined()) continue;
     if (p.seven.conv_weight.size(-1) != 7 || p.three.conv_weight.size(-1) != 3) continue;
-    if (p.seven.conv_weight.size(0) != p.seven.conv_weight.size(0)) continue;
+    if (p.seven.conv_weight.size(0) != p.three.conv_weight.size(0)) continue;
     auto [W7, b7] = fuse_branch(p.seven, 7);
     auto [W3, b3] = fuse_branch(p.three, 7);
     fused[prefix] = {W7 + W3, b7 + b3};

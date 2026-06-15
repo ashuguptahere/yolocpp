@@ -4,6 +4,18 @@ All notable changes to **yolocpp** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.101.33] — 2026-06-15
+
+### Fixed
+- **v10 RepVGGDW fusion channel-guard was a tautological self-comparison
+  (latent, from hunt #5).** `reparam_yolov10` guarded the 7×7+3×3 dwconv fusion
+  with `p.seven.conv_weight.size(0) != p.seven.conv_weight.size(0)` — comparing
+  a value to itself (always false), so the guard never fired. Valid upstream v10
+  checkpoints have matching channels so fusion worked by accident, but a pruned/
+  custom checkpoint with mismatched branch channels would reach `W7 + W3` and
+  crash or mis-broadcast instead of being skipped. Now compares `p.seven` vs
+  `p.three` output channels as intended (behaviour-preserving for valid weights).
+
 ## [0.101.32] — 2026-06-15
 
 ### Fixed
